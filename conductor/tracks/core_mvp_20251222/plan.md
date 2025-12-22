@@ -22,7 +22,7 @@
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Bulk Input & Dashboard UI' (Protocol in workflow.md)
 
 ## Phase 4: Results Table & Detailed Findings
-- [~] Task: Write Tests: Results table filtering and sorting
+- [x] Task: Write Tests: Results table filtering and sorting [3a67a02]
 - [ ] Task: Implement Feature: Paginated results table with status badges
 - [ ] Task: Write Tests: Detailed log view state
 - [ ] Task: Implement Feature: Expandable view for technical SMTP logs
