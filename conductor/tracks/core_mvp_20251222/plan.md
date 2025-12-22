@@ -18,7 +18,7 @@
 - [x] Task: Implement Feature: Smart text input and CSV upload component [f8f30e4]
 - [x] Task: Write Tests: Dashboard state management with TanStack Query [812e0dd]
 - [x] Task: Implement Feature: Real-time progress bar and status counters [433603f]
-- [~] Task: Implement Feature: Interactive charts (Safe/Risky/Invalid distribution)
+- [x] Task: Implement Feature: Interactive charts (Safe/Risky/Invalid distribution) [88fae7f]
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Bulk Input & Dashboard UI' (Protocol in workflow.md)
 
 ## Phase 4: Results Table & Detailed Findings
