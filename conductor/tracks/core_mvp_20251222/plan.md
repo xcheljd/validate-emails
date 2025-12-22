@@ -29,7 +29,7 @@
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Results Table & Detailed Findings' (Protocol in workflow.md)
 
 ## Phase 5: Export & Polishing
-- [~] Task: Write Tests: CSV export logic
+- [x] Task: Write Tests: CSV export logic [a6ee577]
 - [ ] Task: Implement Feature: Export results to CSV/Excel
 - [ ] Task: Task: Final UI/UX polish and theme consistency check
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Export & Polishing' (Protocol in workflow.md)
