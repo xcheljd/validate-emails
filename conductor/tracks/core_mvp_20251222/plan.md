@@ -21,7 +21,7 @@
 - [x] Task: Implement Feature: Interactive charts (Safe/Risky/Invalid distribution) [88fae7f]
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Bulk Input & Dashboard UI' (Protocol in workflow.md)
 
-## Phase 4: Results Table & Detailed Findings
+## Phase 4: Results Table & Detailed Findings [checkpoint: 6499e09]
 - [x] Task: Write Tests: Results table filtering and sorting [3a67a02]
 - [x] Task: Implement Feature: Paginated results table with status badges [c142fd6]
 - [ ] Task: Write Tests: Detailed log view state
