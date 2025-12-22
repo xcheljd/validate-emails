@@ -1,6 +1,6 @@
 # Plan: Core MVP - Bulk Email Validator Desktop App
 
-## Phase 1: Project Scaffolding & Initial Setup
+## Phase 1: Project Scaffolding & Initial Setup [checkpoint: abee29d]
 - [x] Task: Initialize Tauri project with React and TypeScript [da1af93]
 - [x] Task: Configure Tailwind CSS and Shadcn UI with Dayfox/Nordfox themes [a1d6ebf]
 - [x] Task: Set up basic application layout (Sidebar, Content Area) [1627e84]
