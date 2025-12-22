@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use check_if_email_exists::{check_email, CheckEmailInput, Reachable};
-use futures::stream::{self, StreamExt};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ValidationResult {
