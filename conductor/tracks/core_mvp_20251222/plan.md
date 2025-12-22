@@ -14,7 +14,7 @@
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Core Validation Engine (Rust Backend)' (Protocol in workflow.md)
 
 ## Phase 3: Bulk Input & Dashboard UI
-- [ ] Task: Write Tests: Smart text input parsing logic
+- [~] Task: Write Tests: Smart text input parsing logic
 - [ ] Task: Implement Feature: Smart text input and CSV upload component
 - [ ] Task: Write Tests: Dashboard state management with TanStack Query
 - [ ] Task: Implement Feature: Real-time progress bar and status counters
