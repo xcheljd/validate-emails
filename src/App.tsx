@@ -1,49 +1,34 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { MainLayout } from "@/components/layout/main-layout";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
-
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <MainLayout>
+      <header className="border-b px-8 py-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold tracking-tight">Upload List</h1>
+      </header>
+      <ScrollArea className="flex-1 p-8">
+        <div className="max-w-4xl mx-auto space-y-8">
+          <section className="p-12 border-2 border-dashed rounded-lg flex flex-col items-center justify-center text-center space-y-4">
+            <div className="bg-muted p-4 rounded-full">
+              {/* Icon placeholder */}
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold">Drop your email list here</h2>
+              <p className="text-muted-foreground">Support for CSV and Excel files</p>
+            </div>
+          </section>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+          <section className="space-y-4">
+            <h2 className="text-lg font-semibold">Or paste emails</h2>
+            <textarea 
+              className="w-full h-40 p-4 rounded-md border bg-card text-foreground resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+              placeholder="Enter emails separated by commas or new lines..."
+            />
+          </section>
+        </div>
+      </ScrollArea>
+    </MainLayout>
   );
 }
 
