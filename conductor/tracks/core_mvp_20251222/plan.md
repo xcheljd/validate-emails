@@ -3,7 +3,7 @@
 ## Phase 1: Project Scaffolding & Initial Setup
 - [x] Task: Initialize Tauri project with React and TypeScript [da1af93]
 - [x] Task: Configure Tailwind CSS and Shadcn UI with Dayfox/Nordfox themes [a1d6ebf]
-- [~] Task: Set up basic application layout (Sidebar, Content Area)
+- [x] Task: Set up basic application layout (Sidebar, Content Area) [1627e84]
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Project Scaffolding & Initial Setup' (Protocol in workflow.md)
 
 ## Phase 2: Core Validation Engine (Rust Backend)
