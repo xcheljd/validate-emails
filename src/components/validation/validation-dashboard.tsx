@@ -2,6 +2,7 @@ import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2, AlertCircle, XCircle, Info } from "lucide-react";
 import { ValidationResult } from "@/hooks/use-email-validation";
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from "recharts";
 
 interface ValidationDashboardProps {
   results: ValidationResult[];
@@ -17,6 +18,13 @@ export function ValidationDashboard({ results, progress, total, isProcessing }: 
   const unknownCount = results.filter(r => r.result === "Unknown").length;
 
   const percentage = total > 0 ? Math.round((progress / total) * 100) : 0;
+
+  const data = [
+    { name: "Safe", value: safeCount, color: "hsl(142, 76%, 36%)" }, // Green-600
+    { name: "Risky", value: riskyCount, color: "hsl(48, 96%, 53%)" }, // Yellow-500
+    { name: "Invalid", value: invalidCount, color: "hsl(0, 84%, 60%)" }, // Red-600
+    { name: "Unknown", value: unknownCount, color: "hsl(215, 16%, 47%)" }, // Slate-500
+  ].filter(d => d.value > 0);
 
   return (
     <div className="space-y-8 w-full max-w-6xl mx-auto">
@@ -74,6 +82,38 @@ export function ValidationDashboard({ results, progress, total, isProcessing }: 
           </CardContent>
         </Card>
       </div>
+
+      {results.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Distribution</CardTitle>
+          </CardHeader>
+          <CardContent className="h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={data}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={80}
+                  paddingAngle={5}
+                  dataKey="value"
+                >
+                  {data.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip 
+                    contentStyle={{ borderRadius: '8px', border: '1px solid hsl(var(--border))', backgroundColor: 'hsl(var(--card))' }}
+                    itemStyle={{ fontSize: '12px' }}
+                />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
