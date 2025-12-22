@@ -6,7 +6,7 @@
 - [x] Task: Set up basic application layout (Sidebar, Content Area) [1627e84]
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Project Scaffolding & Initial Setup' (Protocol in workflow.md)
 
-## Phase 2: Core Validation Engine (Rust Backend)
+## Phase 2: Core Validation Engine (Rust Backend) [checkpoint: 6171aa5]
 - [x] Task: Write Tests: SMTP and DNS validation logic [3bf0014]
 - [x] Task: Implement Feature: Integrate `check-if-email-exists` logic into Tauri commands [3bf0014]
 - [x] Task: Write Tests: Concurrency and backoff strategies [3bf0014]
