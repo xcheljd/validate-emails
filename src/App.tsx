@@ -3,13 +3,16 @@ import { MainLayout } from "@/components/layout/main-layout";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmailInput } from "@/components/validation/email-input";
 import { ValidationDashboard } from "@/components/validation/validation-dashboard";
+import { ResultsTable } from "@/components/validation/results-table";
 import { Button } from "@/components/ui/button";
 import { Trash2, Play, ChevronLeft } from "lucide-react";
-import { useEmailValidation } from "@/hooks/use-email-validation";
+import { useEmailValidation, ValidationResult } from "@/hooks/use-email-validation";
 
 function App() {
   const [emails, setEmails] = useState<string[]>([]);
   const [showDashboard, setShowDashboard] = useState(false);
+  const [selectedResult, setSelectedResult] = useState<ValidationResult | null>(null);
+  
   const { results, isProcessing, progress, total, startValidation } = useEmailValidation();
 
   const handleEmailsLoaded = (newEmails: string[]) => {
@@ -28,6 +31,10 @@ function App() {
 
   const handleBack = () => {
     setShowDashboard(false);
+  };
+
+  const handleViewDetails = (result: ValidationResult) => {
+    setSelectedResult(result);
   };
 
   return (
@@ -94,7 +101,7 @@ function App() {
             )}
           </div>
         ) : (
-          <div className="max-w-6xl mx-auto space-y-8">
+          <div className="max-w-6xl mx-auto space-y-8 pb-20">
             <ValidationDashboard 
               results={results}
               progress={progress}
@@ -102,10 +109,21 @@ function App() {
               isProcessing={isProcessing}
             />
 
-            {/* In next tasks, we will add Charts and the Results Table here */}
-            {!isProcessing && results.length === 0 && (
-                <div className="text-center py-20">
-                    <p className="text-muted-foreground">Waiting for validation to start...</p>
+            <ResultsTable 
+                results={results} 
+                onViewDetails={handleViewDetails}
+            />
+
+            {/* In next task, we will implement the actual Dialog content for logs */}
+            {selectedResult && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+                    <div className="bg-card border p-8 rounded-lg shadow-lg max-w-2xl w-full mx-4 space-y-4">
+                        <h2 className="text-xl font-bold">Details for {selectedResult.email}</h2>
+                        <div className="bg-muted p-4 rounded font-mono text-xs overflow-auto max-h-96">
+                            <pre>{JSON.stringify(selectedResult, null, 2)}</pre>
+                        </div>
+                        <Button onClick={() => setSelectedResult(null)} className="w-full">Close</Button>
+                    </div>
                 </div>
             )}
           </div>
