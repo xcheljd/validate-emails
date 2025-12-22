@@ -24,12 +24,12 @@
 ## Phase 4: Results Table & Detailed Findings [checkpoint: 6499e09]
 - [x] Task: Write Tests: Results table filtering and sorting [3a67a02]
 - [x] Task: Implement Feature: Paginated results table with status badges [c142fd6]
-- [ ] Task: Write Tests: Detailed log view state
+- [x] Task: Write Tests: Detailed log view state [a0f344b]
 - [x] Task: Implement Feature: Expandable view for technical SMTP logs [a0f344b]
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Results Table & Detailed Findings' (Protocol in workflow.md)
 
 ## Phase 5: Export & Polishing
 - [x] Task: Write Tests: CSV export logic [a6ee577]
 - [x] Task: Implement Feature: Export results to CSV/Excel [0e7a199]
-- [ ] Task: Task: Final UI/UX polish and theme consistency check
+- [~] Task: Final UI/UX polish and theme consistency check
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Export & Polishing' (Protocol in workflow.md)

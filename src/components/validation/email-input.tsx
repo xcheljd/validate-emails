@@ -2,9 +2,10 @@ import { useState, useCallback } from "react";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { Upload, X } from "lucide-react";
+import { Upload, X, FileText } from "lucide-react";
 import { parseEmails } from "@/lib/email-parser";
 import Papa from "papaparse";
+import { cn } from "@/lib/utils";
 
 interface EmailInputProps {
   onEmailsLoaded: (emails: string[]) => void;
@@ -51,7 +52,6 @@ export function EmailInput({ onEmailsLoaded }: EmailInputProps) {
         header: false,
       });
     } else {
-        // Basic plain text parsing for non-csv files
         const reader = new FileReader();
         reader.onload = (e) => {
             const content = e.target?.result as string;
@@ -70,18 +70,18 @@ export function EmailInput({ onEmailsLoaded }: EmailInputProps) {
   };
 
   return (
-    <div className="space-y-8 w-full max-w-4xl mx-auto">
+    <div className="space-y-8 w-full max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <Card
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
-        className={cx(
-          "p-12 border-2 border-dashed flex flex-col items-center justify-center text-center space-y-4 transition-colors",
-          isDragging ? "border-primary bg-primary/5" : "border-muted"
+        className={cn(
+          "p-12 border-2 border-dashed flex flex-col items-center justify-center text-center space-y-4 transition-all duration-200",
+          isDragging ? "border-primary bg-primary/5 scale-[1.01]" : "border-muted hover:border-primary/50"
         )}
       >
-        <div className="bg-muted p-4 rounded-full">
-          <Upload className="h-8 w-8 text-muted-foreground" />
+        <div className="bg-primary/10 p-4 rounded-full">
+          <Upload className="h-8 w-8 text-primary" />
         </div>
         <div>
           <h2 className="text-xl font-semibold">Drop your email list here</h2>
@@ -94,7 +94,7 @@ export function EmailInput({ onEmailsLoaded }: EmailInputProps) {
             accept=".csv,.txt"
             onChange={(e) => e.target.files?.[0] && processFile(e.target.files[0])}
         />
-        <Button variant="outline" onClick={() => document.getElementById('file-upload')?.click()}>
+        <Button variant="secondary" onClick={() => document.getElementById('file-upload')?.click()}>
             Browse Files
         </Button>
       </Card>
@@ -104,33 +104,32 @@ export function EmailInput({ onEmailsLoaded }: EmailInputProps) {
           <span className="w-full border-t" />
         </div>
         <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-background px-2 text-muted-foreground">Or paste emails</span>
+          <span className="bg-background px-4 text-muted-foreground font-medium">Or paste emails</span>
         </div>
       </div>
 
       <div className="space-y-4">
+        <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground mb-1">
+            <FileText className="h-4 w-4" />
+            Manual Entry
+        </div>
         <Textarea
           value={text}
           onChange={handleTextChange}
           placeholder="Enter emails separated by commas or new lines..."
-          className="min-h-[200px] font-mono text-sm"
+          className="min-h-[200px] font-mono text-sm focus-visible:ring-primary shadow-sm"
         />
         <div className="flex justify-end gap-2">
             {text && (
-                <Button variant="ghost" onClick={() => setText("")} className="gap-2">
+                <Button variant="ghost" onClick={() => setText("")} className="gap-2 text-muted-foreground hover:text-foreground">
                     <X className="h-4 w-4" /> Clear
                 </Button>
             )}
-            <Button onClick={handleProcessText} disabled={!text.trim()}>
+            <Button onClick={handleProcessText} disabled={!text.trim()} className="px-8 shadow-sm">
                 Load {text.trim() ? parseEmails(text).length : 0} Emails
             </Button>
         </div>
       </div>
     </div>
   );
-}
-
-// Simple helper if clsx/cn is not imported correctly in some environments
-function cx(...args: any[]) {
-    return args.filter(Boolean).join(" ");
 }
