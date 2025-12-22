@@ -28,8 +28,8 @@
 - [x] Task: Implement Feature: Expandable view for technical SMTP logs [a0f344b]
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Results Table & Detailed Findings' (Protocol in workflow.md)
 
-## Phase 5: Export & Polishing
+## Phase 5: Export & Polishing [checkpoint: fbdfc4f]
 - [x] Task: Write Tests: CSV export logic [a6ee577]
 - [x] Task: Implement Feature: Export results to CSV/Excel [0e7a199]
 - [x] Task: Final UI/UX polish and theme consistency check [6df8213]
-- [ ] Task: Conductor - User Manual Verification 'Phase 5: Export & Polishing' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 5: Export & Polishing' (Protocol in workflow.md) [fbdfc4f]
