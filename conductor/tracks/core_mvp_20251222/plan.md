@@ -31,5 +31,5 @@
 ## Phase 5: Export & Polishing
 - [x] Task: Write Tests: CSV export logic [a6ee577]
 - [x] Task: Implement Feature: Export results to CSV/Excel [0e7a199]
-- [~] Task: Final UI/UX polish and theme consistency check
+- [x] Task: Final UI/UX polish and theme consistency check [6df8213]
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Export & Polishing' (Protocol in workflow.md)
