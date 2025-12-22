@@ -7,7 +7,7 @@
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Project Scaffolding & Initial Setup' (Protocol in workflow.md)
 
 ## Phase 2: Core Validation Engine (Rust Backend)
-- [ ] Task: Write Tests: SMTP and DNS validation logic
+- [~] Task: Write Tests: SMTP and DNS validation logic
 - [ ] Task: Implement Feature: Integrate `check-if-email-exists` logic into Tauri commands
 - [ ] Task: Write Tests: Concurrency and backoff strategies
 - [ ] Task: Implement Feature: Robust bulk validation with progress reporting
