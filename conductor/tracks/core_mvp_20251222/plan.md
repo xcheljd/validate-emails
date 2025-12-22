@@ -15,7 +15,7 @@
 
 ## Phase 3: Bulk Input & Dashboard UI
 - [x] Task: Write Tests: Smart text input parsing logic [d28821d]
-- [~] Task: Implement Feature: Smart text input and CSV upload component
+- [x] Task: Implement Feature: Smart text input and CSV upload component [f8f30e4]
 - [ ] Task: Write Tests: Dashboard state management with TanStack Query
 - [ ] Task: Implement Feature: Real-time progress bar and status counters
 - [ ] Task: Implement Feature: Interactive charts (Safe/Risky/Invalid distribution)
