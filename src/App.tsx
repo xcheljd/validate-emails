@@ -6,8 +6,11 @@ import { ValidationDashboard } from "@/components/validation/validation-dashboar
 import { ResultsTable } from "@/components/validation/results-table";
 import { ResultDetails } from "@/components/validation/result-details";
 import { Button } from "@/components/ui/button";
-import { Trash2, Play, ChevronLeft } from "lucide-react";
+import { Trash2, Play, ChevronLeft, Download } from "lucide-react";
 import { useEmailValidation, ValidationResult } from "@/hooks/use-email-validation";
+import { formatAsCSV } from "@/lib/export-utils";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 
 function App() {
   const [emails, setEmails] = useState<string[]>([]);
@@ -38,6 +41,35 @@ function App() {
   const handleViewDetails = (result: ValidationResult) => {
     setSelectedResult(result);
     setIsDetailsOpen(true);
+  };
+
+  const handleExport = async () => {
+    if (results.length === 0) return;
+    
+    const csvContent = formatAsCSV(results);
+    
+    try {
+      const filePath = await save({
+        filters: [{
+          name: 'CSV',
+          extensions: ['csv']
+        }],
+        defaultPath: 'validation_results.csv'
+      });
+
+      if (filePath) {
+        await writeTextFile(filePath, csvContent);
+      }
+    } catch (err) {
+      console.error("Failed to save file:", err);
+      // Fallback for web/dev environment if plugin fails
+      const blob = new Blob([csvContent], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'validation_results.csv';
+      a.click();
+    }
   };
 
   return (
@@ -71,9 +103,14 @@ function App() {
             </>
           )}
           {showDashboard && !isProcessing && (
-             <Button variant="outline" onClick={handleClear}>
-                New Validation
-             </Button>
+             <>
+                <Button variant="outline" onClick={handleExport} className="gap-2">
+                    <Download className="h-4 w-4" /> Export CSV
+                </Button>
+                <Button variant="outline" onClick={handleClear}>
+                    New Validation
+                </Button>
+             </>
           )}
         </div>
       </header>
