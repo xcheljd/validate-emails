@@ -53,4 +53,17 @@ mod tests {
         let result = validate_email("test@example.com".to_string()).await;
         assert!(result.result == "Safe" || result.result == "Risky" || result.result == "Invalid" || result.result == "Unknown");
     }
+
+    #[tokio::test]
+    async fn test_validate_email_gmail_reachable() {
+        // Gmail is a stable target for testing reachable/risky detection
+        let result = validate_email("support@gmail.com".to_string()).await;
+        assert_ne!(result.result, "Unknown");
+    }
+
+    #[tokio::test]
+    async fn test_validate_email_disposable() {
+        let result = validate_email("test@mailinator.com".to_string()).await;
+        assert!(result.result == "Risky" || result.result == "Safe" || result.result == "Invalid");
+    }
 }
