@@ -25,7 +25,7 @@
 - [x] Task: Write Tests: Results table filtering and sorting [3a67a02]
 - [x] Task: Implement Feature: Paginated results table with status badges [c142fd6]
 - [ ] Task: Write Tests: Detailed log view state
-- [~] Task: Implement Feature: Expandable view for technical SMTP logs
+- [x] Task: Implement Feature: Expandable view for technical SMTP logs [a0f344b]
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Results Table & Detailed Findings' (Protocol in workflow.md)
 
 ## Phase 5: Export & Polishing
