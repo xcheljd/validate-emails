@@ -13,7 +13,7 @@
 - [x] Task: Implement Feature: Robust bulk validation with progress reporting [3bf0014]
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Core Validation Engine (Rust Backend)' (Protocol in workflow.md)
 
-## Phase 3: Bulk Input & Dashboard UI
+## Phase 3: Bulk Input & Dashboard UI [checkpoint: 578bcf1]
 - [x] Task: Write Tests: Smart text input parsing logic [d28821d]
 - [x] Task: Implement Feature: Smart text input and CSV upload component [f8f30e4]
 - [x] Task: Write Tests: Dashboard state management with TanStack Query [812e0dd]
