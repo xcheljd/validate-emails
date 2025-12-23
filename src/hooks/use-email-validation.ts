@@ -19,17 +19,25 @@ export function useEmailValidation() {
   // Listen for progress events from Rust
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let isActive = true;
     
     const setupListener = async () => {
-      unlisten = await listen<ValidationResult>("validation-progress", (event) => {
+      const unlistenFn = await listen<ValidationResult>("validation-progress", (event) => {
         setResults((prev) => [...prev, event.payload]);
         setProgress((prev) => prev + 1);
       });
+
+      if (!isActive) {
+        unlistenFn();
+      } else {
+        unlisten = unlistenFn;
+      }
     };
 
     setupListener();
 
     return () => {
+      isActive = false;
       if (unlisten) unlisten();
     };
   }, []);

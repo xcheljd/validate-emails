@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
-use check_if_email_exists::{check_email, CheckEmailInput, Reachable};
+use check_if_email_exists::{check_email, CheckEmailInputBuilder, Reachable};
+use check_if_email_exists::smtp::verif_method::{
+    VerifMethod,
+    VerifMethodSmtpConfig,
+    GmailVerifMethod,
+    YahooVerifMethod,
+    HotmailB2CVerifMethod,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ValidationResult {
@@ -10,10 +17,43 @@ pub struct ValidationResult {
 }
 
 pub async fn validate_email(email: String) -> ValidationResult {
-    let mut input = CheckEmailInput::default();
-    input.to_email = email.clone();
-    
-    let output = check_email(&input).await;
+    let verif_method = VerifMethod {
+        gmail: GmailVerifMethod::Smtp(VerifMethodSmtpConfig {
+            from_email: "verify@example.com".to_string(),
+            hello_name: "example.com".to_string(),
+            ..Default::default()
+        }),
+        yahoo: YahooVerifMethod::Smtp(VerifMethodSmtpConfig {
+            from_email: "verify@example.com".to_string(),
+            hello_name: "example.com".to_string(),
+            ..Default::default()
+        }),
+        hotmailb2c: HotmailB2CVerifMethod::Smtp(VerifMethodSmtpConfig {
+            from_email: "verify@example.com".to_string(),
+            hello_name: "example.com".to_string(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let input = CheckEmailInputBuilder::default()
+        .to_email(email.clone())
+        .verif_method(verif_method)
+        .build();
+
+    // The builder returns a Result, but the old code assumed it always succeeds.
+    // Handling the error case to avoid a panic if build fails.
+    let output = match input {
+        Ok(input) => check_email(&input).await,
+        Err(e) => {
+            return ValidationResult {
+                email,
+                result: "Unknown".to_string(),
+                reason: format!("Builder Error: {:?}", e),
+                logs: vec![],
+            };
+        }
+    };
     
     let result_str = match output.is_reachable {
         Reachable::Safe => "Safe",
@@ -45,6 +85,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_email_syntax_error() {
         let result = validate_email("invalid-email".to_string()).await;
+        // In some cases the builder might fail for invalid syntax if it validates during build
         assert!(result.result == "Invalid" || result.result == "Unknown");
     }
 
