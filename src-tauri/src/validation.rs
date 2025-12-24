@@ -108,6 +108,42 @@ pub async fn validate_email(email: String) -> ValidationResult {
     }
 }
 
+pub async fn validate_emails_bulk_core<F>(
+    emails: Vec<String>,
+    concurrency: usize,
+    token: CancellationToken,
+    on_progress: F,
+) -> Vec<ValidationResult>
+where
+    F: Fn(ValidationResult) + Send + Sync,
+{
+    use futures::stream::{self, StreamExt};
+
+    let mut results = Vec::with_capacity(emails.len());
+    let mut stream = stream::iter(emails)
+        .map(|email| async move { validate_email(email).await })
+        .buffer_unordered(concurrency);
+
+    loop {
+        tokio::select! {
+            result = stream.next() => {
+                match result {
+                    Some(res) => {
+                        on_progress(res.clone());
+                        results.push(res);
+                    }
+                    None => break,
+                }
+            }
+            _ = token.cancelled() => {
+                break;
+            }
+        }
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,8 +179,50 @@ mod tests {
         let state = ValidationState::default();
         let token = state.get_token();
         
-        assert!(!token.is_cancelled());
-        state.cancel();
-        assert!(token.is_cancelled());
-    }
-}
+                assert!(!token.is_cancelled());
+        
+                state.cancel();
+        
+                assert!(token.is_cancelled());
+        
+            }
+        
+        
+        
+            #[tokio::test]
+        
+            async fn test_bulk_cancellation() {
+        
+                // Use more emails to increase chance of catching it in progress
+        
+                let emails = (0..20).map(|i| format!("test{}@example.com", i)).collect::<Vec<_>>();
+        
+                let token = CancellationToken::new();
+        
+                let token_clone = token.clone();
+        
+                
+        
+                let t = token.clone();
+        
+                tokio::spawn(async move {
+        
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+        
+                    t.cancel();
+        
+                });
+        
+        
+        
+                let results = validate_emails_bulk_core(emails, 1, token_clone, |_| {}).await;
+        
+                
+        
+                assert!(results.len() < 20, "Should have cancelled before finishing all 20, got {}", results.len());
+        
+            }
+        
+        }
+        
+        

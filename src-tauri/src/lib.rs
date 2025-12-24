@@ -15,25 +15,18 @@ async fn validate_email(email: String) -> Result<validation::ValidationResult, S
 #[tauri::command]
 async fn validate_emails_bulk(
     window: tauri::Window,
+    state: tauri::State<'_, validation::ValidationState>,
     emails: Vec<String>,
     concurrency: usize,
 ) -> Result<Vec<validation::ValidationResult>, String> {
-    use futures::stream::{self, StreamExt};
-
-    let total = emails.len();
-    let mut results = Vec::with_capacity(total);
-    
-    let mut stream = stream::iter(emails)
-        .map(|email| async move {
-            validation::validate_email(email).await
-        })
-        .buffer_unordered(concurrency);
-
-    while let Some(result) = stream.next().await {
-        results.push(result.clone());
-        // Emit progress event
-        let _ = window.emit("validation-progress", result);
-    }
+    let results = validation::validate_emails_bulk_core(
+        emails,
+        concurrency,
+        state.get_token(),
+        move |res| {
+            let _ = window.emit("validation-progress", res);
+        },
+    ).await;
 
     Ok(results)
 }
@@ -42,6 +35,7 @@ async fn validate_emails_bulk(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(validation::ValidationState::default())
         .invoke_handler(tauri::generate_handler![
             greet, 
             validate_email, 
