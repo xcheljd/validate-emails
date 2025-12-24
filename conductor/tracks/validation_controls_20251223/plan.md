@@ -3,7 +3,7 @@
 ## Phase 1: Backend Infrastructure (Rust)
 - [x] Task: Backend - Implement `CancellationToken` mechanism in `src-tauri/src/validation.rs` 036994b
 - [x] Task: Backend - Update validation command to accept and respect cancellation 31b22cf
-- [ ] Task: Backend - Add Tauri commands for `pause_validation`, `resume_validation`, and `stop_validation`
+- [x] Task: Backend - Add Tauri commands for `pause_validation`, `resume_validation`, and `stop_validation` 74f8c65
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Backend Infrastructure (Rust)' (Protocol in workflow.md)
 
 ## Phase 2: Frontend State Management
