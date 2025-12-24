@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
+use std::sync::Mutex;
 use check_if_email_exists::{check_email, CheckEmailInputBuilder, Reachable};
 use check_if_email_exists::smtp::verif_method::{
     VerifMethod,
@@ -14,6 +16,34 @@ pub struct ValidationResult {
     pub result: String, // Safe, Risky, Invalid
     pub reason: String,
     pub logs: Vec<String>,
+}
+
+pub struct ValidationState {
+    pub token: Mutex<CancellationToken>,
+}
+
+impl Default for ValidationState {
+    fn default() -> Self {
+        Self {
+            token: Mutex::new(CancellationToken::new()),
+        }
+    }
+}
+
+impl ValidationState {
+    pub fn cancel(&self) {
+        let token = self.token.lock().unwrap();
+        token.cancel();
+    }
+
+    pub fn reset(&self) {
+        let mut token = self.token.lock().unwrap();
+        *token = CancellationToken::new();
+    }
+
+    pub fn get_token(&self) -> CancellationToken {
+        self.token.lock().unwrap().clone()
+    }
 }
 
 pub async fn validate_email(email: String) -> ValidationResult {
@@ -106,5 +136,15 @@ mod tests {
     async fn test_validate_email_disposable() {
         let result = validate_email("test@mailinator.com".to_string()).await;
         assert!(result.result == "Risky" || result.result == "Safe" || result.result == "Invalid");
+    }
+
+    #[tokio::test]
+    async fn test_cancellation_mechanism() {
+        let state = ValidationState::default();
+        let token = state.get_token();
+        
+        assert!(!token.is_cancelled());
+        state.cancel();
+        assert!(token.is_cancelled());
     }
 }
