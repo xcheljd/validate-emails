@@ -19,7 +19,7 @@
 - [x] Task: UI - Update status badges and progress bar feedback for `Paused` state 549dcbf
 - [x] Task: Conductor - User Manual Verification 'Phase 3: UI Components & Controls' (Protocol in workflow.md) b1c1c84
 
-## Phase 4: Integration & Verification
-- [ ] Task: Integration - Verify end-to-end flow: Start -> Pause -> Resume -> Stop (Save/Discard)
-- [ ] Task: Cleanup - Ensure no memory leaks or orphaned validation tasks on cancellation
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Integration & Verification' (Protocol in workflow.md)
+## Phase 4: Integration & Verification [checkpoint: c5ccce5]
+- [x] Task: Integration - Verify end-to-end flow: Start -> Pause -> Resume -> Stop (Save/Discard) b1c1c84
+- [x] Task: Cleanup - Ensure no memory leaks or orphaned validation tasks on cancellation b1c1c84
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Integration & Verification' (Protocol in workflow.md) c5ccce5
