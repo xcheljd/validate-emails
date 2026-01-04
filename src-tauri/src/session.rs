@@ -88,6 +88,40 @@ impl SessionManager {
 
     pub fn update_session_progress(&self, id: &str, results: Vec<ValidationResult>, current_index: usize) -> Result<(), String> {
         let mut session = self.load_session(id)?;
+        
+        session.results = results;
+        session.current_index = current_index;
+        
+        if current_index >= session.total {
+            session.status = "completed".to_string();
+            session.completed_at = Some(Utc::now().to_rfc3339());
+        } else if current_index > 0 {
+            session.status = "in-progress".to_string();
+        }
+        
+        self.save_session(&id, &session)
+    }
+    
+    Ok(())
+}
+
+pub fn backup_session(&self, id: &str, backup_path: &str) -> Result<(), String> {
+    let session = self.load_session(id)?;
+    
+    let backup_dir = self.sessions_dir.join("backups");
+    if !backup_dir.exists() {
+        fs::create_dir_all(&backup_dir)
+            .map_err(|e| format!("Failed to create backup directory: {}", e))?;
+    }
+    
+    let backup_path = backup_dir.join(&backup_path);
+    let json = serde_json::to_string(&session)
+        .map_err(|e| format!("Failed to serialize session for backup: {}", e))?;
+    
+    fs::write(&backup_path, json)
+        .map_err(|e| format!("Failed to write backup: {}", e))
+}
+        let mut session = self.load_session(id)?;
         session.results = results;
         session.current_index = current_index;
 

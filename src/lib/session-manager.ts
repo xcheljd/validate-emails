@@ -47,6 +47,13 @@ export async function updateSessionProgress(
   results: ValidationResult[],
   currentIndex: number
 ): Promise<void> {
+  const existingSession = await loadSession(sessionId).catch(() => null);
+
+  if (existingSession) {
+    const backupPath = `${sessionId}.backup.${Date.now()}.json`;
+    await invoke('backup_session', { sessionId, backupPath });
+  }
+
   return invoke('update_validation_session', { id: sessionId, results, currentIndex });
 }
 

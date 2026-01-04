@@ -2,7 +2,6 @@ import { Component, ReactNode } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { AlertTriangle } from 'lucide-react';
-import { cn } from '@/lib/utils';
 
 interface Props {
   children: ReactNode;
