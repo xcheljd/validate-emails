@@ -13,10 +13,10 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Frontend State Management' (Protocol in workflow.md) 98a9326
 
 ## Phase 3: UI Components & Controls
-- [ ] Task: UI - Create `ValidationControls` component with Pause/Resume/Stop buttons
-- [ ] Task: UI - Integrate controls into `ValidationDashboard` near the progress bar
-- [ ] Task: UI - Implement the confirmation dialog for the "Stop" action
-- [ ] Task: UI - Update status badges and progress bar feedback for `Paused` state
+- [x] Task: UI - Create `ValidationControls` component with Pause/Resume/Stop buttons 549dcbf
+- [x] Task: UI - Integrate controls into `ValidationDashboard` near the progress bar 549dcbf
+- [x] Task: UI - Implement the confirmation dialog for the "Stop" action 549dcbf
+- [x] Task: UI - Update status badges and progress bar feedback for `Paused` state 549dcbf
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: UI Components & Controls' (Protocol in workflow.md)
 
 ## Phase 4: Integration & Verification
