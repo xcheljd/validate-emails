@@ -7,9 +7,9 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Backend Infrastructure (Rust)' (Protocol in workflow.md) d802ea4
 
 ## Phase 2: Frontend State Management
-- [ ] Task: Frontend - Update `useEmailValidation` hook to support `pause`, `resume`, and `stop` actions
-- [ ] Task: Frontend - Implement state transitions for `Validating`, `Paused`, and `Stopped`
-- [ ] Task: Frontend - Integration tests for the hook state transitions
+- [x] Task: Frontend - Update `useEmailValidation` hook to support `pause`, `resume`, and `stop` actions 6f5b570
+- [x] Task: Frontend - Implement state transitions for `Validating`, `Paused`, and `Stopped` 6f5b570
+- [x] Task: Frontend - Integration tests for the hook state transitions 6f5b570
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Frontend State Management' (Protocol in workflow.md)
 
 ## Phase 3: UI Components & Controls
