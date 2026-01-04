@@ -12,12 +12,12 @@
 - [x] Task: Frontend - Integration tests for the hook state transitions 6f5b570
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Frontend State Management' (Protocol in workflow.md) 98a9326
 
-## Phase 3: UI Components & Controls
+## Phase 3: UI Components & Controls [checkpoint: b1c1c84]
 - [x] Task: UI - Create `ValidationControls` component with Pause/Resume/Stop buttons 549dcbf
 - [x] Task: UI - Integrate controls into `ValidationDashboard` near the progress bar 549dcbf
 - [x] Task: UI - Implement the confirmation dialog for the "Stop" action 549dcbf
 - [x] Task: UI - Update status badges and progress bar feedback for `Paused` state 549dcbf
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: UI Components & Controls' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: UI Components & Controls' (Protocol in workflow.md) b1c1c84
 
 ## Phase 4: Integration & Verification
 - [ ] Task: Integration - Verify end-to-end flow: Start -> Pause -> Resume -> Stop (Save/Discard)
