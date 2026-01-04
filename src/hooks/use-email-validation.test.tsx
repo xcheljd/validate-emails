@@ -32,6 +32,72 @@ describe('useEmailValidation', () => {
       result.current.startValidation(['test@example.com']);
     });
 
-    expect(result.current.isProcessing).toBe(true);
-  });
-});
+        expect(result.current.isProcessing).toBe(true);
+
+        expect(result.current.status).toBe('processing');
+
+      });
+
+    
+
+      it('should transition to paused state when pause is called', async () => {
+
+        const { result } = renderHook(() => useEmailValidation(), { wrapper });
+
+        
+
+        act(() => {
+
+          result.current.startValidation(['test@example.com']);
+
+        });
+
+    
+
+        await act(async () => {
+
+          await result.current.pauseValidation();
+
+        });
+
+    
+
+        expect(result.current.status).toBe('paused');
+
+        expect(result.current.isProcessing).toBe(false);
+
+      });
+
+    
+
+      it('should transition to idle state when stop is called', async () => {
+
+        const { result } = renderHook(() => useEmailValidation(), { wrapper });
+
+        
+
+        act(() => {
+
+          result.current.startValidation(['test@example.com']);
+
+        });
+
+    
+
+        await act(async () => {
+
+          await result.current.stopValidation();
+
+        });
+
+    
+
+        expect(result.current.status).toBe('idle');
+
+        expect(result.current.isProcessing).toBe(false);
+
+      });
+
+    });
+
+    
