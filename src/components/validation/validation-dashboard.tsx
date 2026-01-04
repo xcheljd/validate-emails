@@ -1,17 +1,43 @@
+import { useState } from "react";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2, AlertCircle, XCircle, Info } from "lucide-react";
-import { ValidationResult } from "@/hooks/use-email-validation";
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from "recharts";
+import { ValidationResult, ValidationStatus } from "@/hooks/use-email-validation";
+import { ValidationControls } from "./validation-controls";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 interface ValidationDashboardProps {
   results: ValidationResult[];
   progress: number;
   total: number;
-  isProcessing: boolean;
+  status: ValidationStatus;
+  onPause: () => void;
+  onResume: () => void;
+  onStop: () => void;
+  onDiscard: () => void;
 }
 
-export function ValidationDashboard({ results, progress, total, isProcessing }: ValidationDashboardProps) {
+export function ValidationDashboard({ 
+  results, 
+  progress, 
+  total, 
+  status,
+  onPause,
+  onResume,
+  onStop,
+  onDiscard
+}: ValidationDashboardProps) {
+  const [showStopDialog, setShowStopDialog] = useState(false);
+
   const safeCount = results.filter(r => r.result === "Safe").length;
   const riskyCount = results.filter(r => r.result === "Risky").length;
   const invalidCount = results.filter(r => r.result === "Invalid").length;
@@ -19,23 +45,59 @@ export function ValidationDashboard({ results, progress, total, isProcessing }: 
 
   const percentage = total > 0 ? Math.round((progress / total) * 100) : 0;
 
-  const data = [
-    { name: "Safe", value: safeCount, color: "hsl(142, 76%, 36%)" }, // Green-600
-    { name: "Risky", value: riskyCount, color: "hsl(48, 96%, 53%)" }, // Yellow-500
-    { name: "Invalid", value: invalidCount, color: "hsl(0, 84%, 60%)" }, // Red-600
-    { name: "Unknown", value: unknownCount, color: "hsl(215, 16%, 47%)" }, // Slate-500
-  ].filter(d => d.value > 0);
+  const handleStopClick = () => {
+    setShowStopDialog(true);
+  };
+
+  const handleConfirmStop = (save: boolean) => {
+    if (save) {
+      onStop();
+    } else {
+      onDiscard();
+    }
+    setShowStopDialog(false);
+  };
+
+  const getStatusBadge = () => {
+    switch (status) {
+      case 'processing':
+        return <Badge variant="default" className="animate-pulse">Validating</Badge>;
+      case 'paused':
+        return <Badge variant="secondary">Paused</Badge>;
+      case 'stopping':
+        return <Badge variant="destructive">Stopping...</Badge>;
+      default:
+        return null;
+    }
+  };
 
   return (
     <div className="space-y-8 w-full max-w-6xl mx-auto">
-      {isProcessing && (
+      {status !== 'idle' && (
         <Card>
           <CardContent className="pt-6">
-            <div className="flex justify-between mb-2 text-sm font-medium">
-              <span>Processing Emails...</span>
-              <span>{progress} / {total} ({percentage}%)</span>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium">
+                  {status === 'paused' ? 'Validation Paused' : 'Processing Emails...'}
+                </span>
+                {getStatusBadge()}
+              </div>
+              <ValidationControls 
+                status={status}
+                onPause={onPause}
+                onResume={onResume}
+                onStop={handleStopClick}
+              />
             </div>
-            <Progress value={percentage} className="h-2" />
+            <div className="flex justify-between mb-2 text-xs text-muted-foreground">
+              <span>{progress} of {total} emails verified</span>
+              <span>{percentage}%</span>
+            </div>
+            <Progress 
+              value={percentage} 
+              className={`h-2 transition-all ${status === 'paused' ? 'bg-secondary' : ''}`} 
+            />
           </CardContent>
         </Card>
       )}
@@ -83,37 +145,27 @@ export function ValidationDashboard({ results, progress, total, isProcessing }: 
         </Card>
       </div>
 
-      {results.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Distribution</CardTitle>
-          </CardHeader>
-          <CardContent className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={data}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {data.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip 
-                    contentStyle={{ borderRadius: '8px', border: '1px solid hsl(var(--border))', backgroundColor: 'hsl(var(--card))' }}
-                    itemStyle={{ fontSize: '12px' }}
-                />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
+      <Dialog open={showStopDialog} onOpenChange={setShowStopDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Stop Validation?</DialogTitle>
+            <DialogDescription>
+              You are about to stop the validation process. Would you like to keep the results collected so far or discard them?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="ghost" onClick={() => setShowStopDialog(false)}>
+              Cancel
+            </Button>
+            <Button variant="outline" onClick={() => handleConfirmStop(false)}>
+              Discard Results
+            </Button>
+            <Button variant="default" onClick={() => handleConfirmStop(true)}>
+              Save & Stop
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

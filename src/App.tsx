@@ -18,7 +18,19 @@ function App() {
   const [selectedResult, setSelectedResult] = useState<ValidationResult | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   
-  const { results, isProcessing, progress, total, startValidation } = useEmailValidation();
+  const { 
+    results, 
+    status, 
+    progress, 
+    total, 
+    startValidation,
+    pauseValidation,
+    resumeValidation,
+    stopValidation,
+    setResults
+  } = useEmailValidation();
+
+  const isProcessing = status === 'processing' || status === 'paused' || status === 'stopping';
 
   const handleEmailsLoaded = (newEmails: string[]) => {
     setEmails(prev => [...new Set([...prev, ...newEmails])]);
@@ -27,6 +39,7 @@ function App() {
   const handleClear = () => {
     setEmails([]);
     setShowDashboard(false);
+    setResults([]);
   };
 
   const handleStartValidation = () => {
@@ -41,6 +54,11 @@ function App() {
   const handleViewDetails = (result: ValidationResult) => {
     setSelectedResult(result);
     setIsDetailsOpen(true);
+  };
+
+  const handleDiscard = () => {
+    stopValidation();
+    handleClear();
   };
 
   const handleExport = async () => {
@@ -76,7 +94,7 @@ function App() {
     <MainLayout>
       <header className="border-b px-8 py-6 flex items-center justify-between bg-card">
         <div className="flex items-center gap-4">
-          {showDashboard && !isProcessing && (
+          {showDashboard && status === 'idle' && (
             <Button variant="ghost" size="icon" onClick={handleBack}>
               <ChevronLeft className="h-4 w-4" />
             </Button>
@@ -102,7 +120,7 @@ function App() {
               </Button>
             </>
           )}
-          {showDashboard && !isProcessing && (
+          {showDashboard && status === 'idle' && (
              <>
                 <Button variant="outline" onClick={handleExport} className="gap-2">
                     <Download className="h-4 w-4" /> Export CSV
@@ -146,7 +164,11 @@ function App() {
               results={results}
               progress={progress}
               total={total}
-              isProcessing={isProcessing}
+              status={status}
+              onPause={pauseValidation}
+              onResume={resumeValidation}
+              onStop={stopValidation}
+              onDiscard={handleDiscard}
             />
 
             <ResultsTable 
