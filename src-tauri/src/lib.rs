@@ -1,5 +1,8 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod validation;
+mod proxy;
+mod settings;
+mod session;
 use tauri::Emitter;
 
 #[tauri::command]
@@ -52,12 +55,25 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(validation::ValidationState::default())
         .invoke_handler(tauri::generate_handler![
-            greet, 
-            validate_email, 
+            greet,
+            validate_email,
             validate_emails_bulk,
             pause_validation,
             resume_validation,
-            stop_validation
+            stop_validation,
+            proxy::fetch_proxies,
+            proxy::get_proxy_status,
+            proxy::refresh_proxies,
+            proxy::clear_proxies,
+            settings::load_settings,
+            settings::save_settings,
+            settings::reset_settings,
+            session::create_validation_session,
+            session::update_validation_session,
+            session::load_validation_session,
+            session::list_validation_sessions,
+            session::delete_validation_session,
+            session::cleanup_old_sessions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

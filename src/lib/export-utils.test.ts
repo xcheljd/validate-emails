@@ -3,8 +3,8 @@ import { formatAsCSV } from './export-utils';
 import { ValidationResult } from '@/hooks/use-email-validation';
 
 const mockResults: ValidationResult[] = [
-  { email: 'test1@example.com', result: 'Safe', reason: 'Reachable', logs: [] },
-  { email: 'test2@example.com', result: 'Invalid', reason: 'Syntax error', logs: [] },
+  { email: 'test1@example.com', result: 'Safe', reason: 'Reachable', logs: [], domain: 'example.com', validationDuration: 1000, mxRecordCount: 2, isDisposable: false, isRoleAccount: false, isCatchAll: false, timestamp: '2025-01-04T00:00:00Z', validationMode: 'standard', riskScore: 0 },
+  { email: 'test2@example.com', result: 'Invalid', reason: 'Syntax error', logs: [], domain: 'example.com', validationDuration: 1000, mxRecordCount: 2, isDisposable: false, isRoleAccount: false, isCatchAll: false, timestamp: '2025-01-04T00:00:00Z', validationMode: 'standard', riskScore: 100 },
 ];
 
 describe('Export Utils', () => {
@@ -19,7 +19,7 @@ describe('Export Utils', () => {
 
   it('should escape commas in values', () => {
     const results: ValidationResult[] = [
-      { email: 'test@example.com', result: 'Risky', reason: 'Potential issues, check MX', logs: [] }
+      { email: 'test@example.com', result: 'Risky', reason: 'Potential issues, check MX', logs: [], domain: 'example.com', validationDuration: 1000, mxRecordCount: 2, isDisposable: false, isRoleAccount: false, isCatchAll: false, timestamp: '2025-01-04T00:00:00Z', validationMode: 'standard', riskScore: 30 }
     ];
     const csv = formatAsCSV(results);
     expect(csv).toContain('"Potential issues, check MX"');
