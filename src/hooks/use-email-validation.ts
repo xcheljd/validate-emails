@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { notifyValidationComplete, notifyError } from "@/lib/notifications";
+import { loadSession, ValidationSession } from "@/lib/session-manager";
 
 export interface ValidationResult {
   email: string;
@@ -142,6 +143,36 @@ export function useEmailValidation() {
     });
   }, [status, mutation, validationMode]);
 
+  const resumeSession = useCallback(async (sessionIdToResume: string) => {
+    try {
+      const session: ValidationSession = await loadSession(sessionIdToResume);
+      const unprocessedEmails = session.emails.slice(session.currentIndex);
+      const problemEmails = session.results
+        .filter(r => r.result === 'Unknown' || r.result === 'Invalid')
+        .map(r => r.email);
+
+      const emailsToRevalidate = [...unprocessedEmails, ...problemEmails];
+
+      setResults(session.results);
+      setProgress(session.currentIndex);
+      setTotal(session.total);
+      setSessionId(sessionIdToResume);
+      setValidationMode(session.settings.validationMode);
+      currentConcurrencyRef.current = 5;
+      pendingEmailsRef.current = emailsToRevalidate;
+
+      setStatus('processing');
+      mutation.mutate({
+        emails: emailsToRevalidate,
+        concurrency: 5,
+        mode: session.settings.validationMode
+      });
+    } catch (error) {
+      console.error("Failed to resume session:", error);
+      notifyError(`Failed to resume session: ${error}`);
+    }
+  }, [mutation]);
+
   const stopValidation = useCallback(async () => {
     setStatus('idle');
     setProgress(0);
@@ -160,6 +191,7 @@ export function useEmailValidation() {
     startValidation,
     pauseValidation,
     resumeValidation,
+    resumeSession,
     stopValidation,
     setResults,
     validationMode,

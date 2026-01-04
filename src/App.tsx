@@ -5,8 +5,6 @@ import { EmailInput } from "@/components/validation/email-input";
 import { ValidationDashboard } from "@/components/validation/validation-dashboard";
 import { ResultsTable } from "@/components/validation/results-table";
 import { ResultDetails } from "@/components/validation/result-details";
-import { SessionHistory } from "@/components/history/session-history";
-import { SessionDetails } from "@/components/history/session-details";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, Settings, History } from "lucide-react";
 import { useEmailValidation, ValidationResult } from "@/hooks/use-email-validation";
@@ -16,6 +14,9 @@ import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { SettingsPanel } from "@/components/settings/settings-panel";
 import { StatisticsDashboard } from "@/components/analytics/statistics-dashboard";
 import { DomainAnalysis } from "@/components/analytics/domain-analysis";
+import { SessionHistory } from "@/components/history/session-history";
+import { SessionDetails } from "@/components/history/session-details";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 
 type CurrentView = 'validation' | 'history' | 'session-details' | 'analytics';
 
@@ -41,7 +42,8 @@ function App() {
     validationMode,
     onChangeValidationMode,
     validationSpeed,
-    estimatedTimeRemaining
+    estimatedTimeRemaining,
+    resumeSession
   } = useEmailValidation();
 
   const isProcessing = status === 'processing' || status === 'paused' || status === 'stopping';
@@ -84,6 +86,14 @@ function App() {
     setIsDetailsOpen(false);
   };
 
+  const handleClear = () => {
+    setEmails([]);
+    setShowDashboard(false);
+    setResults([]);
+    setCurrentView('validation');
+    setSelectedResult(null);
+  };
+
   const handleDiscard = () => {
     stopValidation();
     handleClear();
@@ -124,12 +134,13 @@ function App() {
 
   const handleResumeSession = (sessionId: string) => {
     setSelectedSessionId(sessionId);
-    setCurrentView('validation');
+    resumeSession(sessionId);
   };
 
   return (
-    <MainLayout>
-      <header className="border-b px-8 py-6 flex items-center justify-between bg-card">
+    <ErrorBoundary>
+      <MainLayout>
+        <header className="border-b px-8 py-6 flex items-center justify-between bg-card">
         <div className="flex items-center gap-4">
           {(showDashboard || currentView !== 'validation') && (
             <Button variant="ghost" size="icon" onClick={handleBack}>
