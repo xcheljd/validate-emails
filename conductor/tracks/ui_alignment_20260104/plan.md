@@ -2,7 +2,7 @@
 
 ## Phase 1: Foundation & Audit
 
-- [ ] Task: Audit and Verify Color Palette Configuration
+- [x] Task: Audit and Verify Color Palette Configuration 7b70e2d
   - Review `src/index.css` against the Dayfox/Nordfox specifications (conceptually).
   - Ensure all semantic colors (primary, secondary, destructive, etc.) have sufficient contrast in both modes.
   - Create a small "Style Guide" page or component (temporary) to visually verify the palette if needed, or just manually verify.
