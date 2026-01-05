@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Table,
   TableBody,
@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Search, ArrowUpDown, ChevronRight, Filter, Download, Trash2, Columns } from "lucide-react";
+import { Search, ArrowUpDown, ChevronRight, Filter, Download, Trash2, Columns, Smartphone } from "lucide-react";
 import { ValidationResult } from "@/hooks/use-email-validation";
 import { RiskScoreBadge } from "./risk-score-badge";
 import { TypoWarning } from "./typo-warning";
@@ -20,6 +20,8 @@ import { exportColumns } from "@/lib/enhanced-export-utils";
 import { formatAsCSV } from "@/lib/export-utils";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { useDebounce } from "@/lib/hooks/use-debounce";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 interface ResultsTableProps {
   results: ValidationResult[];
@@ -28,21 +30,30 @@ interface ResultsTableProps {
 
 export function ResultsTable({ results, onViewDetails }: ResultsTableProps) {
   const [query, setQuery] = useState("");
+  const debouncedQuery = useDebounce(query, 300);
   const [sortKey, setSortKey] = useState<string>("email");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [showColumnMenu, setShowColumnMenu] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [riskFilter, setRiskFilter] = useState<string>("all");
+  const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const filteredAndSorted = useMemo(() => {
     let filtered = [...results];
 
-    if (query) {
-      filtered = filtered.filter(r => 
-        r.email.toLowerCase().includes(query.toLowerCase()) ||
-        r.result.toLowerCase().includes(query.toLowerCase()) ||
-        r.reason.toLowerCase().includes(query.toLowerCase())
+    if (debouncedQuery) {
+      filtered = filtered.filter(r =>
+        r.email.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
+        r.result.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
+        r.reason.toLowerCase().includes(debouncedQuery.toLowerCase())
       );
     }
 
@@ -68,7 +79,14 @@ export function ResultsTable({ results, onViewDetails }: ResultsTableProps) {
     });
 
     return filtered;
-  }, [results, query, sortKey, sortOrder, statusFilter, riskFilter]);
+  }, [results, debouncedQuery, sortKey, sortOrder, statusFilter, riskFilter]);
+
+  const virtualizer = useVirtualizer({
+    count: filteredAndSorted.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 60,
+    overscan: 10,
+  });
 
   const handleSort = (key: string) => {
     if (sortKey === key) {
@@ -157,25 +175,40 @@ export function ResultsTable({ results, onViewDetails }: ResultsTableProps) {
     }
   };
 
-  const visibleColumns = exportColumns.filter(c => c.enabled);
+  const visibleColumns = useMemo(() => {
+    const enabledColumns = exportColumns.filter(c => c.enabled);
+    
+    if (windowWidth < 640) { // mobile
+      return enabledColumns.filter(c => ['email', 'result'].includes(c.key));
+    } else if (windowWidth < 1024) { // tablet
+      return enabledColumns.filter(c => ['email', 'result', 'domain'].includes(c.key));
+    }
+    
+    return enabledColumns;
+  }, [windowWidth]);
+
+  const { getVirtualItems, getTotalSize } = virtualizer;
+  const items = getVirtualItems();
+  const paddingTop = items.length > 0 ? items[0].start : 0;
+  const paddingBottom = items.length > 0 ? getTotalSize() - items[items.length - 1].end : 0;
 
   return (
     <div className="space-y-4 w-full max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-2 duration-500">
       <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-        <div className="relative flex-1 max-w-md">
+        <div className="relative flex-1 w-full max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search emails, status, or reasons..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="pl-9 bg-card shadow-sm"
+            className="pl-9 bg-card shadow-sm w-full"
           />
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="text-sm border rounded-md px-3 py-1.5 bg-card"
+            className="text-sm border rounded-md px-3 py-1.5 bg-card touch-action-manipulation min-h-[38px]"
           >
             <option value="all">All Status</option>
             <option value="Safe">Safe</option>
@@ -186,7 +219,7 @@ export function ResultsTable({ results, onViewDetails }: ResultsTableProps) {
           <select
             value={riskFilter}
             onChange={(e) => setRiskFilter(e.target.value)}
-            className="text-sm border rounded-md px-3 py-1.5 bg-card"
+            className="text-sm border rounded-md px-3 py-1.5 bg-card touch-action-manipulation min-h-[38px]"
           >
             <option value="all">All Risk</option>
             <option value="low">Low (0-29)</option>
@@ -197,13 +230,13 @@ export function ResultsTable({ results, onViewDetails }: ResultsTableProps) {
             variant="outline"
             size="sm"
             onClick={() => setShowColumnMenu(!showColumnMenu)}
-            className="gap-2"
+            className="gap-2 min-h-[38px]"
           >
             <Columns className="h-4 w-4" />
-            Columns
+            <span className="hidden sm:inline">Columns</span>
           </Button>
         </div>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full border">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full border w-full sm:w-auto justify-center sm:justify-start">
           <Filter className="h-3 w-3" />
           <span>Showing <strong>{filteredAndSorted.length}</strong> of {results.length}</span>
         </div>
@@ -214,7 +247,7 @@ export function ResultsTable({ results, onViewDetails }: ResultsTableProps) {
           <h4 className="font-medium mb-2">Toggle Columns</h4>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
             {exportColumns.map(col => (
-              <label key={col.key} className="flex items-center gap-2 text-sm">
+              <label key={col.key} className="flex items-center gap-2 text-sm touch-action-manipulation">
                 <Checkbox
                   checked={col.enabled}
                   onCheckedChange={() => toggleColumn(col.key)}
@@ -227,117 +260,153 @@ export function ResultsTable({ results, onViewDetails }: ResultsTableProps) {
       )}
 
       {selectedRows.size > 0 && (
-        <div className="flex items-center gap-2 bg-primary/10 border border-primary rounded-lg p-3">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 bg-primary/10 border border-primary rounded-lg p-3">
           <span className="text-sm font-medium">{selectedRows.size} selected</span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExportSelected}
-            className="gap-2"
-          >
-            <Download className="h-4 w-4" />
-            Export Selected
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDeleteSelected}
-            className="gap-2 text-destructive hover:text-destructive"
-          >
-            <Trash2 className="h-4 w-4" />
-            Delete Selected
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setSelectedRows(new Set())}
-          >
-            Clear Selection
-          </Button>
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportSelected}
+              className="gap-2 min-h-[38px] flex-1 sm:flex-none"
+            >
+              <Download className="h-4 w-4" />
+              <span>Export</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDeleteSelected}
+              className="gap-2 text-destructive hover:text-destructive min-h-[38px] flex-1 sm:flex-none"
+            >
+              <Trash2 className="h-4 w-4" />
+              <span>Delete</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedRows(new Set())}
+              className="min-h-[38px] flex-1 sm:flex-none"
+            >
+              Clear
+            </Button>
+          </div>
         </div>
       )}
 
       <div className="border rounded-lg bg-card shadow-sm overflow-hidden">
-        <Table>
-          <TableHeader className="bg-muted/50">
-            <TableRow>
-              <TableHead className="w-[40px]">
-                <Checkbox
-                  checked={selectedRows.size === filteredAndSorted.length && filteredAndSorted.length > 0}
-                  onCheckedChange={handleSelectAll}
-                />
-              </TableHead>
-              {visibleColumns.map(col => (
-                <TableHead key={col.key}>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    onClick={() => handleSort(col.key)}
-                    className="-ml-3 h-8 text-muted-foreground hover:text-foreground font-semibold uppercase tracking-wider text-[10px]"
-                  >
-                    {col.label}
-                    <ArrowUpDown className="ml-2 h-3 w-3" />
-                  </Button>
-                </TableHead>
-              ))}
-              <TableHead className="text-right text-muted-foreground font-semibold uppercase tracking-wider text-[10px]">
-                Actions
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filteredAndSorted.length > 0 ? (
-              filteredAndSorted.map((result) => {
-                const typo = getTypoForEmail(result.email);
-                return (
-                  <TableRow key={result.email} className="hover:bg-muted/30 transition-colors">
-                    <TableCell>
-                      <Checkbox
-                        checked={selectedRows.has(result.email)}
-                        onCheckedChange={(checked) => handleSelectRow(result.email, !!checked)}
-                      />
-                    </TableCell>
-                    {visibleColumns.map(col => (
-                      <TableCell key={col.key}>
-                        {col.key === 'email' && (
-                          <div>
-                            <div className="font-medium font-mono text-xs truncate max-w-[300px]">
-                              {result[col.key]}
-                            </div>
-                            {typo && <TypoWarning email={result.email} correctedEmail={typo} />}
-                          </div>
-                        )}
-                        {col.key === 'result' && (
-                          <div className="flex items-center gap-2">
-                            {getStatusBadge(result[col.key])}
-                            <RiskScoreBadge result={result} />
-                          </div>
-                        )}
-                        {col.key !== 'email' && col.key !== 'result' && (
-                          <span className="text-sm text-muted-foreground truncate">
-                            {String(result[col.key as keyof ValidationResult] ?? '-')}
-                          </span>
-                        )}
-                      </TableCell>
-                    ))}
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" onClick={() => onViewDetails(result)} className="h-8 text-xs hover:bg-primary/10 hover:text-primary">
-                        Details <ChevronRight className="ml-1 h-3 w-3" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                );
-              })
-            ) : (
+        <div ref={parentRef} className="overflow-auto max-h-[600px]">
+          <Table>
+            <TableHeader className="bg-muted/50 sticky top-0 z-10">
               <TableRow>
-                <TableCell colSpan={visibleColumns.length + 2} className="h-32 text-center text-muted-foreground italic">
-                  No matches found for your search query.
-                </TableCell>
+                <TableHead className="w-[40px] min-w-[40px]">
+                  <Checkbox
+                    checked={selectedRows.size === filteredAndSorted.length && filteredAndSorted.length > 0}
+                    onCheckedChange={handleSelectAll}
+                  />
+                </TableHead>
+                {visibleColumns.map(col => (
+                  <TableHead key={col.key} className="whitespace-nowrap">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleSort(col.key)}
+                      className="-ml-3 h-8 text-muted-foreground hover:text-foreground font-semibold uppercase tracking-wider text-[10px]"
+                    >
+                      {col.label}
+                      <ArrowUpDown className="ml-2 h-3 w-3" />
+                    </Button>
+                  </TableHead>
+                ))}
+                <TableHead className="text-right text-muted-foreground font-semibold uppercase tracking-wider text-[10px] min-w-[80px]">
+                  Actions
+                </TableHead>
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {filteredAndSorted.length > 0 ? (
+                <>
+                  {paddingTop > 0 && (
+                    <TableRow>
+                      <TableCell colSpan={visibleColumns.length + 2} style={{ height: `${paddingTop}px`, padding: 0 }} />
+                    </TableRow>
+                  )}
+                  {items.map((virtualRow) => {
+                    const result = filteredAndSorted[virtualRow.index];
+                    const typo = getTypoForEmail(result.email);
+                    return (
+                        <TableRow 
+                            key={virtualRow.key}
+                            data-index={virtualRow.index}
+                            ref={virtualizer.measureElement}
+                            className="hover:bg-muted/30 transition-colors"
+                        >
+                          <TableCell className="min-w-[40px]">
+                            <Checkbox
+                              checked={selectedRows.has(result.email)}
+                              onCheckedChange={(checked) => handleSelectRow(result.email, !!checked)}
+                            />
+                          </TableCell>
+                          {visibleColumns.map(col => (
+                            <TableCell key={col.key} className="whitespace-nowrap">
+                              {col.key === 'email' && (
+                                <div>
+                                  <div className="font-medium font-mono text-xs truncate max-w-[300px] sm:max-w-[400px]">
+                                    {result[col.key]}
+                                  </div>
+                                  {typo && <TypoWarning email={result.email} correctedEmail={typo} />}
+                                </div>
+                              )}
+                              {col.key === 'result' && (
+                                <div className="flex items-center gap-2">
+                                  {getStatusBadge(result[col.key])}
+                                  <RiskScoreBadge result={result} />
+                                </div>
+                              )}
+                              {col.key !== 'email' && col.key !== 'result' && (
+                                <span className="text-sm text-muted-foreground truncate">
+                                  {String(result[col.key as keyof ValidationResult] ?? '-')}
+                                </span>
+                              )}
+                            </TableCell>
+                          ))}
+                          <TableCell className="text-right min-w-[80px]">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => onViewDetails(result)}
+                              className="h-8 text-xs hover:bg-primary/10 hover:text-primary min-h-[38px]"
+                            >
+                              <span className="hidden sm:inline">Details</span>
+                              <ChevronRight className="h-3 w-3 ml-1" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                    );
+                  })}
+                  {paddingBottom > 0 && (
+                    <TableRow>
+                      <TableCell colSpan={visibleColumns.length + 2} style={{ height: `${paddingBottom}px`, padding: 0 }} />
+                    </TableRow>
+                  )}
+                </>
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={visibleColumns.length + 2} className="h-32 text-center text-muted-foreground italic">
+                    No matches found for your search query.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </div>
+
+      {filteredAndSorted.length > 100 && (
+        <div className="text-center text-sm text-muted-foreground flex items-center justify-center gap-2">
+          <Smartphone className="h-4 w-4" />
+          <span>Virtualized table for optimal performance with {filteredAndSorted.length} results</span>
+        </div>
+      )}
     </div>
   );
 }
