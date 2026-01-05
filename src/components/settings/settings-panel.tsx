@@ -8,24 +8,15 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 
-interface SettingsPanelProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+interface SettingsContentProps {
+  onClose?: () => void;
 }
 
-export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
+export function SettingsContent({ onClose }: SettingsContentProps) {
   const [activeTab, setActiveTab] = useState('validation');
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>
-            Configure validation behavior, proxy settings, and more.
-          </DialogDescription>
-        </DialogHeader>
-
+    <div className="space-y-6">
         <div className="flex gap-4 border-b pb-6">
           <button
             type="button"
@@ -69,7 +60,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
                 <label className="block text-sm font-medium mb-2">Default Validation Mode</label>
                 <select
                   defaultValue="standard"
-                  className="w-full p-2 border rounded-md"
+                  className="w-full p-2 border rounded-md bg-background"
                 >
                   <option value="quick">Quick (10s)</option>
                   <option value="standard">Standard (30s)</option>
@@ -85,7 +76,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
                     defaultValue="5"
                     min="1"
                     max="20"
-                    className="w-full p-2 border rounded-md"
+                    className="w-full p-2 border rounded-md bg-background"
                   />
                   <span className="text-xs text-muted-foreground">{5} parallel validations</span>
                 </div>
@@ -99,7 +90,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
                     defaultValue="30"
                     min="10"
                     max="120"
-                    className="w-full p-2 border rounded-md"
+                    className="w-full p-2 border rounded-md bg-background"
                   />
                   <span className="text-xs text-muted-foreground">{30} seconds per email</span>
                 </div>
@@ -113,7 +104,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
                     defaultValue="3"
                     min="0"
                     max="5"
-                    className="w-full p-2 border rounded-md"
+                    className="w-full p-2 border rounded-md bg-background"
                   />
                   <span className="text-xs text-muted-foreground">{3} max retries</span>
                 </div>
@@ -127,7 +118,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
                     defaultValue="10"
                     min="5"
                     max="50"
-                    className="w-full p-2 border rounded-md"
+                    className="w-full p-2 border rounded-md bg-background"
                   />
                   <span className="text-xs text-muted-foreground">Save every {10} validations</span>
                 </div>
@@ -152,7 +143,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
                 <label className="block text-sm font-medium mb-2">Rotation Strategy</label>
                 <select
                   defaultValue="on-failure"
-                  className="w-full p-2 border rounded-md"
+                  className="w-full p-2 border rounded-md bg-background"
                   >
                   <option value="on-failure">Rotate on Failure (Recommended)</option>
                   <option value="per-email">Rotate Per Email</option>
@@ -168,7 +159,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
                     min="10"
                     max="100"
                     defaultValue="50"
-                    className="w-full p-2 border rounded-md"
+                    className="w-full p-2 border rounded-md bg-background"
                   />
                   <span className="text-xs text-muted-foreground">{50} per proxy</span>
                 </div>
@@ -178,7 +169,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
                 <label className="block text-sm font-medium mb-2">Protocol Preference</label>
                 <select
                   defaultValue="any"
-                  className="w-full p-2 border rounded-md"
+                  className="w-full p-2 border rounded-md bg-background"
                 >
                   <option value="any">Any</option>
                   <option value="http">HTTP</option>
@@ -194,7 +185,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
                     min="50"
                     max="100"
                     defaultValue="80"
-                    className="w-full p-2 border rounded-md"
+                    className="w-full p-2 border rounded-md bg-background"
                   />
                   <span className="text-xs text-muted-foreground">80%</span>
                 </div>
@@ -246,7 +237,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
                   min="1"
                   max="365"
                   defaultValue="90"
-                  className="w-full p-2 border rounded-md"
+                  className="w-full p-2 border rounded-md bg-background"
                 />
                 <p className="text-xs text-muted-foreground mt-1">
                   Sessions older than this will be automatically deleted
@@ -264,16 +255,38 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
         </div>
 
         <div className="flex justify-between items-center pt-4">
-          <Button
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button onClick={() => onOpenChange(false)}>
+          {onClose && (
+            <Button
+              variant="ghost"
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
+          )}
+          <Button onClick={onClose}>
             Save Settings
           </Button>
         </div>
+    </div>
+  );
+}
+
+interface SettingsPanelProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Settings</DialogTitle>
+          <DialogDescription>
+            Configure validation behavior, proxy settings, and more.
+          </DialogDescription>
+        </DialogHeader>
+        <SettingsContent onClose={() => onOpenChange(false)} />
       </DialogContent>
     </Dialog>
   );

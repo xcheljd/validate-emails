@@ -1,50 +1,60 @@
 import { Button } from "@/components/ui/button";
-import { Upload, History } from "lucide-react";
+import { Upload, History, Settings, BarChart2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+export type SidebarView = 'validation' | 'history' | 'session-details' | 'analytics' | 'settings';
+
 interface SidebarProps extends React.HTMLAttributes<HTMLDivElement> {
-  children?: React.ReactNode;
-  className?: string;
+  currentView: SidebarView;
+  onNavigate: (view: SidebarView) => void;
 }
 
-export function Sidebar({ className, children, ...props }: SidebarProps) {
+export function Sidebar({ className, currentView, onNavigate, ...props }: SidebarProps) {
   return (
-    <div className={cn("pb-12 space-y-4", className)} {...props}>
-      <div className="px-4 space-y-4">
-        <h3 className="text-sm font-semibold px-2 mb-4 uppercase tracking-wider text-muted-foreground">
-          Main Menu
-        </h3>
-        <div className="space-y-2">
-          <div>
-            <Button
-              variant="ghost"
+    <div className={cn("w-64 border-r bg-card min-h-screen flex flex-col hidden md:flex", className)} {...props}>
+      <div className="p-6">
+        <h2 className="text-lg font-bold tracking-tight">Email Validator</h2>
+      </div>
+      <div className="px-4 space-y-4 flex-1">
+        <div className="space-y-1">
+          <Button
+            variant={currentView === 'validation' ? "secondary" : "ghost"}
+            className="w-full justify-start gap-2"
+            onClick={() => onNavigate('validation')}
+          >
+            <Upload className="h-4 w-4" />
+            Validation
+          </Button>
+          <Button
+            variant={currentView === 'history' || currentView === 'session-details' ? "secondary" : "ghost"}
+            className="w-full justify-start gap-2"
+            onClick={() => onNavigate('history')}
+          >
+            <History className="h-4 w-4" />
+            History
+          </Button>
+          <Button
+            variant={currentView === 'analytics' ? "secondary" : "ghost"}
+            className="w-full justify-start gap-2"
+            onClick={() => onNavigate('analytics')}
+          >
+            <BarChart2 className="h-4 w-4" />
+            Analytics
+          </Button>
+        </div>
+
+        <div className="mt-6 pt-6 border-t">
+          <div className="space-y-1">
+             <Button
+              variant={currentView === 'settings' ? "secondary" : "ghost"}
               className="w-full justify-start gap-2"
+              onClick={() => onNavigate('settings')}
             >
-              <Upload className="h-4 w-4" />
-              Upload List
-            </Button>
-          </div>
-          <div>
-            <Button
-              variant="ghost"
-              className="w-full justify-start gap-2"
-            >
-              <History className="h-4 w-4" />
-              History
+              <Settings className="h-4 w-4" />
+              Settings
             </Button>
           </div>
         </div>
-
-        {children && (
-          <div className="mt-6 pt-6 border-t">
-            <h3 className="text-sm font-semibold px-2 mb-4 uppercase tracking-wider text-muted-foreground">
-              Actions
-            </h3>
-            <div className="space-y-2">
-              {children}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
