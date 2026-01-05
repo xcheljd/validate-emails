@@ -24,4 +24,6 @@
 
 ## Phase 3: Final Verification
 
-- [ ] Task: Conductor - User Manual Verification 'UI Alignment' (Protocol in workflow.md)
+- [x] Task: Implement Theme Provider and Toggle 82d920b
+- [x] Task: Implement Settings Persistence 82d920b
+- [~] Task: Conductor - User Manual Verification 'UI Alignment' (Protocol in workflow.md)
