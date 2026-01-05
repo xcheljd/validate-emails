@@ -12,6 +12,7 @@ export interface AppSettings {
   protocolPreference: 'any' | 'http' | 'socks5';
   minProxyUptime: number;
   sessionRetentionDays: number;
+  sidebarCollapsed: boolean;
 }
 
 export const defaultSettings: AppSettings = {
@@ -26,6 +27,7 @@ export const defaultSettings: AppSettings = {
   protocolPreference: 'any',
   minProxyUptime: 80,
   sessionRetentionDays: 90,
+  sidebarCollapsed: false,
 };
 
 export function useSettings() {
