@@ -19,13 +19,8 @@
   - Review `ValidationDashboard` (the stats cards) for consistent padding and card styling.
   - Review `ResultsTable` for proper table styling, header pinning, and row density.
 
-- [ ] Task: Polish Navigation & Sidebar
-  - Ensure the `Sidebar` component uses consistent button styles for navigation links.
-  - verify active states are clearly visible.
-
-- [ ] Task: Polish Secondary Views (Settings & History)
-  - Ensure `SettingsPanel` uses standard Shadcn form components (`Form`, `Label`, `Input`, `Switch`).
-  - Ensure `SessionHistory` uses the same table or list styling paradigms as the main view.
+- [x] Task: Polish Navigation & Sidebar 2a90c81
+- [x] Task: Polish Secondary Views (Settings & History) 657bf5d
 
 ## Phase 3: Final Verification
 
