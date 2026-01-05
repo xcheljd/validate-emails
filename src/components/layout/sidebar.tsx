@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Upload, History, Settings, BarChart2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ModeToggle } from "@/components/mode-toggle";
 
 export type SidebarView = 'validation' | 'history' | 'session-details' | 'analytics' | 'settings';
 
@@ -43,7 +44,7 @@ export function Sidebar({ className, currentView, onNavigate, ...props }: Sideba
           </Button>
         </div>
 
-        <div className="mt-6 pt-6 border-t">
+        <div className="mt-6 pt-6 border-t space-y-4">
           <div className="space-y-1">
              <Button
               variant={currentView === 'settings' ? "secondary" : "ghost"}
@@ -53,6 +54,10 @@ export function Sidebar({ className, currentView, onNavigate, ...props }: Sideba
               <Settings className="h-4 w-4" />
               Settings
             </Button>
+          </div>
+          <div className="flex items-center justify-between px-2">
+            <span className="text-xs font-medium text-muted-foreground pl-2">Theme</span>
+            <ModeToggle />
           </div>
         </div>
       </div>
