@@ -26,4 +26,5 @@
 
 - [x] Task: Implement Theme Provider and Toggle 82d920b
 - [x] Task: Implement Settings Persistence 82d920b
+- [x] Task: Fix Keyboard Shortcuts Bug ea69689
 - [~] Task: Conductor - User Manual Verification 'UI Alignment' (Protocol in workflow.md)
