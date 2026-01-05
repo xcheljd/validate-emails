@@ -7,7 +7,7 @@
   - Ensure all semantic colors (primary, secondary, destructive, etc.) have sufficient contrast in both modes.
   - Create a small "Style Guide" page or component (temporary) to visually verify the palette if needed, or just manually verify.
 
-- [ ] Task: Standardize Main Layout Structure
+- [x] Task: Standardize Main Layout Structure 2a90c81
   - Refactor `src/components/layout/main-layout.tsx` to ensure it correctly handles the sidebar and main content area spacing.
   - Ensure `App.tsx` uses `MainLayout` correctly for all views.
   - Fix any scrolling issues (e.g., ensure `ScrollArea` is used where content might overflow).
