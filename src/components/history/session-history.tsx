@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Card } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Play, Trash2, Eye, RotateCcw } from 'lucide-react';
 import { listSessions, deleteSession, loadSession, ValidationSession, cleanupOldSessions } from '@/lib/session-manager';
 
 export function SessionHistory({
@@ -15,9 +17,13 @@ export function SessionHistory({
   const [sessions, setSessions] = useState<ValidationSession[]>([]);
 
   useEffect(() => {
-    listSessions().then(setSessions);
+    loadSessions();
     cleanupOldSessions(90);
   }, []);
+
+  const loadSessions = () => {
+    listSessions().then(setSessions);
+  };
 
   const handleDelete = async (sessionId: string) => {
     if (confirm('Delete this session? This action cannot be undone.')) {
@@ -31,18 +37,14 @@ export function SessionHistory({
     onViewDetails(sessionId);
   };
 
-  const handleResume = (sessionId: string) => {
-    onResume(sessionId);
-  };
-
-  const getStatusBadge = (status: string): string => {
+  const getStatusBadge = (status: string) => {
     switch (status) {
-      case 'completed': return 'bg-green-500';
-      case 'in-progress': return 'bg-blue-500';
-      case 'paused': return 'bg-yellow-500';
-      case 'stopped': return 'bg-red-500';
-      case 'pending': return 'bg-gray-500';
-      default: return 'bg-gray-400';
+      case 'completed': return <Badge className="bg-green-500 hover:bg-green-600">Completed</Badge>;
+      case 'in-progress': return <Badge variant="default" className="animate-pulse">In Progress</Badge>;
+      case 'paused': return <Badge variant="secondary">Paused</Badge>;
+      case 'stopped': return <Badge variant="destructive">Stopped</Badge>;
+      case 'pending': return <Badge variant="outline">Pending</Badge>;
+      default: return <Badge variant="outline">{status}</Badge>;
     }
   };
 
@@ -52,19 +54,18 @@ export function SessionHistory({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold">Validation History</h2>
-        <button
-          type="button"
-          onClick={() => listSessions().then(setSessions)}
-          className="text-sm text-blue-600 hover:underline"
-        >
-          Refresh
-        </button>
+        <div className="space-y-1">
+             <h2 className="text-2xl font-bold tracking-tight">Validation History</h2>
+             <p className="text-muted-foreground text-sm">Manage your past validation sessions.</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={loadSessions} className="gap-2">
+          <RotateCcw className="h-4 w-4" /> Refresh
+        </Button>
       </div>
 
-      <Card>
+      <div className="rounded-md border bg-card">
         <Table>
           <TableHeader>
             <TableRow>
@@ -73,13 +74,13 @@ export function SessionHistory({
               <TableHead>Emails</TableHead>
               <TableHead>Progress</TableHead>
               <TableHead>Date</TableHead>
-              <TableHead>Actions</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {sessions.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={6} className="text-center py-12 text-muted-foreground">
                   No sessions found. Start a new validation to create a session.
                 </TableCell>
               </TableRow>
@@ -88,39 +89,39 @@ export function SessionHistory({
                 <TableRow key={session.id}>
                   <TableCell className="font-medium">{session.name}</TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full ${getStatusBadge(session.status)}`}></span>
-                      <span className="ml-2 text-sm">{session.status}</span>
-                    </div>
+                    {getStatusBadge(session.status)}
                   </TableCell>
                   <TableCell>{session.total}</TableCell>
                   <TableCell>{formatPercentage(session.currentIndex, session.total)}</TableCell>
-                  <TableCell>{session.createdAt}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
+                  <TableCell className="text-muted-foreground text-sm">{new Date(session.createdAt).toLocaleDateString()}</TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="View Details"
                         onClick={() => handleViewDetails(session.id)}
-                        className="text-sm text-blue-600 hover:underline"
                       >
-                        View
-                      </button>
+                        <Eye className="h-4 w-4 text-primary" />
+                      </Button>
                       {session.status === 'paused' && (
-                        <button
-                          type="button"
-                          onClick={() => handleResume(session.id)}
-                          className="text-sm text-blue-600 hover:underline"
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            title="Resume"
+                            onClick={() => onResume(session.id)}
                         >
-                          Resume
-                        </button>
+                            <Play className="h-4 w-4 text-green-600" />
+                        </Button>
                       )}
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="Delete"
                         onClick={() => handleDelete(session.id)}
-                        className="text-sm text-red-600 hover:underline"
                       >
-                        Delete
-                      </button>
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -128,7 +129,7 @@ export function SessionHistory({
             )}
           </TableBody>
         </Table>
-      </Card>
+      </div>
     </div>
   );
 }
