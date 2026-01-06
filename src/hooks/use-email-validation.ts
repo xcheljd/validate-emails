@@ -37,13 +37,22 @@ export function useEmailValidation() {
 
   const pendingEmailsRef = useRef<string[]>([]);
   const currentConcurrencyRef = useRef<number>(5);
+  const statusRef = useRef<ValidationStatus>('idle');
+
+  // Keep ref in sync for callbacks
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   const isProcessing = status === 'processing';
 
+  // Speed and ETA calculation
   useEffect(() => {
-    if (progress >= 10 && results.length > 0) {
-      const recentDurations = results.slice(-10).map(r => r.validationDuration);
-      const avgDuration = recentDurations.reduce((a, b) => a + b, 0) / recentDurations.length;
+    if (progress >= 1 && results.length > 0) {
+      const sampleSize = Math.min(results.length, 20);
+      const recentResults = results.slice(-sampleSize);
+      const avgDuration = recentResults.reduce((a, b) => a + b, 0) / recentResults.length;
+      
       const speed = avgDuration > 0 ? 60000 / avgDuration : 0;
       const remaining = (total - progress) * avgDuration / 1000;
 
@@ -52,26 +61,16 @@ export function useEmailValidation() {
     }
   }, [progress, results, total]);
 
+  // Completion notification
   useEffect(() => {
-    if (progress >= 10 && results.length > 0) {
-      const recentDurations = results.slice(-10).map(r => r.validationDuration);
-      const avgDuration = recentDurations.reduce((a, b) => a + b, 0) / recentDurations.length;
-      const speed = avgDuration > 0 ? 60000 / avgDuration : 0;
-      const remaining = (total - progress) * avgDuration / 1000;
-
-      setValidationSpeed(Math.round(speed));
-      setEstimatedTimeRemaining(Math.round(remaining));
-    }
-  }, [progress, results, total]);
-
-  useEffect(() => {
-    if (status === 'idle' && results.length > 0 && progress === total) {
+    if (status === 'idle' && results.length > 0 && progress === total && total > 0) {
       const safeCount = results.filter(r => r.result === 'Safe').length;
       const riskyCount = results.filter(r => r.result === 'Risky').length;
       notifyValidationComplete(total, safeCount, riskyCount);
     }
   }, [status, results.length, progress, total]);
 
+  // Event listener
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let isActive = true;
@@ -81,10 +80,6 @@ export function useEmailValidation() {
         setResults((prev) => [...prev, event.payload]);
         setProgress((prev) => prev + 1);
         pendingEmailsRef.current = pendingEmailsRef.current.filter(e => e !== event.payload.email);
-
-        if (progress + 1 >= total) {
-          setStatus('idle');
-        }
       });
 
       if (!isActive) {
@@ -100,19 +95,28 @@ export function useEmailValidation() {
       isActive = false;
       if (unlisten) unlisten();
     };
-  }, [total]);
+  }, []);
 
   const mutation = useMutation({
     mutationFn: async ({ emails, concurrency, mode }: { emails: string[], concurrency: number, mode: 'quick' | 'standard' | 'thorough' }) => {
-      return invoke<ValidationResult[]>("validate_emails_bulk", { emails, concurrency, timeout: mode === 'quick' ? 10 : mode === 'standard' ? 30 : 60 });
+      return invoke<ValidationResult[]>("validate_emails_bulk", { 
+        emails, 
+        concurrency, 
+        timeout: mode === 'quick' ? 10 : mode === 'standard' ? 30 : 60 
+      });
     },
     onSuccess: () => {
-      setStatus('idle');
+      // Only return to idle if we were processing and didn't pause/stop
+      if (statusRef.current === 'processing') {
+        setStatus('idle');
+      }
     },
     onError: (error) => {
-      console.error("Bulk validation failed:", error);
-      notifyError(error instanceof Error ? error.message : "Validation failed");
-      setStatus('idle');
+      if (statusRef.current === 'processing') {
+        console.error("Bulk validation failed:", error);
+        notifyError(error instanceof Error ? error.message : "Validation failed");
+        setStatus('idle');
+      }
     }
   });
 
@@ -133,7 +137,7 @@ export function useEmailValidation() {
   }, []);
 
   const resumeValidation = useCallback(async () => {
-    if (status !== 'paused') return;
+    if (statusRef.current !== 'paused') return;
     setStatus('processing');
     await invoke("resume_validation");
     mutation.mutate({
@@ -141,7 +145,7 @@ export function useEmailValidation() {
       concurrency: currentConcurrencyRef.current,
       mode: validationMode
     });
-  }, [status, mutation, validationMode]);
+  }, [mutation, validationMode]);
 
   const resumeSession = useCallback(async (sessionIdToResume: string) => {
     try {
@@ -174,12 +178,10 @@ export function useEmailValidation() {
   }, [mutation]);
 
   const stopValidation = useCallback(async () => {
-    setStatus('idle');
-    setProgress(0);
-    setTotal(0);
-    setValidationSpeed(0);
-    setEstimatedTimeRemaining(0);
+    setStatus('stopping');
     await invoke("stop_validation");
+    setStatus('idle');
+    // We don't reset progress/total here because the user might want to see the partial results
   }, []);
 
   return {

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Progress } from "@/components/ui/progress";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CheckCircle2, AlertCircle, XCircle, Info } from "lucide-react";
-import { ValidationResult } from "@/hooks/use-email-validation";
+import { Card, CardContent } from "@/components/ui/card";
+import { CheckCircle2, AlertCircle, XCircle, Info, Timer, Zap } from "lucide-react";
+import { ValidationResult, ValidationStatus } from "@/hooks/use-email-validation";
 import { ValidationControls } from "./validation-controls";
 import { ValidationModeSelector } from "./validation-modes";
 import {
@@ -15,12 +15,13 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface ValidationDashboardProps {
   results: ValidationResult[];
   progress: number;
   total: number;
-  status: 'processing' | 'paused' | 'stopping' | 'idle';
+  status: ValidationStatus;
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
@@ -82,133 +83,141 @@ export function ValidationDashboard({
    const getStatusBadge = () => {
      switch (status) {
        case 'processing':
-         return <Badge variant="default" className="animate-pulse">Validating</Badge>;
+         return <Badge variant="default" className="animate-pulse bg-blue-500 hover:bg-blue-600">Validating</Badge>;
        case 'paused':
-         return <Badge variant="secondary">Paused</Badge>;
+         return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 border-yellow-200">Paused</Badge>;
        case 'stopping':
          return <Badge variant="destructive">Stopping...</Badge>;
        default:
-         return null;
+         return <Badge variant="outline" className="text-muted-foreground">Finished</Badge>;
      }
    };
 
    return (
-     <div className="space-y-8 w-full max-w-6xl mx-auto">
-       {validationMode && onChangeValidationMode && (
-         <ValidationModeSelector selected={validationMode} onChange={onChangeValidationMode} />
-       )}
-
-       {status !== 'idle' && (
-         <Card>
-           <CardContent className="pt-6">
-             <div className="flex items-center justify-between mb-4">
-               <div className="flex items-center gap-3">
-                 <span className="text-sm font-medium">
-                   {status === 'paused' ? 'Validation Paused' : 'Processing Emails...'}
-                 </span>
-                 {getStatusBadge()}
-               </div>
-               <ValidationControls
-                 status={status}
-                 onPause={onPause}
-                 onResume={onResume}
-                 onStop={handleStopClick}
-               />
+     <div className="space-y-6 w-full max-w-6xl mx-auto animate-in fade-in duration-500">
+       <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
+         {validationMode && onChangeValidationMode && (
+           <ValidationModeSelector selected={validationMode} onChange={onChangeValidationMode} />
+         )}
+         
+         {status !== 'idle' && (
+           <div className="flex items-center gap-2 bg-card border rounded-lg px-4 py-2 shadow-sm ml-auto">
+             <div className="flex items-center gap-2 mr-4 pr-4 border-r">
+               <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</span>
+               {getStatusBadge()}
              </div>
-             <div className="flex justify-between mb-2 text-xs text-muted-foreground">
-               <span>{progress} of {total} emails verified</span>
-               {estimatedTimeRemaining !== undefined && (
-                 <span>~{formatTime(estimatedTimeRemaining)} remaining ({validationSpeed || 0} emails/min)</span>
+             <ValidationControls
+               status={status}
+               onPause={onPause}
+               onResume={onResume}
+               onStop={handleStopClick}
+             />
+           </div>
+         )}
+       </div>
+
+       {/* Progress Section */}
+       {(status !== 'idle' || (progress > 0 && progress < total)) && (
+         <Card className="overflow-hidden border-none shadow-md bg-gradient-to-br from-card to-muted/30">
+           <CardContent className="pt-6">
+             <div className="flex flex-col sm:flex-row justify-between mb-4 gap-4">
+               <div className="space-y-1">
+                 <h3 className="text-sm font-medium flex items-center gap-2">
+                   {status === 'paused' ? 'Validation Paused' : 'Verification Progress'}
+                   <span className="text-primary font-bold ml-1">{percentage}%</span>
+                 </h3>
+                 <p className="text-xs text-muted-foreground">
+                   {progress} of {total} emails processed
+                 </p>
+               </div>
+               
+               {estimatedTimeRemaining !== undefined && status === 'processing' && (
+                 <div className="flex items-center gap-4 text-xs">
+                   <div className="flex items-center gap-1.5 text-muted-foreground">
+                     <Zap className="h-3 w-3 text-yellow-500" />
+                     <span>{validationSpeed || 0} emails/min</span>
+                   </div>
+                   <div className="flex items-center gap-1.5 text-muted-foreground border-l pl-4">
+                     <Timer className="h-3 w-3 text-blue-500" />
+                     <span>~{formatTime(estimatedTimeRemaining)} left</span>
+                   </div>
+                 </div>
                )}
-               <span>{percentage}%</span>
              </div>
              <Progress
                value={percentage}
-               className={`h-2 transition-all ${status === 'paused' ? 'bg-secondary' : ''}`}
+               className={cn(
+                 "h-2.5 transition-all duration-500",
+                 status === 'paused' ? "bg-muted" : "bg-muted"
+               )}
              />
            </CardContent>
          </Card>
        )}
 
-       {proxyStatus && (
-         <Card>
-           <CardHeader>
-             <CardTitle className="text-sm font-medium flex items-center gap-2">
-               <span>Proxy Pool Status</span>
-               {proxyStatus.totalProxies > 0 ? (
-                 <Badge variant="outline" className="text-xs">
-                   {proxyStatus.totalProxies} proxies • {Math.round(proxyStatus.successRate)}% success
-                 </Badge>
-               ) : (
-                 <Badge variant="outline" className="text-xs text-muted-foreground">
-                   No proxies
-                 </Badge>
-               )}
-             </CardTitle>
-           </CardHeader>
-           <CardContent>
-             <div className="grid grid-cols-3 gap-4 text-center">
-               <div>
-                 <div className="text-lg font-semibold">{proxyStatus.totalProxies}</div>
-                 <div className="text-xs text-muted-foreground">Total Proxies</div>
+       {/* Compact Status Grid */}
+       <Card className="shadow-sm">
+         <CardContent className="p-0">
+           <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-y md:divide-y-0 border-collapse">
+             <div className="p-4 flex flex-col items-center justify-center space-y-1 group hover:bg-green-50/30 transition-colors">
+               <div className="flex items-center gap-2 text-green-600">
+                 <CheckCircle2 className="h-4 w-4" />
+                 <span className="text-[10px] font-bold uppercase tracking-widest text-center">Safe</span>
                </div>
-               <div>
-                 <div className="text-lg font-semibold">
-                   {proxyStatus.activeProxy || 'None'}
-                 </div>
-                 <div className="text-xs text-muted-foreground">Active Proxy</div>
+               <div className="text-2xl font-bold">{safeCount}</div>
+               <div className="text-[10px] text-muted-foreground text-center">Deliverable</div>
+             </div>
+             
+             <div className="p-4 flex flex-col items-center justify-center space-y-1 group hover:bg-yellow-50/30 transition-colors">
+               <div className="flex items-center gap-2 text-yellow-600">
+                 <AlertCircle className="h-4 w-4" />
+                 <span className="text-[10px] font-bold uppercase tracking-widest text-center">Risky</span>
                </div>
-               <div>
-                 <div className="text-lg font-semibold">{Math.round(proxyStatus.successRate)}%</div>
-                 <div className="text-xs text-muted-foreground">Success Rate</div>
+               <div className="text-2xl font-bold">{riskyCount}</div>
+               <div className="text-[10px] text-muted-foreground text-center">Issues</div>
+             </div>
+
+             <div className="p-4 flex flex-col items-center justify-center space-y-1 group hover:bg-red-50/30 transition-colors">
+               <div className="flex items-center gap-2 text-red-600">
+                 <XCircle className="h-4 w-4" />
+                 <span className="text-[10px] font-bold uppercase tracking-widest text-center">Invalid</span>
+               </div>
+               <div className="text-2xl font-bold">{invalidCount}</div>
+               <div className="text-[10px] text-muted-foreground text-center">Failed</div>
+             </div>
+
+             <div className="p-4 flex flex-col items-center justify-center space-y-1 group hover:bg-slate-50 transition-colors">
+               <div className="flex items-center gap-2 text-slate-500">
+                 <Info className="h-4 w-4" />
+                 <span className="text-[10px] font-bold uppercase tracking-widest text-center">Unknown</span>
+               </div>
+               <div className="text-2xl font-bold">{unknownCount}</div>
+               <div className="text-[10px] text-muted-foreground text-center">Unverified</div>
+             </div>
+           </div>
+         </CardContent>
+       </Card>
+
+       {proxyStatus && proxyStatus.totalProxies > 0 && (
+         <Card className="border-dashed bg-muted/10">
+           <CardContent className="py-3 px-6 flex items-center justify-between gap-4">
+             <div className="flex items-center gap-2 text-sm">
+               <span className="font-semibold text-muted-foreground">Proxy:</span>
+               <Badge variant="outline" className="bg-background">{proxyStatus.activeProxy || 'Initializing...'}</Badge>
+             </div>
+             <div className="flex items-center gap-6">
+               <div className="flex flex-col items-end">
+                 <span className="text-[10px] uppercase text-muted-foreground font-bold">Success Rate</span>
+                 <span className="text-sm font-mono font-bold">{Math.round(proxyStatus.successRate)}%</span>
+               </div>
+               <div className="flex flex-col items-end border-l pl-6">
+                 <span className="text-[10px] uppercase text-muted-foreground font-bold">Pool Size</span>
+                 <span className="text-sm font-mono font-bold">{proxyStatus.totalProxies}</span>
                </div>
              </div>
            </CardContent>
          </Card>
        )}
-
-       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-         <Card className="border-l-4 border-l-green-500">
-           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-             <CardTitle className="text-sm font-medium">Safe</CardTitle>
-             <CheckCircle2 className="h-4 w-4 text-green-500" />
-           </CardHeader>
-           <CardContent>
-             <div className="text-2xl font-bold">{safeCount}</div>
-             <p className="text-xs text-muted-foreground">Deliverable emails</p>
-           </CardContent>
-         </Card>
-         <Card className="border-l-4 border-l-yellow-500">
-           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-             <CardTitle className="text-sm font-medium">Risky</CardTitle>
-             <AlertCircle className="h-4 w-4 text-yellow-500" />
-           </CardHeader>
-           <CardContent>
-             <div className="text-2xl font-bold">{riskyCount}</div>
-             <p className="text-xs text-muted-foreground">Potential issues</p>
-           </CardContent>
-         </Card>
-         <Card className="border-l-4 border-l-red-500">
-           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-             <CardTitle className="text-sm font-medium">Invalid</CardTitle>
-             <XCircle className="h-4 w-4 text-red-500" />
-           </CardHeader>
-           <CardContent>
-             <div className="text-2xl font-bold">{invalidCount}</div>
-             <p className="text-xs text-muted-foreground">Undeliverable emails</p>
-           </CardContent>
-         </Card>
-         <Card className="border-l-4 border-l-slate-500">
-           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-             <CardTitle className="text-sm font-medium">Unknown</CardTitle>
-             <Info className="h-4 w-4 text-slate-500" />
-           </CardHeader>
-           <CardContent>
-             <div className="text-2xl font-bold">{unknownCount}</div>
-             <p className="text-xs text-muted-foreground">Verification failed</p>
-           </CardContent>
-         </Card>
-       </div>
 
        <Dialog open={showStopDialog} onOpenChange={setShowStopDialog}>
          <DialogContent>
