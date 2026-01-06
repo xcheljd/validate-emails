@@ -8,9 +8,9 @@ interface MainLayoutProps {
 
 export function MainLayout({ children, currentView, onNavigate }: MainLayoutProps) {
   return (
-    <div className="flex min-h-screen bg-background">
+    <div className="flex min-h-screen bg-background overflow-hidden">
       <Sidebar currentView={currentView} onNavigate={onNavigate} />
-      <main className="flex-1 flex flex-col h-screen overflow-x-auto overflow-y-hidden">
+      <main className="flex-1 flex flex-col relative h-screen overflow-y-auto">
         {children}
       </main>
     </div>

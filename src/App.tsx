@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { MainLayout } from "@/components/layout/main-layout";
 import { SidebarView } from "@/components/layout/sidebar";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmailInput } from "@/components/validation/email-input";
 import { ValidationDashboard } from "@/components/validation/validation-dashboard";
 import { ResultsTable } from "@/components/validation/results-table";
@@ -202,7 +201,7 @@ function App() {
           </div>
         </header>
 
-        <ScrollArea className="flex-1 p-4 sm:p-6 md:p-8">
+        <div className="flex-1 p-4 sm:p-6 md:p-8">
            {currentView === 'validation' && (
              !showDashboard ? (
                 <div className="max-w-4xl mx-auto space-y-8">
@@ -287,7 +286,7 @@ function App() {
                 </div>
               </div>
            )}
-        </ScrollArea>
+        </div>
       </MainLayout>
     </ErrorBoundary>
   );

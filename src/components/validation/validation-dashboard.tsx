@@ -94,66 +94,77 @@ export function ValidationDashboard({
    };
 
    return (
-     <div className="space-y-4 md:space-y-6 w-full max-w-6xl mx-auto animate-in fade-in duration-500 overflow-x-auto pb-4">
+     <div className="space-y-4 md:space-y-6 w-full max-w-6xl mx-auto animate-in fade-in duration-500">
        <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
          {validationMode && onChangeValidationMode && (
-           <div className="w-full sm:w-auto overflow-x-auto pb-2 sm:pb-0">
+           <div className="w-full sm:w-auto">
              <ValidationModeSelector selected={validationMode} onChange={onChangeValidationMode} />
            </div>
          )}
          
          {status !== 'idle' && (
-           <div className="flex items-center gap-2 bg-card border rounded-lg px-2 py-1.5 md:px-4 md:py-2 shadow-sm w-full sm:w-auto justify-between sm:justify-start">
-             <div className="flex items-center gap-2 mr-2 pr-2 md:mr-4 md:pr-4 border-r">
-               <span className="hidden xs:inline text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Status</span>
-               {getStatusBadge()}
-             </div>
-             <ValidationControls
-               status={status}
-               onPause={onPause}
-               onResume={onResume}
-               onStop={handleStopClick}
-               isCompact={true}
-             />
+           <div className="hidden sm:flex items-center gap-2 bg-card border rounded-full px-3 py-1 shadow-sm">
+             <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider pl-1">Status:</span>
+             {getStatusBadge()}
            </div>
          )}
        </div>
 
-       {/* Progress Section */}
+       {/* Progress Section with Integrated Controls */}
        {(status !== 'idle' || (progress > 0 && progress < total)) && (
          <Card className="overflow-hidden border-none shadow-md bg-gradient-to-br from-card to-muted/30">
            <CardContent className="pt-4 md:pt-6">
-             <div className="flex flex-col sm:flex-row justify-between mb-3 md:mb-4 gap-2 sm:gap-4">
-               <div className="space-y-0.5">
-                 <h3 className="text-sm font-medium flex items-center gap-2">
-                   {status === 'paused' ? 'Validation Paused' : 'Verification Progress'}
-                   <span className="text-primary font-bold ml-1">{percentage}%</span>
-                 </h3>
-                 <p className="text-[10px] md:text-xs text-muted-foreground">
-                   {progress} of {total} emails processed
-                 </p>
+             <div className="flex flex-col gap-4">
+               <div className="flex items-start justify-between w-full gap-4">
+                 <div className="space-y-1">
+                   <div className="flex items-center gap-2">
+                     <h3 className="text-sm font-bold flex items-center gap-2">
+                       {status === 'paused' ? 'Validation Paused' : 'Verification Progress'}
+                       <span className="text-primary font-black">{percentage}%</span>
+                     </h3>
+                     <div className="sm:hidden">
+                        {getStatusBadge()}
+                     </div>
+                   </div>
+                   <p className="text-[10px] md:text-xs text-muted-foreground">
+                     {progress} of {total} emails processed
+                   </p>
+                 </div>
+
+                 <div className="bg-background/50 p-1.5 rounded-xl border shadow-sm">
+                   <ValidationControls
+                     status={status}
+                     onPause={onPause}
+                     onResume={onResume}
+                     onStop={handleStopClick}
+                     isCompact={true}
+                   />
+                 </div>
                </div>
                
-               {estimatedTimeRemaining !== undefined && status === 'processing' && (
-                 <div className="flex items-center gap-3 md:gap-4 text-[10px] md:text-xs">
-                   <div className="flex items-center gap-1.5 text-muted-foreground">
-                     <Zap className="h-3 w-3 text-yellow-500" />
-                     <span>{validationSpeed || 0}<span className="hidden xs:inline"> emails/min</span><span className="xs:hidden">/min</span></span>
+               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                 <Progress
+                   value={percentage}
+                   className={cn(
+                     "h-2 md:h-2.5 flex-1 transition-all duration-500",
+                     status === 'paused' ? "bg-muted" : "bg-muted"
+                   )}
+                 />
+                 
+                 {estimatedTimeRemaining !== undefined && status === 'processing' && (
+                   <div className="flex items-center gap-3 md:gap-4 text-[10px] md:text-xs font-medium min-w-fit">
+                     <div className="flex items-center gap-1.5 text-muted-foreground">
+                       <Zap className="h-3 w-3 text-yellow-500" />
+                       <span>{validationSpeed || 0}<span className="hidden xs:inline"> emails/min</span><span className="xs:hidden">/m</span></span>
+                     </div>
+                     <div className="flex items-center gap-1.5 text-muted-foreground border-l pl-3 md:pl-4">
+                       <Timer className="h-3 w-3 text-blue-500" />
+                       <span>~{formatTime(estimatedTimeRemaining)}<span className="hidden xs:inline"> remaining</span><span className="xs:hidden"> left</span></span>
+                     </div>
                    </div>
-                   <div className="flex items-center gap-1.5 text-muted-foreground border-l pl-3 md:pl-4">
-                     <Timer className="h-3 w-3 text-blue-500" />
-                     <span>~{formatTime(estimatedTimeRemaining)}<span className="hidden xs:inline"> left</span></span>
-                   </div>
-                 </div>
-               )}
+                 )}
+               </div>
              </div>
-             <Progress
-               value={percentage}
-               className={cn(
-                 "h-2 md:h-2.5 transition-all duration-500",
-                 status === 'paused' ? "bg-muted" : "bg-muted"
-               )}
-             />
            </CardContent>
          </Card>
        )}
