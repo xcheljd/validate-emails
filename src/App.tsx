@@ -28,6 +28,7 @@ function App() {
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [currentView, setCurrentView] = useState<SidebarView>('validation');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const {
     results,
@@ -54,6 +55,7 @@ function App() {
   const handleStartValidation = () => {
     if (emails.length === 0 || isProcessing) return;
     setShowDashboard(true);
+    setStatusFilter("all"); // Reset filter on start
     startValidation(emails, 5, validationMode);
   };
 
@@ -112,6 +114,7 @@ function App() {
     setResults([]);
     setCurrentView('validation');
     setSelectedResult(null);
+    setStatusFilter("all");
   };
 
   const handleViewDetails = (result: ValidationResult) => {
@@ -139,6 +142,7 @@ function App() {
     resumeSession(sessionId);
     setCurrentView('validation');
     setShowDashboard(true);
+    setStatusFilter("all");
   };
 
   const renderTitle = () => {
@@ -251,10 +255,14 @@ function App() {
                     onChangeValidationMode={onChangeValidationMode}
                     validationSpeed={validationSpeed}
                     estimatedTimeRemaining={estimatedTimeRemaining}
+                    statusFilter={statusFilter}
+                    onStatusFilterChange={setStatusFilter}
                   />
                   <ResultsTable
                     results={results}
                     onViewDetails={handleViewDetails}
+                    statusFilter={statusFilter}
+                    onStatusFilterChange={setStatusFilter}
                   />
                   <ResultDetails
                     result={selectedResult}

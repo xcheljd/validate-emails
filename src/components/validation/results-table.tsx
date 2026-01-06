@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Search, ArrowUpDown, ChevronRight, Filter, Download, Trash2, Columns, Smartphone } from "lucide-react";
+import { Search, ArrowUpDown, ChevronRight, Filter, Download, Trash2, Columns, Smartphone, X } from "lucide-react";
 import { ValidationResult } from "@/hooks/use-email-validation";
 import { RiskScoreBadge } from "./risk-score-badge";
 import { TypoWarning } from "./typo-warning";
@@ -22,20 +22,27 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { cn } from "@/lib/utils";
 
 interface ResultsTableProps {
   results: ValidationResult[];
   onViewDetails: (result: ValidationResult) => void;
+  statusFilter: string;
+  onStatusFilterChange: (filter: string) => void;
 }
 
-export function ResultsTable({ results, onViewDetails }: ResultsTableProps) {
+export function ResultsTable({ 
+  results, 
+  onViewDetails,
+  statusFilter,
+  onStatusFilterChange 
+}: ResultsTableProps) {
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebounce(query, 300);
   const [sortKey, setSortKey] = useState<string>("email");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [showColumnMenu, setShowColumnMenu] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [riskFilter, setRiskFilter] = useState<string>("all");
   const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
   const parentRef = useRef<HTMLDivElement>(null);
@@ -205,17 +212,30 @@ export function ResultsTable({ results, onViewDetails }: ResultsTableProps) {
           />
         </div>
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="text-sm border rounded-md px-3 py-1.5 bg-card touch-action-manipulation min-h-[38px]"
-          >
-            <option value="all">All Status</option>
-            <option value="Safe">Safe</option>
-            <option value="Risky">Risky</option>
-            <option value="Invalid">Invalid</option>
-            <option value="Unknown">Unknown</option>
-          </select>
+          <div className="relative">
+            <select
+              value={statusFilter}
+              onChange={(e) => onStatusFilterChange(e.target.value)}
+              className={cn(
+                "text-sm border rounded-md px-3 py-1.5 bg-card touch-action-manipulation min-h-[38px] pr-8 appearance-none",
+                statusFilter !== "all" && "border-primary ring-1 ring-primary/20"
+              )}
+            >
+              <option value="all">All Status</option>
+              <option value="Safe">Safe</option>
+              <option value="Risky">Risky</option>
+              <option value="Invalid">Invalid</option>
+              <option value="Unknown">Unknown</option>
+            </select>
+            {statusFilter !== "all" && (
+              <button 
+                onClick={() => onStatusFilterChange("all")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
           <select
             value={riskFilter}
             onChange={(e) => setRiskFilter(e.target.value)}

@@ -34,6 +34,8 @@ interface ValidationDashboardProps {
   };
   validationSpeed?: number;
   estimatedTimeRemaining?: number;
+  statusFilter?: string;
+  onStatusFilterChange?: (filter: string) => void;
 }
 
 export function ValidationDashboard({
@@ -48,7 +50,9 @@ export function ValidationDashboard({
    validationMode,
    proxyStatus,
    validationSpeed,
-   estimatedTimeRemaining
+   estimatedTimeRemaining,
+   statusFilter = "all",
+   onStatusFilterChange
 }: ValidationDashboardProps) {
    const [showStopDialog, setShowStopDialog] = useState(false);
 
@@ -76,6 +80,12 @@ export function ValidationDashboard({
        onDiscard();
      }
      setShowStopDialog(false);
+   };
+
+   const handleFilterClick = (status: string) => {
+     if (onStatusFilterChange) {
+       onStatusFilterChange(statusFilter === status ? "all" : status);
+     }
    };
 
    const isPaused = status === 'paused';
@@ -151,41 +161,65 @@ export function ValidationDashboard({
        <Card className="shadow-sm overflow-hidden border-2">
          <CardContent className="p-0">
            <div className="grid grid-cols-2 md:grid-cols-4 divide-x-2 divide-y md:divide-y-0 border-collapse">
-             <div className="p-4 md:p-6 flex flex-col items-center justify-center space-y-1 group hover:bg-green-50/50 dark:hover:bg-green-950/20 transition-colors">
+             <button 
+               onClick={() => handleFilterClick("Safe")}
+               className={cn(
+                 "p-4 md:p-6 flex flex-col items-center justify-center space-y-1 group transition-all",
+                 statusFilter === "Safe" ? "bg-green-100 dark:bg-green-900/40" : "hover:bg-green-50/50 dark:hover:bg-green-950/20"
+               )}
+             >
                <div className="flex items-center gap-1.5 md:gap-2 text-green-600 dark:text-green-400">
                  <CheckCircle2 className="h-4 w-4 md:h-5 md:w-5" />
                  <span className="text-[10px] font-black uppercase tracking-widest text-center">Safe</span>
                </div>
                <div className="text-2xl md:text-3xl font-black">{safeCount}</div>
                <div className="hidden xs:block text-[10px] text-muted-foreground font-bold text-center uppercase tracking-tighter">Deliverable</div>
-             </div>
+             </button>
              
-             <div className="p-4 md:p-6 flex flex-col items-center justify-center space-y-1 group hover:bg-yellow-50/50 dark:hover:bg-yellow-950/20 transition-colors">
+             <button 
+               onClick={() => handleFilterClick("Risky")}
+               className={cn(
+                 "p-4 md:p-6 flex flex-col items-center justify-center space-y-1 group transition-all",
+                 statusFilter === "Risky" ? "bg-yellow-100 dark:bg-yellow-900/40" : "hover:bg-yellow-50/50 dark:hover:bg-yellow-950/20"
+               )}
+             >
                <div className="flex items-center gap-1.5 md:gap-2 text-yellow-600 dark:text-yellow-400">
                  <AlertCircle className="h-4 w-4 md:h-5 md:w-5" />
                  <span className="text-[10px] font-black uppercase tracking-widest text-center">Risky</span>
                </div>
                <div className="text-2xl md:text-3xl font-black">{riskyCount}</div>
                <div className="hidden xs:block text-[10px] text-muted-foreground font-bold text-center uppercase tracking-tighter">Needs Review</div>
-             </div>
+             </button>
 
-             <div className="p-4 md:p-6 flex flex-col items-center justify-center space-y-1 group hover:bg-red-50/50 dark:hover:bg-red-950/20 transition-colors">
+             <button 
+               onClick={() => handleFilterClick("Invalid")}
+               className={cn(
+                 "p-4 md:p-6 flex flex-col items-center justify-center space-y-1 group transition-all",
+                 statusFilter === "Invalid" ? "bg-red-100 dark:bg-red-900/40" : "hover:bg-red-50/50 dark:hover:bg-red-950/20"
+               )}
+             >
                <div className="flex items-center gap-1.5 md:gap-2 text-red-600 dark:text-red-400">
                  <XCircle className="h-4 w-4 md:h-5 md:w-5" />
                  <span className="text-[10px] font-black uppercase tracking-widest text-center">Invalid</span>
                </div>
                <div className="text-2xl md:text-3xl font-black">{invalidCount}</div>
                <div className="hidden xs:block text-[10px] text-muted-foreground font-bold text-center uppercase tracking-tighter">Bounce Likely</div>
-             </div>
+             </button>
 
-             <div className="p-4 md:p-6 flex flex-col items-center justify-center space-y-1 group hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+             <button 
+               onClick={() => handleFilterClick("Unknown")}
+               className={cn(
+                 "p-4 md:p-6 flex flex-col items-center justify-center space-y-1 group transition-all",
+                 statusFilter === "Unknown" ? "bg-slate-200 dark:bg-slate-700/40" : "hover:bg-slate-50 dark:hover:bg-slate-800/30"
+               )}
+             >
                <div className="flex items-center gap-1.5 md:gap-2 text-slate-500 dark:text-slate-400">
                  <Info className="h-4 w-4 md:h-5 md:w-5" />
                  <span className="text-[10px] font-black uppercase tracking-widest text-center">Unknown</span>
                </div>
                <div className="text-2xl md:text-3xl font-black">{unknownCount}</div>
                <div className="hidden xs:block text-[10px] text-muted-foreground font-bold text-center uppercase tracking-tighter">Timeout/Error</div>
-             </div>
+             </button>
            </div>
          </CardContent>
        </Card>
