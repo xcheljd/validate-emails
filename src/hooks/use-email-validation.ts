@@ -51,7 +51,7 @@ export function useEmailValidation() {
     if (progress >= 1 && results.length > 0) {
       const sampleSize = Math.min(results.length, 20);
       const recentResults = results.slice(-sampleSize);
-      const avgDuration = recentResults.reduce((a, b) => a + b, 0) / recentResults.length;
+      const avgDuration = recentResults.reduce((a, b) => a + b.validationDuration, 0) / recentResults.length;
       
       const speed = avgDuration > 0 ? 60000 / avgDuration : 0;
       const remaining = (total - progress) * avgDuration / 1000;
@@ -102,7 +102,7 @@ export function useEmailValidation() {
       return invoke<ValidationResult[]>("validate_emails_bulk", { 
         emails, 
         concurrency, 
-        timeout: mode === 'quick' ? 10 : mode === 'standard' ? 30 : 60 
+        mode
       });
     },
     onSuccess: () => {

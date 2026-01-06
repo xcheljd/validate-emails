@@ -48,7 +48,7 @@ describe('Sidebar', () => {
   describe('Collapsible Functionality', () => {
     it('shows labels when expanded', () => {
       render(<Sidebar currentView="validation" onNavigate={vi.fn()} />);
-      expect(screen.getByText('Email Validator')).toBeInTheDocument();
+      expect(screen.getByText('ReachCheck')).toBeInTheDocument();
       expect(screen.getByText('Validation')).toBeInTheDocument();
       expect(screen.getByText('History')).toBeInTheDocument();
     });
@@ -60,14 +60,14 @@ describe('Sidebar', () => {
       });
       
       render(<Sidebar currentView="validation" onNavigate={vi.fn()} />);
-      expect(screen.queryByText('Email Validator')).not.toBeInTheDocument();
+      expect(screen.queryByText('ReachCheck')).not.toBeInTheDocument();
       expect(screen.queryByText('Validation')).not.toBeInTheDocument();
       expect(screen.queryByText('History')).not.toBeInTheDocument();
     });
 
     it('calls updateSettings when toggle button is clicked', () => {
       render(<Sidebar currentView="validation" onNavigate={vi.fn()} />);
-      const toggleBtn = screen.getByTitle('Collapse');
+      const toggleBtn = screen.getByTitle('Collapse Sidebar');
       fireEvent.click(toggleBtn);
       expect(mockUpdateSettings).toHaveBeenCalledWith({ sidebarCollapsed: true });
     });
@@ -81,7 +81,7 @@ describe('Sidebar', () => {
       render(<Sidebar currentView="validation" onNavigate={vi.fn()} />);
       expect(screen.getByTitle('Validation')).toBeInTheDocument();
       expect(screen.getByTitle('History')).toBeInTheDocument();
-      expect(screen.getByTitle('Expand')).toBeInTheDocument();
+      expect(screen.getByTitle('Expand Sidebar')).toBeInTheDocument();
     });
   });
 });

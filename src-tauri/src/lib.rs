@@ -12,20 +12,26 @@ fn greet(name: &str) -> String {
 
 #[tauri::command]
 async fn validate_email(email: String) -> Result<validation::ValidationResult, String> {
-    Ok(validation::validate_email(email).await)
+    // For single email validation, we might skip proxy or use it if we want consistency.
+    // For now, let's keep it simple and direct.
+    Ok(validation::validate_email(email, None, "standard".to_string()).await)
 }
 
 #[tauri::command]
 async fn validate_emails_bulk(
     window: tauri::Window,
     state: tauri::State<'_, validation::ValidationState>,
+    proxy_state: tauri::State<'_, proxy::ProxyState>,
     emails: Vec<String>,
     concurrency: usize,
+    mode: String,
 ) -> Result<Vec<validation::ValidationResult>, String> {
     let results = validation::validate_emails_bulk_core(
         emails,
         concurrency,
         state.get_token(),
+        proxy_state.pool.clone(),
+        mode,
         move |res| {
             let _ = window.emit("validation-progress", res);
         },
@@ -53,7 +59,9 @@ fn stop_validation(state: tauri::State<'_, validation::ValidationState>) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(validation::ValidationState::default())
+        .manage(proxy::ProxyState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             validate_email,
@@ -61,6 +69,7 @@ pub fn run() {
             pause_validation,
             resume_validation,
             stop_validation,
+            proxy::add_proxies,
             proxy::fetch_proxies,
             proxy::get_proxy_status,
             proxy::refresh_proxies,

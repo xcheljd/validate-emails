@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 
 export interface AppSettings {
   validationMode: 'quick' | 'standard' | 'thorough';

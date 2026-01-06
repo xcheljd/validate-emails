@@ -1,4 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
+import { validateSession, validateResultsBatch } from './data-validation';
+import { showError } from './toast';
 
 export interface ValidationResult {
   email: string;
@@ -47,6 +49,13 @@ export async function updateSessionProgress(
   results: ValidationResult[],
   currentIndex: number
 ): Promise<void> {
+  // Validate results before updating
+  const validation = validateResultsBatch(results);
+  if (!validation.valid) {
+    console.error('Invalid results detected during update:', validation.errors);
+    throw new Error(`Data validation failed: ${validation.errors[0]}`);
+  }
+
   const existingSession = await loadSession(sessionId).catch(() => null);
 
   if (existingSession) {
@@ -58,11 +67,31 @@ export async function updateSessionProgress(
 }
 
 export async function loadSession(sessionId: string): Promise<ValidationSession> {
-  return invoke('load_validation_session', { id: sessionId });
+  const session = await invoke<ValidationSession>('load_validation_session', { id: sessionId });
+  
+  // Validate session structure after loading
+  const validation = validateSession(session);
+  if (!validation.valid) {
+    const errorMsg = `Loaded session "${sessionId}" is corrupted: ${validation.errors.join(', ')}`;
+    showError(errorMsg);
+    throw new Error(errorMsg);
+  }
+  
+  return session;
 }
 
 export async function listSessions(): Promise<ValidationSession[]> {
-  return invoke('list_validation_sessions');
+  const sessions = await invoke<ValidationSession[]>('list_validation_sessions');
+  
+  // Filter out invalid sessions from the list to prevent UI crashes
+  return sessions.filter(session => {
+    const validation = validateSession(session);
+    if (!validation.valid) {
+      console.warn(`Skipping invalid session ${session.id}:`, validation.errors);
+      return false;
+    }
+    return true;
+  });
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {

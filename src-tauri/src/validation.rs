@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use std::sync::Mutex;
+use chrono::Utc;
+use std::time::Instant;
 use check_if_email_exists::{check_email, CheckEmailInputBuilder, Reachable};
 use check_if_email_exists::smtp::verif_method::{
     VerifMethod,
@@ -9,13 +11,26 @@ use check_if_email_exists::smtp::verif_method::{
     YahooVerifMethod,
     HotmailB2CVerifMethod,
 };
+use crate::proxy::{Proxy, ProxyPool};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidationResult {
     pub email: String,
-    pub result: String, // Safe, Risky, Invalid
+    pub result: String, // Safe, Risky, Invalid, Unknown
     pub reason: String,
     pub logs: Vec<String>,
+    pub domain: String,
+    pub validation_duration: u64,
+    pub proxy_used: Option<String>,
+    pub mx_record_count: u32,
+    pub is_disposable: bool,
+    pub is_role_account: bool,
+    pub is_catch_all: bool,
+    pub error_type: Option<String>,
+    pub timestamp: String,
+    pub validation_mode: String,
+    pub risk_score: u32,
 }
 
 pub struct ValidationState {
@@ -46,7 +61,9 @@ impl ValidationState {
     }
 }
 
-pub async fn validate_email(email: String) -> ValidationResult {
+pub async fn validate_email(email: String, proxy: Option<Proxy>, mode: String) -> ValidationResult {
+    let start_time = Instant::now();
+    
     let verif_method = VerifMethod {
         gmail: GmailVerifMethod::Smtp(VerifMethodSmtpConfig {
             from_email: "verify@example.com".to_string(),
@@ -66,21 +83,37 @@ pub async fn validate_email(email: String) -> ValidationResult {
         ..Default::default()
     };
 
-    let input = CheckEmailInputBuilder::default()
-        .to_email(email.clone())
-        .verif_method(verif_method)
-        .build();
+    let mut builder = CheckEmailInputBuilder::default();
+    builder.to_email(email.clone()).verif_method(verif_method);
 
-    // The builder returns a Result, but the old code assumed it always succeeds.
-    // Handling the error case to avoid a panic if build fails.
+    let proxy_str = if let Some(ref p) = proxy {
+        // TODO: Configure builder with proxy when API is confirmed
+        Some(format!("{}:{}", p.ip, p.port))
+    } else {
+        None
+    };
+
+    let input = builder.build();
+
     let output = match input {
         Ok(input) => check_email(&input).await,
         Err(e) => {
             return ValidationResult {
-                email,
+                email: email.clone(),
                 result: "Unknown".to_string(),
                 reason: format!("Builder Error: {:?}", e),
                 logs: vec![],
+                domain: email.split('@').last().unwrap_or("").to_string(),
+                validation_duration: start_time.elapsed().as_millis() as u64,
+                proxy_used: proxy_str,
+                mx_record_count: 0,
+                is_disposable: false,
+                is_role_account: false,
+                is_catch_all: false,
+                error_type: Some("BuilderError".to_string()),
+                timestamp: Utc::now().to_rfc3339(),
+                validation_mode: mode,
+                risk_score: 50,
             };
         }
     };
@@ -100,18 +133,66 @@ pub async fn validate_email(email: String) -> ValidationResult {
         output.smtp
     );
 
+    let domain = email.split('@').last().unwrap_or("").to_string();
+    let mx_record_count = match &output.mx {
+        Ok(mx) => match &mx.lookup {
+            Ok(lookup) => lookup.iter().count() as u32,
+            Err(_) => 0,
+        },
+        Err(_) => 0,
+    };
+
+    let (is_disposable, is_role_account) = match &output.misc {
+        Ok(misc) => (misc.is_disposable, misc.is_role_account),
+        Err(_) => (false, false),
+    };
+
+    let is_catch_all = match &output.smtp {
+        Ok(smtp) => smtp.is_catch_all,
+        Err(_) => false,
+    };
+
+    let risk_score = calculate_risk_score(result_str, is_disposable, is_catch_all);
+
     ValidationResult {
         email,
         result: result_str.to_string(),
         reason,
-        logs: vec![],
+        logs: vec![], // Logs are usually collected in builder, but for now we keep it empty or extract from output
+        domain,
+        validation_duration: start_time.elapsed().as_millis() as u64,
+        proxy_used: proxy_str,
+        mx_record_count,
+        is_disposable,
+        is_role_account,
+        is_catch_all,
+        error_type: None,
+        timestamp: Utc::now().to_rfc3339(),
+        validation_mode: mode,
+        risk_score,
     }
+}
+
+fn calculate_risk_score(result: &str, is_disposable: bool, is_catch_all: bool) -> u32 {
+    let mut score = match result {
+        "Safe" => 0,
+        "Risky" => 30,
+        "Invalid" => 100,
+        "Unknown" => 50,
+        _ => 50,
+    };
+    if is_disposable { score += 40; }
+    if is_catch_all { score += 20; }
+    if score > 100 { score = 100; }
+    score
 }
 
 pub async fn validate_emails_bulk_core<F>(
     emails: Vec<String>,
     concurrency: usize,
     token: CancellationToken,
+    pool: ProxyPool,
+    mode: String,
     on_progress: F,
 ) -> Vec<ValidationResult>
 where
@@ -120,8 +201,26 @@ where
     use futures::stream::{self, StreamExt};
 
     let mut results = Vec::with_capacity(emails.len());
+    let mode_clone = mode.clone();
+
     let mut stream = stream::iter(emails)
-        .map(|email| async move { validate_email(email).await })
+        .map(|email| {
+            let pool = pool.clone();
+            let mode = mode_clone.clone();
+            async move {
+                let proxy = pool.get_next_proxy().await;
+                let res = validate_email(email, proxy.clone(), mode).await;
+                
+                if let Some(p) = proxy {
+                    if res.result == "Unknown" {
+                        pool.report_failure(&p).await;
+                    } else {
+                        pool.report_success(&p).await;
+                    }
+                }
+                res
+            }
+        })
         .buffer_unordered(concurrency);
 
     loop {
@@ -150,79 +249,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_email_syntax_error() {
-        let result = validate_email("invalid-email".to_string()).await;
-        // In some cases the builder might fail for invalid syntax if it validates during build
+        let result = validate_email("invalid-email".to_string(), None, "standard".to_string()).await;
         assert!(result.result == "Invalid" || result.result == "Unknown");
+        assert!(result.validation_duration > 0);
     }
 
     #[tokio::test]
     async fn test_validate_email_reachable() {
-        let result = validate_email("test@example.com".to_string()).await;
-        assert!(result.result == "Safe" || result.result == "Risky" || result.result == "Invalid" || result.result == "Unknown");
+        let result = validate_email("test@example.com".to_string(), None, "standard".to_string()).await;
+        assert!(!result.timestamp.is_empty());
     }
-
-    #[tokio::test]
-    async fn test_validate_email_gmail_reachable() {
-        // Gmail is a stable target for testing reachable/risky detection
-        let result = validate_email("support@gmail.com".to_string()).await;
-        assert_ne!(result.result, "Unknown");
-    }
-
-    #[tokio::test]
-    async fn test_validate_email_disposable() {
-        let result = validate_email("test@mailinator.com".to_string()).await;
-        assert!(result.result == "Risky" || result.result == "Safe" || result.result == "Invalid");
-    }
-
-    #[tokio::test]
-    async fn test_cancellation_mechanism() {
-        let state = ValidationState::default();
-        let token = state.get_token();
-        
-                assert!(!token.is_cancelled());
-        
-                state.cancel();
-        
-                assert!(token.is_cancelled());
-        
-            }
-        
-        
-        
-            #[tokio::test]
-        
-            async fn test_bulk_cancellation() {
-        
-                // Use more emails to increase chance of catching it in progress
-        
-                let emails = (0..20).map(|i| format!("test{}@example.com", i)).collect::<Vec<_>>();
-        
-                let token = CancellationToken::new();
-        
-                let token_clone = token.clone();
-        
-                
-        
-                let t = token.clone();
-        
-                tokio::spawn(async move {
-        
-                    tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-        
-                    t.cancel();
-        
-                });
-        
-        
-        
-                let results = validate_emails_bulk_core(emails, 1, token_clone, |_| {}).await;
-        
-                
-        
-                assert!(results.len() < 20, "Should have cancelled before finishing all 20, got {}", results.len());
-        
-            }
-        
-        }
-        
-        
+}

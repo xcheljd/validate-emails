@@ -18,6 +18,8 @@ import { SessionHistory } from "@/components/history/session-history";
 import { SessionDetails } from "@/components/history/session-details";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { useKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
+import { Badge } from "@/components/ui/badge";
+import { ValidationConfig } from "@/components/validation/validation-config";
 
 function App() {
   const [emails, setEmails] = useState<string[]>([]);
@@ -145,8 +147,11 @@ function App() {
       case 'session-details': return 'Session Details';
       case 'analytics': return 'Analytics Dashboard';
       case 'settings': return 'Settings';
-      case 'validation': return showDashboard ? 'Validation Results' : 'Email Validation';
-      default: return 'Email Validator';
+      case 'validation': 
+        if (showDashboard) return 'Validation Results';
+        if (emails.length > 0) return 'Configure Validation';
+        return 'Email Validation';
+      default: return 'ReachCheck';
     }
   };
   
@@ -156,15 +161,31 @@ function App() {
       case 'session-details': return 'Detailed session information';
       case 'analytics': return 'Statistics and domain analysis';
       case 'settings': return 'Configure application preferences';
-      case 'validation': return showDashboard ? `Analyzed ${progress} of ${total} emails` : "Upload or paste your leads to verify deliverability";
+      case 'validation': 
+        if (showDashboard) return `Analyzed ${progress} of ${total} emails`;
+        if (emails.length > 0) return `Setup your options for ${emails.length} emails`;
+        return "Upload or paste your leads to verify deliverability";
       default: return '';
+    }
+  };
+
+  const getStatusBadge = () => {
+    switch (status) {
+      case 'processing':
+        return <Badge variant="default" className="animate-pulse bg-blue-500 hover:bg-blue-600">Validating</Badge>;
+      case 'paused':
+        return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 border-yellow-200">Paused</Badge>;
+      case 'stopping':
+        return <Badge variant="destructive">Stopping...</Badge>;
+      default:
+        return null;
     }
   };
 
   return (
     <ErrorBoundary>
       <MainLayout currentView={currentView} onNavigate={handleNavigate}>
-        <header className="border-b px-4 sm:px-6 md:px-8 py-4 md:py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-card">
+        <header className="border-b px-4 sm:px-6 md:px-8 py-4 md:py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-card sticky top-0 z-50">
           <div className="flex items-center gap-2 sm:gap-4">
              {currentView === 'session-details' && (
                <Button variant="ghost" size="icon" onClick={() => setCurrentView('history')}>
@@ -173,27 +194,24 @@ function App() {
              )}
              <div>
                 <h1 className="text-2xl font-bold tracking-tight">{renderTitle()}</h1>
-                <p className="text-muted-foreground text-sm">{renderSubtitle()}</p>
+                <p className="text-muted-foreground text-sm hidden xs:block">{renderSubtitle()}</p>
              </div>
           </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-            {currentView === 'validation' && !showDashboard && emails.length > 0 && (
-              <>
-                <Button variant="ghost" size="sm" onClick={handleClear} disabled={isProcessing}>
-                  Clear
-                </Button>
-                <Button size="sm" onClick={handleStartValidation} disabled={isProcessing} className="gap-2">
-                  Start ({emails.length})
-                </Button>
-              </>
+          <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+            {status !== 'idle' && (
+              <div className="flex items-center gap-2 bg-muted/50 rounded-full px-3 py-1 border shadow-sm mr-2 transition-all duration-300">
+                <span className="hidden md:inline text-[10px] font-bold uppercase text-muted-foreground tracking-tighter">Status</span>
+                {getStatusBadge()}
+              </div>
             )}
+
             {currentView === 'validation' && showDashboard && status === 'idle' && (
               <>
                 <Button variant="outline" size="sm" onClick={handleExport} className="gap-2">
                   Export
                 </Button>
-                <Button variant="outline" size="sm" onClick={handleClear}>
+                <Button variant="outline" size="sm" onClick={handleClear} className="font-bold">
                   New
                 </Button>
               </>
@@ -204,28 +222,20 @@ function App() {
         <div className="flex-1 p-4 sm:p-6 md:p-8">
            {currentView === 'validation' && (
              !showDashboard ? (
-                <div className="max-w-4xl mx-auto space-y-8">
-                  <EmailInput onEmailsLoaded={handleEmailsLoaded} />
-                  {emails.length > 0 && (
-                    <div className="bg-card border rounded-lg p-6">
-                      <h3 className="text-sm font-medium mb-4 uppercase tracking-wider text-muted-foreground">
-                        Loaded Emails ({emails.length})
-                      </h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                         {emails.slice(0, 20).map((email, i) => (
-                           <div key={i} className="text-sm font-mono truncate bg-muted/30 px-2 py-1 rounded">
-                             {email}
-                           </div>
-                         ))}
-                         {emails.length > 20 && (
-                           <div className="text-sm text-muted-foreground italic px-2 py-1">
-                             ... and {emails.length - 20} more
-                           </div>
-                         )}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                emails.length === 0 ? (
+                  <div className="max-w-4xl mx-auto space-y-8">
+                    <EmailInput onEmailsLoaded={handleEmailsLoaded} />
+                  </div>
+                ) : (
+                  <ValidationConfig 
+                    emails={emails}
+                    validationMode={validationMode}
+                    onModeChange={onChangeValidationMode}
+                    onStart={handleStartValidation}
+                    onClear={handleClear}
+                    onBack={() => setEmails([])}
+                  />
+                )
              ) : (
                 <div className="max-w-6xl mx-auto space-y-8">
                   <ValidationDashboard

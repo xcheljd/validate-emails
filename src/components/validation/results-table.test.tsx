@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import { ResultsTable } from './results-table';
 import { describe, it, expect, vi, beforeAll } from 'vitest';
 import { ValidationResult } from '@/hooks/use-email-validation';

@@ -4,19 +4,30 @@ export interface Proxy {
   ip: string;
   port: number;
   protocol: 'http' | 'socks5';
-  anonymity: string;
-  uptime: number;
-  connectTime: number;
-  downloadSpeed: number;
+  username?: string;
+  password?: string;
 }
 
 export interface ProxyPoolStatus {
-  totalProxies: number;
-  activeProxy: string | null;
-  successRate: number;
-  averageSpeed: number;
+  total_proxies: number;
+  active_proxy: string | null;
+  success_rate: number;
+  average_speed: number;
 }
 
+export async function addProxies(proxies: string[]): Promise<string> {
+  return invoke('add_proxies', { proxies });
+}
+
+export async function getProxyPoolStatus(): Promise<ProxyPoolStatus> {
+  return invoke('get_proxy_status');
+}
+
+export async function clearProxyPool(): Promise<string> {
+  return invoke('clear_proxies');
+}
+
+// Kept for backward compatibility if needed, but mostly unused now
 export async function fetchProxies(config: {
   maxPerProxy: number;
   rotationStrategy: string;
@@ -31,14 +42,6 @@ export async function fetchProxies(config: {
   });
 }
 
-export async function getProxyPoolStatus(): Promise<ProxyPoolStatus> {
-  return invoke('get_proxy_status');
-}
-
 export async function refreshProxyPool(): Promise<string> {
   return invoke('refresh_proxies');
-}
-
-export async function clearProxyPool(): Promise<string> {
-  return invoke('clear_proxies');
 }

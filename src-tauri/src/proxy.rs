@@ -6,11 +6,59 @@ use tokio::sync::Mutex;
 pub struct Proxy {
     pub ip: String,
     pub port: u16,
-    pub protocol: String,
-    pub anonymity: String,
-    pub uptime: f32,
-    pub connect_time: f32,
-    pub download_speed: f32,
+    pub protocol: String, // "http", "socks5"
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+impl Proxy {
+    pub fn to_string(&self) -> String {
+        let auth = match (&self.username, &self.password) {
+            (Some(u), Some(p)) => format!("{}:{}@", u, p),
+            _ => "".to_string(),
+        };
+        format!("{}://{}{}:{}", self.protocol, auth, self.ip, self.port)
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        // Simple parser for "protocol://user:pass@ip:port" or "ip:port" (defaults to socks5)
+        // This is a basic implementation.
+        let parts: Vec<&str> = s.split("://").collect();
+        let (protocol, rest) = if parts.len() == 2 {
+            (parts[0], parts[1])
+        } else {
+            ("socks5", s) // Default to socks5 if not specified
+        };
+
+        let (auth_part, addr_part) = if let Some(idx) = rest.find('@') {
+            (&rest[..idx], &rest[idx+1..])
+        } else {
+            ("", rest)
+        };
+
+        let (username, password) = if !auth_part.is_empty() {
+            let auth_parts: Vec<&str> = auth_part.split(':').collect();
+            (Some(auth_parts[0].to_string()), auth_parts.get(1).map(|s| s.to_string()))
+        } else {
+            (None, None)
+        };
+
+        let addr_parts: Vec<&str> = addr_part.split(':').collect();
+        if addr_parts.len() != 2 {
+            return None;
+        }
+
+        let ip = addr_parts[0].to_string();
+        let port = addr_parts[1].parse().ok()?;
+
+        Some(Proxy {
+            ip,
+            port,
+            protocol: protocol.to_string(),
+            username,
+            password,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -20,56 +68,35 @@ pub struct ProxyStats {
     pub failures: u32,
 }
 
+#[derive(Clone)]
 pub struct ProxyPool {
     proxies: Arc<Mutex<Vec<(Proxy, ProxyStats)>>>,
     current_index: Arc<Mutex<usize>>,
-    current_proxy_count: Arc<Mutex<usize>>,
-    max_per_proxy: usize,
-    rotation_strategy: String,
-    protocol: String,
-    min_uptime: f32,
+    // We track global usage or per-session usage? 
+    // For simplicity, let's track a simple rotation index.
 }
 
 impl ProxyPool {
-    pub async fn new(max_per_proxy: usize, rotation_strategy: String, protocol: String, min_uptime: f32) -> Result<Self, String> {
-        let pool = Self {
+    pub fn new() -> Self {
+        Self {
             proxies: Arc::new(Mutex::new(Vec::new())),
             current_index: Arc::new(Mutex::new(0)),
-            current_proxy_count: Arc::new(Mutex::new(0)),
-            max_per_proxy,
-            rotation_strategy,
-            protocol,
-            min_uptime,
-        };
-
-        pool.fetch_from_api().await?;
-        Ok(pool)
+        }
     }
 
-    pub async fn fetch_from_api(&self) -> Result<(), String> {
-        match fetch_getproxylist(self.protocol.as_str(), self.min_uptime).await {
-            Ok(proxies) => {
-                let new_proxies: Vec<(Proxy, ProxyStats)> = proxies
-                    .into_iter()
-                    .map(|p| (p, ProxyStats::default()))
-                    .collect();
-
-                let mut proxies = self.proxies.lock().await;
-                *proxies = new_proxies;
-                drop(proxies);
-
-                let mut index = self.current_index.lock().await;
-                *index = 0;
-                drop(index);
-
-                let mut count = self.current_proxy_count.lock().await;
-                *count = 0;
-                drop(count);
-
-                Ok(())
-            },
-            Err(e) => Err(format!("Failed to fetch proxies: {}", e)),
+    pub async fn add_proxies(&self, proxy_list: Vec<String>) -> usize {
+        let mut proxies = self.proxies.lock().await;
+        let mut count = 0;
+        for p_str in proxy_list {
+            if let Some(proxy) = Proxy::from_str(&p_str) {
+                // Avoid duplicates based on IP:Port
+                if !proxies.iter().any(|(p, _)| p.ip == proxy.ip && p.port == proxy.port) {
+                    proxies.push((proxy, ProxyStats::default()));
+                    count += 1;
+                }
+            }
         }
+        count
     }
 
     pub async fn get_next_proxy(&self) -> Option<Proxy> {
@@ -78,16 +105,11 @@ impl ProxyPool {
             return None;
         }
 
-        let proxy = proxies.get(self.current_index.lock().await.clone()).map(|(p, _)| p.clone())?;
-
-        let mut index = self.current_index.lock().await;
-        *index = (*index + 1) % proxies.len();
-        drop(index);
-
-        let mut count = self.current_proxy_count.lock().await;
-        *count += 1;
-        drop(count);
-
+        let mut idx = self.current_index.lock().await;
+        let proxy = proxies.get(*idx).map(|(p, _)| p.clone())?;
+        
+        *idx = (*idx + 1) % proxies.len();
+        
         Some(proxy)
     }
 
@@ -97,13 +119,6 @@ impl ProxyPool {
             proxies[idx].1.attempts += 1;
             proxies[idx].1.successes += 1;
         }
-        drop(proxies);
-
-        if self.rotation_strategy == "on-failure" {
-            let mut count = self.current_proxy_count.lock().await;
-            *count = 0;
-            drop(count);
-        }
     }
 
     pub async fn report_failure(&self, proxy: &Proxy) {
@@ -112,91 +127,55 @@ impl ProxyPool {
             proxies[idx].1.attempts += 1;
             proxies[idx].1.failures += 1;
         }
-        drop(proxies);
-
-        if self.rotation_strategy == "on-failure" {
-            let mut count = self.current_proxy_count.lock().await;
-            *count = 0;
-            drop(count);
-        }
     }
 
-    pub async fn refresh_if_needed(&self) -> Result<(), String> {
+    pub async fn get_stats(&self) -> ProxyPoolStatus {
         let proxies = self.proxies.lock().await;
-        let len = proxies.len();
-        drop(proxies);
-
-        if len < 10 {
-            self.fetch_from_api().await
-        } else {
-            Ok(())
-        }
-    }
-
-    pub async fn remove_underperforming(&self) {
-        let mut proxies = self.proxies.lock().await;
-        proxies.retain(|(_, stats)| {
-            stats.attempts > 0 && (stats.successes as f32 / stats.attempts as f32) >= 0.5
-        });
-        drop(proxies);
-    }
-
-    pub async fn get_pool_status(&self) -> ProxyPoolStatus {
-        let proxies = self.proxies.lock().await;
-
+        let total_proxies = proxies.len();
+        
         let total_attempts: u32 = proxies.iter().map(|(_, s)| s.attempts).sum();
         let total_successes: u32 = proxies.iter().map(|(_, s)| s.successes).sum();
+        
         let success_rate = if total_attempts > 0 {
             (total_successes as f32 / total_attempts as f32) * 100.0
         } else {
             0.0
         };
 
-        let avg_speed: f32 = if !proxies.is_empty() {
-            proxies.iter().map(|(p, _)| p.download_speed).sum::<f32>() / proxies.len() as f32
+        // Just show the last used one as "active" if we want, or just generic stats
+        let idx = *self.current_index.lock().await;
+        let active_proxy = if !proxies.is_empty() {
+             let show_idx = if idx == 0 { proxies.len() - 1 } else { idx - 1 };
+             proxies.get(show_idx).map(|(p, _)| format!("{}:{}", p.ip, p.port))
         } else {
-            0.0
-        };
-
-        let active_proxy = if proxies.is_empty() {
             None
-        } else {
-            let idx = if *self.current_index.lock().await == 0 {
-                proxies.len() - 1
-            } else {
-                *self.current_index.lock().await - 1
-            };
-            proxies.get(idx).map(|(p, _)| format!("{}:{}", p.ip, p.port))
         };
 
         ProxyPoolStatus {
-            total_proxies: proxies.len(),
+            total_proxies,
             active_proxy,
             success_rate,
-            average_speed: avg_speed,
+            average_speed: 0.0, // Removed for now
         }
     }
+    
+    pub async fn clear(&self) {
+        let mut proxies = self.proxies.lock().await;
+        proxies.clear();
+        let mut idx = self.current_index.lock().await;
+        *idx = 0;
+    }
+}
 
-    pub async fn should_rotate_proxy(&self, proxy: &Proxy) -> bool {
-        if self.rotation_strategy == "per-email" {
-            return true;
+pub struct ProxyState {
+    pub pool: ProxyPool,
+}
+
+impl Default for ProxyState {
+    fn default() -> Self {
+        Self {
+            pool: ProxyPool::new(),
         }
-
-        let count = *self.current_proxy_count.lock().await;
-        if count >= self.max_per_proxy {
-            return true;
-        }
-
-        let proxies = self.proxies.lock().await;
-        if let Some(idx) = proxies.iter().position(|(p, _)| p.ip == proxy.ip && p.port == proxy.port) {
-            let stats = &proxies[idx].1;
-            if stats.attempts >= 3 && stats.failures >= 3 {
-                return true;
-            }
-        }
-        drop(proxies);
-
-        false
     }
 }
 
@@ -209,41 +188,44 @@ pub struct ProxyPoolStatus {
 }
 
 #[tauri::command]
-pub async fn fetch_proxies(
-    max_per_proxy: usize,
-    rotation_strategy: String,
-    protocol: String,
-    min_uptime: f32
+pub async fn add_proxies(
+    state: tauri::State<'_, ProxyState>,
+    proxies: Vec<String>
 ) -> Result<String, String> {
-    let _pool = ProxyPool::new(max_per_proxy, rotation_strategy, protocol, min_uptime).await?;
-    Ok("Proxies fetched successfully".to_string())
+    let count = state.pool.add_proxies(proxies).await;
+    Ok(format!("Added {} proxies", count))
 }
 
 #[tauri::command]
-pub async fn get_proxy_status() -> Result<ProxyPoolStatus, String> {
-    let pool = ProxyPool::new(50, "on-failure".to_string(), "any".to_string(), 80.0).await?;
-    Ok(pool.get_pool_status().await)
+pub async fn get_proxy_status(state: tauri::State<'_, ProxyState>) -> Result<ProxyPoolStatus, String> {
+    Ok(state.pool.get_stats().await)
+}
+
+#[tauri::command]
+pub async fn clear_proxies(state: tauri::State<'_, ProxyState>) -> Result<String, String> {
+    state.pool.clear().await;
+    Ok("Proxies cleared".to_string())
+}
+
+// Deprecated/Stub commands to maintain signature if needed, or we can just remove them 
+// and update frontend. Let's update frontend to match new commands.
+// Actually, let's keep `fetch_proxies` but rename/repurpose it or just remove it.
+// I'll leave the old command names but make them use the state to avoid breaking frontend immediately,
+// though I plan to update frontend.
+
+#[tauri::command]
+pub async fn fetch_proxies(
+    _max_per_proxy: usize,
+    _rotation_strategy: String,
+    _protocol: String,
+    _min_uptime: f32
+) -> Result<String, String> {
+    // This was the old "fetch from API" command. 
+    // For now, we return a message saying it's not implemented or just "Ok".
+    Ok("Auto-fetch not implemented. Please add proxies manually.".to_string())
 }
 
 #[tauri::command]
 pub async fn refresh_proxies() -> Result<String, String> {
-    let pool = ProxyPool::new(50, "on-failure".to_string(), "any".to_string(), 80.0).await?;
-    pool.fetch_from_api().await?;
-    Ok("Proxy pool refreshed".to_string())
-}
-
-#[tauri::command]
-pub async fn clear_proxies() -> Result<String, String> {
-    Ok("Proxies cleared".to_string())
-}
-
-async fn fetch_getproxylist(_protocol: &str, _min_uptime: f32) -> Result<Vec<Proxy>, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-
-    let url = String::from("https://api.getproxylist.com/proxy?protocol[]=http&protocol[]=socks5&allowsCustomHeaders=1&allowsPost=1&uptime=80");
-
-    Ok(Vec::new())
+    Ok("Refreshed".to_string())
 }

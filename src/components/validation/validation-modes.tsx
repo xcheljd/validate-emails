@@ -1,5 +1,5 @@
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import { Zap, ShieldCheck, ShieldAlert, Check } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 type ValidationMode = 'quick' | 'standard' | 'thorough';
 
@@ -9,31 +9,75 @@ interface ValidationModesProps {
 }
 
 const modeConfig = {
-  quick: { timeout: 10, label: 'Quick (10s)', checks: ['Syntax', 'MX'] },
-  standard: { timeout: 30, label: 'Standard (30s)', checks: ['Syntax', 'MX', 'SMTP Connect'] },
-  thorough: { timeout: 60, label: 'Thorough (60s)', checks: ['All Checks', 'Deliverability'] },
+  quick: { 
+    label: 'Quick', 
+    duration: '10s', 
+    icon: <Zap className="h-5 w-5" />,
+    description: 'Basic syntax & MX checks',
+    color: 'text-yellow-500',
+    bgColor: 'bg-yellow-500/10'
+  },
+  standard: { 
+    label: 'Standard', 
+    duration: '30s', 
+    icon: <ShieldCheck className="h-5 w-5" />,
+    description: 'Full SMTP handshake',
+    color: 'text-blue-500',
+    bgColor: 'bg-blue-500/10'
+  },
+  thorough: { 
+    label: 'Thorough', 
+    duration: '60s', 
+    icon: <ShieldAlert className="h-5 w-5" />,
+    description: 'Deep deliverability verify',
+    color: 'text-purple-500',
+    bgColor: 'bg-purple-500/10'
+  },
 };
 
 export function ValidationModeSelector({ selected, onChange }: ValidationModesProps) {
   return (
-    <Card className="p-4">
-      <div className="flex gap-2">
-        {Object.entries(modeConfig).map(([key, config]) => (
-          <Button
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full">
+      {Object.entries(modeConfig).map(([key, config]) => {
+        const isSelected = selected === key;
+        return (
+          <button
             key={key}
-            variant={selected === key ? 'default' : 'outline'}
             onClick={() => onChange(key as ValidationMode)}
-            className="flex-1 h-auto py-4"
+            className={cn(
+              "relative flex flex-col items-start p-4 rounded-xl border-2 transition-all duration-200 text-left group",
+              isSelected 
+                ? "border-primary bg-primary/5 shadow-md" 
+                : "border-muted bg-card hover:border-primary/30 hover:shadow-sm"
+            )}
           >
-            <div className="text-left">
-              <div className="font-semibold text-sm">{config.label}</div>
-              <div className="text-xs text-muted-foreground mt-1">
-                {config.checks.join(' • ')}
-              </div>
+            <div className={cn(
+              "p-2 rounded-lg mb-3 transition-colors",
+              isSelected ? "bg-primary text-primary-foreground" : cn(config.bgColor, config.color)
+            )}>
+              {config.icon}
             </div>
-          </Button>
-        ))}
-      </div>
-    </Card>
+            
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-sm">{config.label}</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted font-medium text-muted-foreground">
+                  {config.duration}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground leading-tight">
+                {config.description}
+              </p>
+            </div>
+
+            {isSelected && (
+              <div className="absolute top-3 right-3 h-5 w-5 bg-primary rounded-full flex items-center justify-center animate-in zoom-in duration-300">
+                <Check className="h-3 w-3 text-primary-foreground" />
+              </div>
+            )}
+          </button>
+        );
+      })}
+    </div>
   );
 }

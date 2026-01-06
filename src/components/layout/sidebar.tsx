@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Upload, History, Settings, BarChart2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Upload, History, Settings, BarChart2, PanelLeftClose, PanelLeftOpen, MailCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ModeToggle } from "@/components/mode-toggle";
 import { useSettings } from "@/hooks/use-settings";
@@ -29,11 +29,26 @@ export function Sidebar({ className, currentView, onNavigate, ...props }: Sideba
       {...props}
     >
       <div className={cn("p-4 flex items-center h-16", isCollapsed ? "justify-center" : "justify-between")}>
-        {!isCollapsed && <h2 className="text-lg font-bold tracking-tight truncate">Email Validator</h2>}
-        <Button variant="ghost" size="icon" onClick={toggleCollapse} title={isCollapsed ? "Expand" : "Collapse"}>
-           {isCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-        </Button>
+        <div className="flex items-center gap-2 overflow-hidden">
+          <div className="flex-shrink-0 bg-primary/10 p-1.5 rounded-lg">
+            <MailCheck className="h-5 w-5 text-primary" />
+          </div>
+          {!isCollapsed && <h2 className="text-lg font-bold tracking-tight truncate">ReachCheck</h2>}
+        </div>
+        {!isCollapsed && (
+          <Button variant="ghost" size="icon" onClick={toggleCollapse} title="Collapse Sidebar">
+            <PanelLeftClose className="h-4 w-4" />
+          </Button>
+        )}
       </div>
+      
+      {isCollapsed && (
+        <div className="flex justify-center py-2 border-b">
+          <Button variant="ghost" size="icon" onClick={toggleCollapse} title="Expand Sidebar">
+            <PanelLeftOpen className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
       
       <div className="px-2 space-y-4 flex-1 py-4 flex flex-col">
         <div className="space-y-1">
@@ -86,7 +101,7 @@ function NavButton({ active, onClick, icon, label, collapsed }: { active: boolea
     <Button
       variant={active ? "secondary" : "ghost"}
       className={cn(
-        "w-full justify-start gap-2 overflow-hidden", 
+        "w-full justify-start gap-2 overflow-hidden transition-all duration-200", 
         collapsed ? "justify-center px-0" : "px-4"
       )}
       onClick={onClick}

@@ -2,25 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::fs;
 use chrono::{Utc, Duration};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValidationResult {
-    pub email: String,
-    pub result: String,
-    pub reason: String,
-    pub logs: Vec<String>,
-    pub domain: String,
-    pub validation_duration_ms: u64,
-    pub proxy_used: Option<String>,
-    pub mx_record_count: usize,
-    pub is_disposable: bool,
-    pub is_role_account: bool,
-    pub is_catch_all: bool,
-    pub error_type: Option<String>,
-    pub timestamp: String,
-    pub validation_mode: String,
-    pub risk_score: u8,
-}
+use crate::validation::ValidationResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSettings {
@@ -86,9 +68,14 @@ impl SessionManager {
         Ok(id)
     }
 
-    pub fn update_session_progress(&self, id: &str, results: Vec<ValidationResult>, current_index: usize) -> Result<(), String> {
+    pub fn update_session_progress(&self, id: &str, results: Vec<ValidationResult>, current_index: usize, backup: bool) -> Result<(), String> {
         let mut session = self.load_session(id)?;
         
+        if backup {
+            let backup_filename = format!("{}-{}.json", id, Utc::now().format("%Y%m%d-%H%M%S"));
+            self.backup_session(id, &backup_filename)?;
+        }
+
         session.results = results;
         session.current_index = current_index;
         
@@ -101,48 +88,48 @@ impl SessionManager {
         
         self.save_session(&id, &session)
     }
-    
-    Ok(())
-}
 
-pub fn backup_session(&self, id: &str, backup_path: &str) -> Result<(), String> {
-    let session = self.load_session(id)?;
-    
-    let backup_dir = self.sessions_dir.join("backups");
-    if !backup_dir.exists() {
-        fs::create_dir_all(&backup_dir)
-            .map_err(|e| format!("Failed to create backup directory: {}", e))?;
-    }
-    
-    let backup_path = backup_dir.join(&backup_path);
-    let json = serde_json::to_string(&session)
-        .map_err(|e| format!("Failed to serialize session for backup: {}", e))?;
-    
-    fs::write(&backup_path, json)
-        .map_err(|e| format!("Failed to write backup: {}", e))
-}
-        let mut session = self.load_session(id)?;
-        session.results = results;
-        session.current_index = current_index;
-
-        if current_index >= session.total {
-            session.status = "completed".to_string();
-            session.completed_at = Some(Utc::now().to_rfc3339());
-        } else if current_index > 0 {
-            session.status = "in-progress".to_string();
+    pub fn backup_session(&self, id: &str, backup_path: &str) -> Result<(), String> {
+        let session = self.load_session(id)?;
+        
+        let backup_dir = self.sessions_dir.join("backups");
+        if !backup_dir.exists() {
+            fs::create_dir_all(&backup_dir)
+                .map_err(|e| format!("Failed to create backup directory: {}", e))?;
         }
-
-        self.save_session(id, &session)?;
-        Ok(())
+        
+        let backup_path = backup_dir.join(&backup_path);
+        let json = serde_json::to_string(&session)
+            .map_err(|e| format!("Failed to serialize session for backup: {}", e))?;
+        
+        fs::write(&backup_path, json)
+            .map_err(|e| format!("Failed to write backup: {}", e))
     }
 
     pub fn load_session(&self, id: &str) -> Result<ValidationSession, String> {
         let session_path = self.get_session_path(id);
+        
         let content = fs::read_to_string(&session_path)
-            .map_err(|e| format!("Failed to read session file: {}", e))?;
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    format!("Session not found: {}. The session may have been deleted or moved.", id)
+                } else {
+                    format!("Failed to read session file: {}", e)
+                }
+            })?;
 
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse session file: {}", e))
+        let session: ValidationSession = serde_json::from_str(&content)
+            .map_err(|e| {
+                if e.is_data() {
+                    format!("Corrupted session data: {}. The session file contains invalid data. You may need to restore from a backup if available.", e)
+                } else if e.is_syntax() {
+                    format!("Invalid session file format: {}. The session file appears to be corrupted or was modified externally.", e)
+                } else {
+                    format!("Failed to parse session file: {}", e)
+                }
+            })?;
+
+        Ok(session)
     }
 
     pub fn list_sessions(&self) -> Result<Vec<ValidationSession>, String> {
@@ -237,9 +224,9 @@ pub async fn create_validation_session(emails: Vec<String>, settings: SessionSet
 }
 
 #[tauri::command]
-pub async fn update_validation_session(id: String, results: Vec<ValidationResult>, current_index: usize) -> Result<(), String> {
+pub async fn update_validation_session(id: String, results: Vec<ValidationResult>, current_index: usize, backup: bool) -> Result<(), String> {
     let manager = SessionManager::new()?;
-    manager.update_session_progress(&id, results, current_index)
+    manager.update_session_progress(&id, results, current_index, backup)
 }
 
 #[tauri::command]

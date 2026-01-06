@@ -1,90 +1,83 @@
-import { useState } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { useState, useEffect } from 'react';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { addProxies, getProxyPoolStatus, clearProxyPool, ProxyPoolStatus } from '@/lib/proxy-manager';
+import { toast } from 'sonner';
 
 export function ProxySettings() {
-  const [proxyEnabled, setProxyEnabled] = useState(false);
-  const [rotationStrategy, setRotationStrategy] = useState('on-failure');
-  const [maxPerProxy, setMaxPerProxy] = useState(50);
-  const [protocol, setProtocol] = useState('any');
-  const [poolStatus, setPoolStatus] = useState({
-    totalProxies: 0,
-    activeProxy: null,
-    successRate: 0,
-    averageSpeed: 0,
+  const [proxyList, setProxyList] = useState('');
+  const [poolStatus, setPoolStatus] = useState<ProxyPoolStatus>({
+    total_proxies: 0,
+    active_proxy: null,
+    success_rate: 0,
+    average_speed: 0,
   });
 
-  const handleRefresh = () => {
-    setPoolStatus(prev => ({ ...prev, totalProxies: prev.totalProxies + 1 }));
+  const fetchStatus = async () => {
+    try {
+      const status = await getProxyPoolStatus();
+      setPoolStatus(status);
+    } catch (error) {
+      console.error('Failed to fetch proxy status:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleAddProxies = async () => {
+    if (!proxyList.trim()) return;
+    
+    const lines = proxyList.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    try {
+      const result = await addProxies(lines);
+      toast.success(result);
+      setProxyList('');
+      fetchStatus();
+    } catch (error) {
+      toast.error(`Failed to add proxies: ${error}`);
+    }
+  };
+
+  const handleClearProxies = async () => {
+    try {
+      await clearProxyPool();
+      toast.success('Proxy pool cleared');
+      fetchStatus();
+    } catch (error) {
+      toast.error(`Failed to clear proxies: ${error}`);
+    }
   };
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Proxy Settings</CardTitle>
+          <CardTitle>Proxy Management</CardTitle>
+          <CardDescription>
+            Add SOCKS5 proxies to rotate IP addresses during validation.
+            Format: <code>socks5://user:pass@host:port</code> or <code>host:port</code>
+          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6">
-          <div>
-            <label className="flex items-center justify-between mb-2">
-              <span className="font-medium">Enable Proxy</span>
-              <input
-                type="checkbox"
-                checked={proxyEnabled}
-                onChange={(e) => setProxyEnabled(e.target.checked)}
-              />
-            </label>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2">Rotation Strategy</label>
-            <select
-              value={rotationStrategy}
-              onChange={(e) => setRotationStrategy(e.target.value)}
-              className="mt-2 w-full p-2 border rounded-md"
-            >
-              <option value="on-failure">Rotate on Failure (Recommended)</option>
-              <option value="per-email">Rotate Per Email</option>
-              <option value="per-batch">Rotate Per Batch</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2">Max Emails Per Proxy</label>
-            <input
-              type="number"
-              min="10"
-              max="100"
-              value={maxPerProxy}
-              onChange={(e) => setMaxPerProxy(Number(e.target.value))}
-              className="mt-2 w-full p-2 border rounded-md"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2">Protocol Preference</label>
-            <select
-              value={protocol}
-              onChange={(e) => setProtocol(e.target.value)}
-              className="mt-2 w-full p-2 border rounded-md"
-            >
-              <option value="any">Any</option>
-              <option value="http">HTTP</option>
-              <option value="socks5">SOCKS5</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium">Actions</span>
-              <button
-                type="button"
-                onClick={handleRefresh}
-                className="px-4 py-2 border rounded-md hover:bg-accent"
-              >
-                Refresh Proxy List
-              </button>
-            </label>
+        <CardContent className="space-y-4">
+          <Textarea 
+            placeholder="socks5://user:pass@127.0.0.1:1080&#10;192.168.1.1:8080"
+            rows={5}
+            value={proxyList}
+            onChange={(e) => setProxyList(e.target.value)}
+            className="font-mono text-sm"
+          />
+          <div className="flex gap-2">
+            <Button onClick={handleAddProxies} disabled={!proxyList.trim()}>
+              Add Proxies
+            </Button>
+            <Button variant="outline" onClick={handleClearProxies} disabled={poolStatus.total_proxies === 0}>
+              Clear Pool
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -96,20 +89,21 @@ export function ProxySettings() {
         <CardContent>
           <div className="grid grid-cols-3 gap-4 text-center">
             <div>
-              <div className="text-lg font-semibold">{poolStatus.totalProxies}</div>
+              <div className="text-2xl font-bold">{poolStatus.total_proxies}</div>
               <div className="text-sm text-muted-foreground">Total Proxies</div>
             </div>
             <div>
-              <div className="text-lg font-semibold">{poolStatus.activeProxy || 'None'}</div>
+              <div className="text-lg font-medium truncate px-2" title={poolStatus.active_proxy || 'None'}>
+                {poolStatus.active_proxy || 'None'}
+              </div>
               <div className="text-sm text-muted-foreground">Active Proxy</div>
             </div>
-            <div className="flex items-center justify-center">
-              <Badge className="bg-blue-500 text-white">{poolStatus.successRate}% Success Rate</Badge>
+            <div className="flex flex-col items-center justify-center">
+              <div className="text-2xl font-bold">
+                {poolStatus.success_rate.toFixed(1)}%
+              </div>
+              <div className="text-sm text-muted-foreground">Success Rate</div>
             </div>
-          </div>
-          <div className="text-center mt-4">
-            <div className="text-3xl font-semibold">{Math.round(poolStatus.averageSpeed)}</div>
-            <div className="text-sm text-muted-foreground">KB/s</div>
           </div>
         </CardContent>
       </Card>
