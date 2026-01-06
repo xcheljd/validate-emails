@@ -12,7 +12,7 @@ The goal is to create a user-friendly application that takes multiple emails as 
     * Support for uploading CSV and Excel files.
     * A smart text input field that allows users to copy and paste lists of emails, automatically differentiating them by commas or new lines.
     * **Validation Configuration Step:** A dedicated review screen to select validation depth and preview the list before processing.
-* **Interactive Dashboard:** A visual interface providing validation statistics through charts and graphs to give a high-level overview of the list's health.
+* **Interactive Dashboard:** A visual interface providing validation statistics through interactive charts and a clickable status grid that filters detailed results in real-time.
 * **Space-Efficient Workspace:** A collapsible sidebar and standardized layout designed to maximize screen real estate for detailed result analysis.
 * **Validation Controls:** Ability to pause, resume, or stop the validation process at any time, with options to save or discard partial results.
 * **Detailed Per-Email Inspection:** An interface to dive into specific findings for each email, including SMTP logs and technical details.
