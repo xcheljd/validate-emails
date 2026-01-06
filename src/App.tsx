@@ -165,8 +165,8 @@ function App() {
   return (
     <ErrorBoundary>
       <MainLayout currentView={currentView} onNavigate={handleNavigate}>
-        <header className="border-b px-8 py-6 flex items-center justify-between bg-card">
-          <div className="flex items-center gap-4">
+        <header className="border-b px-4 sm:px-6 md:px-8 py-4 md:py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-card">
+          <div className="flex items-center gap-2 sm:gap-4">
              {currentView === 'session-details' && (
                <Button variant="ghost" size="icon" onClick={() => setCurrentView('history')}>
                  <ChevronLeft className="h-4 w-4" />
@@ -178,31 +178,31 @@ function App() {
              </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
             {currentView === 'validation' && !showDashboard && emails.length > 0 && (
               <>
-                <Button variant="ghost" onClick={handleClear} disabled={isProcessing}>
-                  Clear List
+                <Button variant="ghost" size="sm" onClick={handleClear} disabled={isProcessing}>
+                  Clear
                 </Button>
-                <Button onClick={handleStartValidation} disabled={isProcessing} className="gap-2">
-                  Start Validation ({emails.length})
+                <Button size="sm" onClick={handleStartValidation} disabled={isProcessing} className="gap-2">
+                  Start ({emails.length})
                 </Button>
               </>
             )}
             {currentView === 'validation' && showDashboard && status === 'idle' && (
               <>
-                <Button variant="outline" onClick={handleExport} className="gap-2">
-                  Export CSV
+                <Button variant="outline" size="sm" onClick={handleExport} className="gap-2">
+                  Export
                 </Button>
-                <Button variant="outline" onClick={handleClear}>
-                  New Validation
+                <Button variant="outline" size="sm" onClick={handleClear}>
+                  New
                 </Button>
               </>
             )}
           </div>
         </header>
 
-        <ScrollArea className="flex-1 p-8">
+        <ScrollArea className="flex-1 p-4 sm:p-6 md:p-8">
            {currentView === 'validation' && (
              !showDashboard ? (
                 <div className="max-w-4xl mx-auto space-y-8">

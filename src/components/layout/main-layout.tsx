@@ -10,7 +10,7 @@ export function MainLayout({ children, currentView, onNavigate }: MainLayoutProp
   return (
     <div className="flex min-h-screen bg-background">
       <Sidebar currentView={currentView} onNavigate={onNavigate} />
-      <main className="flex-1 flex flex-col h-screen overflow-hidden">
+      <main className="flex-1 flex flex-col h-screen overflow-x-auto overflow-y-hidden">
         {children}
       </main>
     </div>
