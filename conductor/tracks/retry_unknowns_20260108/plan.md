@@ -9,16 +9,16 @@ This plan outlines the steps to implement a targeted retry mechanism for "Unknow
 - [x] Task: Implement `validate_email_with_exclusion` and update `ProxyPool` if necessary to support "get next proxy excluding X". 0d8acd9
 - [x] Task: Conductor - User Manual Verification 'Backend Infrastructure' (Protocol in workflow.md)
 
-## Phase 2: Frontend State & Logic Enhancements
+## Phase 2: Frontend State & Logic Enhancements [checkpoint: 281a8d3]
 
 ### Task 1: Update `useEmailValidation` Hook for Partial Retries
-- [ ] Task: TDD - Create `src/hooks/use-email-validation.retry.test.ts` to test a new `retryUnknowns` function.
-- [ ] Task: Implement `retryUnknowns` in `use-email-validation.ts`. This function should:
+- [x] Task: TDD - Create `src/hooks/use-email-validation.retry.test.ts` to test a new `retryUnknowns` function. 8cb52dd
+- [x] Task: Implement `retryUnknowns` in `use-email-validation.ts`. This function should:
     - Identify emails with "Unknown" status.
     - Preserve their previous proxy info.
     - Call the backend to re-validate them.
-    - Update the results state without duplicating entries.
-- [ ] Task: Conductor - User Manual Verification 'Hook Logic' (Protocol in workflow.md)
+    - Update the results state without duplicating entries. 8cb52dd
+- [x] Task: Conductor - User Manual Verification 'Hook Logic' (Protocol in workflow.md)
 
 ## Phase 3: UI Implementation
 
