@@ -37,8 +37,11 @@ impl Proxy {
         };
 
         let (username, password) = if !auth_part.is_empty() {
-            let auth_parts: Vec<&str> = auth_part.split(':').collect();
-            (Some(auth_parts[0].to_string()), auth_parts.get(1).map(|s| s.to_string()))
+            if let Some((u, p)) = auth_part.split_once(':') {
+                (Some(u.to_string()), Some(p.to_string()))
+            } else {
+                (Some(auth_part.to_string()), None)
+            }
         } else {
             (None, None)
         };
@@ -249,4 +252,52 @@ pub async fn fetch_proxies(
 #[tauri::command]
 pub async fn refresh_proxies() -> Result<String, String> {
     Ok("Refreshed".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_proxy_from_str_basic() {
+        let p = Proxy::from_str("1.2.3.4:8080").unwrap();
+        assert_eq!(p.ip, "1.2.3.4");
+        assert_eq!(p.port, 8080);
+        assert_eq!(p.protocol, "socks5");
+        assert_eq!(p.username, None);
+        assert_eq!(p.password, None);
+    }
+
+    #[test]
+    fn test_proxy_from_str_with_protocol() {
+        let p = Proxy::from_str("http://1.2.3.4:8080").unwrap();
+        assert_eq!(p.protocol, "http");
+        assert_eq!(p.ip, "1.2.3.4");
+        assert_eq!(p.port, 8080);
+    }
+
+    #[test]
+    fn test_proxy_from_str_with_auth() {
+        let p = Proxy::from_str("socks5://user:pass@1.2.3.4:1080").unwrap();
+        assert_eq!(p.protocol, "socks5");
+        assert_eq!(p.username, Some("user".to_string()));
+        assert_eq!(p.password, Some("pass".to_string()));
+        assert_eq!(p.ip, "1.2.3.4");
+        assert_eq!(p.port, 1080);
+    }
+
+    #[test]
+    fn test_proxy_from_str_invalid() {
+        assert!(Proxy::from_str("not_an_ip").is_none());
+        assert!(Proxy::from_str("1.2.3.4").is_none()); // Missing port
+        assert!(Proxy::from_str("1.2.3.4:abc").is_none()); // Invalid port
+    }
+
+    #[test]
+    fn test_proxy_from_str_complex_auth() {
+        // Many proxy providers use colons in passwords
+        let p = Proxy::from_str("http://user:pass:with:colons@1.2.3.4:8080").unwrap();
+        assert_eq!(p.username, Some("user".to_string()));
+        assert_eq!(p.password, Some("pass:with:colons".to_string()));
+    }
 }
