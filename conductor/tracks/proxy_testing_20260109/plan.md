@@ -14,8 +14,8 @@ This plan outlines the steps to implement a comprehensive testing suite for the 
 - [x] Task: Conductor - User Manual Verification 'Unit Testing (Rust Logic)' (Protocol in workflow.md) 47d0158
 
 ## Phase 3: State & Statistics Testing
-- [~] Task: Implement concurrent tests for `ProxyPool` to verify safety under parallel access.
-- [ ] Task: Write tests for `ProxyPool::report_success` and `report_failure` to verify statistics updates.
+- [x] Task: Implement concurrent tests for `ProxyPool` to verify safety under parallel access. 2616601
+- [~] Task: Write tests for `ProxyPool::report_success` and `report_failure` to verify statistics updates.
 - [ ] Task: Write tests for `ProxyPool::get_stats` to ensure correct `ProxyPoolStatus` calculation.
 - [ ] Task: Conductor - User Manual Verification 'State & Statistics Testing' (Protocol in workflow.md)
 
