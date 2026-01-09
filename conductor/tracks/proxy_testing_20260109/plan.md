@@ -7,14 +7,14 @@ This plan outlines the steps to implement a comprehensive testing suite for the 
 - [x] Task: Create a `tests` directory in `src-tauri/src` or ensure existing test structure is ready for integration tests. 622bf21
 - [x] Task: Conductor - User Manual Verification 'Environment Setup & Tooling' (Protocol in workflow.md) 1d9b801
 
-## Phase 2: Unit Testing (Rust Logic)
+## Phase 2: Unit Testing (Rust Logic) [checkpoint: 47d0158]
 - [x] Task: Write unit tests for `Proxy::from_str` covering edge cases (invalid IPs, missing protocols, various auth formats). e617cdc
 - [x] Task: Write unit tests for `ProxyPool::add_proxies` ensuring deduplication and basic addition logic. 6718162
 - [x] Task: Write unit tests for `ProxyPool::get_next_proxy` and `get_proxy_excluding` verifying round-robin and exclusion logic. f308e5d
-- [ ] Task: Conductor - User Manual Verification 'Unit Testing (Rust Logic)' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Unit Testing (Rust Logic)' (Protocol in workflow.md) 47d0158
 
 ## Phase 3: State & Statistics Testing
-- [ ] Task: Implement concurrent tests for `ProxyPool` to verify safety under parallel access.
+- [~] Task: Implement concurrent tests for `ProxyPool` to verify safety under parallel access.
 - [ ] Task: Write tests for `ProxyPool::report_success` and `report_failure` to verify statistics updates.
 - [ ] Task: Write tests for `ProxyPool::get_stats` to ensure correct `ProxyPoolStatus` calculation.
 - [ ] Task: Conductor - User Manual Verification 'State & Statistics Testing' (Protocol in workflow.md)
