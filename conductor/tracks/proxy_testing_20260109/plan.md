@@ -2,10 +2,10 @@
 
 This plan outlines the steps to implement a comprehensive testing suite for the proxy management system, covering unit, state, statistics, integration, and network simulation.
 
-## Phase 1: Environment Setup & Tooling
-- [x] Task: Add `mockall` and `wiremock` to `src-tauri/Cargo.toml` as dev-dependencies. da93bcc
-- [ ] Task: Create a `tests` directory in `src-tauri/src` or ensure existing test structure is ready for integration tests.
-- [ ] Task: Conductor - User Manual Verification 'Environment Setup & Tooling' (Protocol in workflow.md)
+## Phase 1: Environment Setup & Tooling [checkpoint: 1d9b801]
+- [x] Task: Add `mockall` and `wiremock` to `src-tauri/Cargo.toml` as dev-dependencies. 622bf21
+- [x] Task: Create a `tests` directory in `src-tauri/src` or ensure existing test structure is ready for integration tests. 622bf21
+- [x] Task: Conductor - User Manual Verification 'Environment Setup & Tooling' (Protocol in workflow.md) 1d9b801
 
 ## Phase 2: Unit Testing (Rust Logic)
 - [ ] Task: Write unit tests for `Proxy::from_str` covering edge cases (invalid IPs, missing protocols, various auth formats).
