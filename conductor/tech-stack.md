@@ -15,5 +15,10 @@
 * **Rust:** For the core application logic and the high-performance email validation engine.
 * **Rust Email Validation Library:** We will leverage a high-performance Rust library for SMTP validation, MX record lookup, and syntax checking.
 
+## Testing Tools
+* **Mockall:** For trait-based mocking in Rust unit tests.
+* **Wiremock:** For HTTP mock server simulation in integration tests.
+* **Tauri Test Feature:** For unit and integration testing of Tauri commands.
+
 ## Data Persistence (Optional/TBD)
 * **Local Storage / SQLite:** For persisting previous validation sessions or user settings if needed.
