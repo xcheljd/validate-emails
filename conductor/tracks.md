@@ -6,7 +6,7 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-## [~] Track: Thoroughly test the proxy implementation
+## [x] Track: Thoroughly test the proxy implementation
 *Link: [./conductor/tracks/proxy_testing_20260109/](./conductor/tracks/proxy_testing_20260109/)*
 
 ## Completed Tracks
