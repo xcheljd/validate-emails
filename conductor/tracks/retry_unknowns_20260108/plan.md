@@ -20,13 +20,13 @@ This plan outlines the steps to implement a targeted retry mechanism for "Unknow
     - Update the results state without duplicating entries. 8cb52dd
 - [x] Task: Conductor - User Manual Verification 'Hook Logic' (Protocol in workflow.md)
 
-## Phase 3: UI Implementation
+## Phase 3: UI Implementation [checkpoint: 186cb17]
 
 ### Task 1: Create Retry Prompt Modal
-- [ ] Task: TDD - Create `src/components/validation/retry-modal.test.tsx` to verify modal appearance and callback triggers.
-- [ ] Task: Implement `RetryModal` component using `shadcn/ui` Dialog.
-- [ ] Task: Integrate `RetryModal` into `ValidationDashboard`. Ensure it triggers when `progress === total` AND `unknownCount > 0`.
-- [ ] Task: Conductor - User Manual Verification 'UI Implementation' (Protocol in workflow.md)
+- [x] Task: TDD - Create `src/components/validation/retry-modal.test.tsx` to verify modal appearance and callback triggers. 5fa516c
+- [x] Task: Implement `RetryModal` component using `shadcn/ui` Dialog. 5fa516c
+- [x] Task: Integrate `RetryModal` into `ValidationDashboard`. Ensure it triggers when `progress === total` AND `unknownCount > 0`. 5fa516c
+- [x] Task: Conductor - User Manual Verification 'UI Implementation' (Protocol in workflow.md)
 
 ## Phase 4: Final Verification & Integration
 
