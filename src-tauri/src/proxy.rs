@@ -216,18 +216,30 @@ pub async fn add_proxies(
     state: tauri::State<'_, ProxyState>,
     proxies: Vec<String>
 ) -> Result<String, String> {
-    let count = state.pool.add_proxies(proxies).await;
+    add_proxies_inner(&state.pool, proxies).await
+}
+
+pub async fn add_proxies_inner(pool: &ProxyPool, proxies: Vec<String>) -> Result<String, String> {
+    let count = pool.add_proxies(proxies).await;
     Ok(format!("Added {} proxies", count))
 }
 
 #[tauri::command]
 pub async fn get_proxy_status(state: tauri::State<'_, ProxyState>) -> Result<ProxyPoolStatus, String> {
-    Ok(state.pool.get_stats().await)
+    get_proxy_status_inner(&state.pool).await
+}
+
+pub async fn get_proxy_status_inner(pool: &ProxyPool) -> Result<ProxyPoolStatus, String> {
+    Ok(pool.get_stats().await)
 }
 
 #[tauri::command]
 pub async fn clear_proxies(state: tauri::State<'_, ProxyState>) -> Result<String, String> {
-    state.pool.clear().await;
+    clear_proxies_inner(&state.pool).await
+}
+
+pub async fn clear_proxies_inner(pool: &ProxyPool) -> Result<String, String> {
+    pool.clear().await;
     Ok("Proxies cleared".to_string())
 }
 
