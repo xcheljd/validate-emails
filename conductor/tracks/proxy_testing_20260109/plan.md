@@ -13,14 +13,14 @@ This plan outlines the steps to implement a comprehensive testing suite for the 
 - [x] Task: Write unit tests for `ProxyPool::get_next_proxy` and `get_proxy_excluding` verifying round-robin and exclusion logic. f308e5d
 - [x] Task: Conductor - User Manual Verification 'Unit Testing (Rust Logic)' (Protocol in workflow.md) 47d0158
 
-## Phase 3: State & Statistics Testing
+## Phase 3: State & Statistics Testing [checkpoint: 503a7b0]
 - [x] Task: Implement concurrent tests for `ProxyPool` to verify safety under parallel access. 2616601
 - [x] Task: Write tests for `ProxyPool::report_success` and `report_failure` to verify statistics updates. 16974e9
 - [x] Task: Write tests for `ProxyPool::get_stats` to ensure correct `ProxyPoolStatus` calculation. 16974e9
-- [ ] Task: Conductor - User Manual Verification 'State & Statistics Testing' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'State & Statistics Testing' (Protocol in workflow.md) 503a7b0
 
 ## Phase 4: Integration & Network Simulation
-- [ ] Task: Use `wiremock` to create a mock proxy server and verify `ProxyPool` can "communicate" through it (simulated).
+- [~] Task: Use `wiremock` to create a mock proxy server and verify `ProxyPool` can "communicate" through it (simulated).
 - [ ] Task: Implement integration tests for Tauri commands (`add_proxies`, `get_proxy_status`, `clear_proxies`) using `tauri::test::mock_builder`.
 - [ ] Task: Create a separate utility/test for "Live Connectivity Checks" (ignored by default in CI).
 - [ ] Task: Conductor - User Manual Verification 'Integration & Network Simulation' (Protocol in workflow.md)
