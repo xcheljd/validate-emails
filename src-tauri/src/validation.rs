@@ -319,8 +319,6 @@ mod tests {
     async fn test_validate_email_syntax_error() {
         let result = validate_email("invalid-email".to_string(), None, "standard".to_string()).await;
         assert!(result.result == "Invalid" || result.result == "Unknown");
-        // Duration might be 0 on fast execution
-        assert!(result.validation_duration >= 0);
     }
 
     #[tokio::test]

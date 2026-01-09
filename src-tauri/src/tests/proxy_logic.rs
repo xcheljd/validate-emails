@@ -1,4 +1,4 @@
-use crate::proxy::Proxy;
+use crate::proxy::{Proxy, ProxyPool};
 
 #[test]
 fn test_proxy_from_str_empty() {
@@ -35,4 +35,34 @@ fn test_proxy_from_str_missing_port() {
 fn test_proxy_from_str_invalid_port() {
     assert!(Proxy::from_str("127.0.0.1:99999").is_none()); // u16 overflow
     assert!(Proxy::from_str("127.0.0.1:abc").is_none());
+}
+
+#[tokio::test]
+async fn test_proxy_pool_add_deduplication() {
+    let pool = ProxyPool::new();
+    let proxies = vec![
+        "127.0.0.1:8080".to_string(),
+        "127.0.0.1:8080".to_string(), // Duplicate
+        "127.0.0.1:8081".to_string(),
+    ];
+    
+    let added = pool.add_proxies(proxies).await;
+    assert_eq!(added, 2);
+    
+    let stats = pool.get_stats().await;
+    assert_eq!(stats.total_proxies, 2);
+}
+
+#[tokio::test]
+async fn test_proxy_pool_add_invalid() {
+    let pool = ProxyPool::new();
+    let proxies = vec![
+        "invalid".to_string(),
+        "127.0.0.1:8080".to_string(),
+    ];
+    let added = pool.add_proxies(proxies).await;
+    assert_eq!(added, 1);
+    
+    let stats = pool.get_stats().await;
+    assert_eq!(stats.total_proxies, 1);
 }
