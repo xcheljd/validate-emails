@@ -8,8 +8,8 @@ This plan outlines the steps to implement a comprehensive testing suite for the 
 - [x] Task: Conductor - User Manual Verification 'Environment Setup & Tooling' (Protocol in workflow.md) 1d9b801
 
 ## Phase 2: Unit Testing (Rust Logic)
-- [ ] Task: Write unit tests for `Proxy::from_str` covering edge cases (invalid IPs, missing protocols, various auth formats).
-- [ ] Task: Write unit tests for `ProxyPool::add_proxies` ensuring deduplication and basic addition logic.
+- [x] Task: Write unit tests for `Proxy::from_str` covering edge cases (invalid IPs, missing protocols, various auth formats). e617cdc
+- [~] Task: Write unit tests for `ProxyPool::add_proxies` ensuring deduplication and basic addition logic.
 - [ ] Task: Write unit tests for `ProxyPool::get_next_proxy` and `get_proxy_excluding` verifying round-robin and exclusion logic.
 - [ ] Task: Conductor - User Manual Verification 'Unit Testing (Rust Logic)' (Protocol in workflow.md)
 
