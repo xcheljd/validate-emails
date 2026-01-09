@@ -20,7 +20,7 @@ This plan outlines the steps to implement a comprehensive testing suite for the 
 - [x] Task: Conductor - User Manual Verification 'State & Statistics Testing' (Protocol in workflow.md) 503a7b0
 
 ## Phase 4: Integration & Network Simulation
-- [~] Task: Use `wiremock` to create a mock proxy server and verify `ProxyPool` can "communicate" through it (simulated).
-- [ ] Task: Implement integration tests for Tauri commands (`add_proxies`, `get_proxy_status`, `clear_proxies`) using `tauri::test::mock_builder`.
-- [ ] Task: Create a separate utility/test for "Live Connectivity Checks" (ignored by default in CI).
-- [ ] Task: Conductor - User Manual Verification 'Integration & Network Simulation' (Protocol in workflow.md)
+- [x] Task: Use `wiremock` to create a mock proxy server and verify `ProxyPool` can "communicate" through it (simulated). ec32c63
+- [x] Task: Implement integration tests for Tauri commands (`add_proxies`, `get_proxy_status`, `clear_proxies`) using `tauri::test::mock_builder`. ec32c63
+- [x] Task: Create a separate utility/test for "Live Connectivity Checks" (ignored by default in CI). 4519f2a
+- [~] Task: Conductor - User Manual Verification 'Integration & Network Simulation' (Protocol in workflow.md)

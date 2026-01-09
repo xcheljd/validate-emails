@@ -36,3 +36,21 @@ async fn test_proxy_pool_integration_with_mock_reporting() {
     assert_eq!(stats.success_rate, 100.0);
     assert_eq!(stats.total_proxies, 1);
 }
+
+#[tokio::test]
+#[ignore] // Ignored by default as it requires actual network/proxy access
+async fn test_live_proxy_connectivity_check() {
+    let pool = ProxyPool::new();
+    // In a real scenario, the user would provide a live proxy here.
+    pool.add_proxies(vec!["some-live-proxy:port".to_string()]).await;
+    let proxy = pool.get_next_proxy().await.unwrap();
+    
+    // Example logic for checking connectivity
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all(proxy.to_string()).unwrap())
+        .build()
+        .unwrap();
+        
+    let res = client.get("https://google.com").send().await;
+    assert!(res.is_ok());
+}
