@@ -3,6 +3,10 @@ mod validation;
 mod proxy;
 mod settings;
 mod session;
+
+#[cfg(test)]
+mod tests;
+
 use tauri::Emitter;
 
 #[tauri::command]

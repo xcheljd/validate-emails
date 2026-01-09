@@ -1,0 +1,5 @@
+Task: Add mockall and wiremock to src-tauri/Cargo.toml as dev-dependencies
+Changes:
+- Added `mockall` and `wiremock` to `src-tauri/Cargo.toml` as dev-dependencies.
+- Updated `src-tauri/Cargo.lock`.
+Why: To enable robust unit and integration testing with mocking capabilities for the proxy system.

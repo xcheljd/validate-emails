@@ -1,0 +1,8 @@
+{
+  "track_id": "proxy_testing_20260109",
+  "type": "chore",
+  "status": "new",
+  "created_at": "2026-01-09T10:00:00Z",
+  "updated_at": "2026-01-09T10:00:00Z",
+  "description": "Thoroughly test the proxy implementation (unit, state, stats, integration, and network simulation)."
+}

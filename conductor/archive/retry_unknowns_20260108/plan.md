@@ -28,8 +28,8 @@ This plan outlines the steps to implement a targeted retry mechanism for "Unknow
 - [x] Task: Integrate `RetryModal` into `ValidationDashboard`. Ensure it triggers when `progress === total` AND `unknownCount > 0`. 5fa516c
 - [x] Task: Conductor - User Manual Verification 'UI Implementation' (Protocol in workflow.md)
 
-## Phase 4: Final Verification & Integration
+## Phase 4: Final Verification & Integration [checkpoint: 177d63a]
 
 ### Task 1: End-to-End Flow Verification
-- [ ] Task: Manually verify the full flow: Start validation -> Get Unknowns -> Completion Modal -> Click Retry -> Successful Re-validation with new proxies.
-- [ ] Task: Conductor - User Manual Verification 'Final Integration' (Protocol in workflow.md)
+- [x] Task: Manually verify the full flow: Start validation -> Get Unknowns -> Completion Modal -> Click Retry -> Successful Re-validation with new proxies. acbe828
+- [x] Task: Conductor - User Manual Verification 'Final Integration' (Protocol in workflow.md)

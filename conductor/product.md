@@ -15,6 +15,7 @@ The goal is to create a user-friendly application that takes multiple emails as 
 * **Interactive Dashboard:** A visual interface providing validation statistics through interactive charts and a clickable status grid that filters detailed results in real-time.
 * **Space-Efficient Workspace:** A collapsible sidebar and standardized layout designed to maximize screen real estate for detailed result analysis.
 * **Validation Controls:** Ability to pause, resume, or stop the validation process at any time, with options to save or discard partial results.
+* **Targeted Retries:** Automated detection of "Unknown" results upon completion, prompting the user to re-validate failed entries using optimized proxy rotation.
 * **Detailed Per-Email Inspection:** An interface to dive into specific findings for each email, including SMTP logs and technical details.
 * **Export Capabilities:** Ability to export validation results to CSV/Excel format.
 

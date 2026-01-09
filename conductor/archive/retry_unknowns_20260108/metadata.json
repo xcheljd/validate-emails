@@ -1,0 +1,8 @@
+{
+  "track_id": "retry_unknowns_20260108",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-01-08T14:30:00Z",
+  "updated_at": "2026-01-08T14:30:00Z",
+  "description": "Automatic re-validation of 'Unknown' emails at the end of a session using different proxies."
+}
