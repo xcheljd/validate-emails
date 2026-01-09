@@ -134,3 +134,52 @@ async fn test_proxy_pool_exclusion_skips_index() {
     let p3 = pool.get_next_proxy().await.unwrap();
     assert_eq!(p3.ip, "1.1.1.1");
 }
+
+#[tokio::test]
+async fn test_proxy_pool_stats_reporting() {
+    let pool = ProxyPool::new();
+    pool.add_proxies(vec!["1.1.1.1:80".to_string()]).await;
+    let p = pool.get_next_proxy().await.unwrap();
+
+    pool.report_success(&p).await;
+    pool.report_success(&p).await;
+    pool.report_failure(&p).await;
+
+    let stats = pool.get_stats().await;
+    assert_eq!(stats.success_rate, 2.0 / 3.0 * 100.0);
+}
+
+#[tokio::test]
+async fn test_proxy_pool_stats_calculation_multi() {
+    let pool = ProxyPool::new();
+    pool.add_proxies(vec!["1.1.1.1:80".to_string(), "2.2.2.2:80".to_string()]).await;
+    
+    let p1 = pool.get_next_proxy().await.unwrap();
+    let p2 = pool.get_next_proxy().await.unwrap();
+
+    // 10 attempts for p1, all success
+    for _ in 0..10 {
+        pool.report_success(&p1).await;
+    }
+
+    // 10 attempts for p2, all failure
+    for _ in 0..10 {
+        pool.report_failure(&p2).await;
+    }
+
+    let stats = pool.get_stats().await;
+    assert_eq!(stats.total_proxies, 2);
+    assert_eq!(stats.success_rate, 50.0);
+    assert_eq!(stats.active_proxy, Some("2.2.2.2:80".to_string()));
+}
+
+#[tokio::test]
+async fn test_proxy_pool_clear() {
+    let pool = ProxyPool::new();
+    pool.add_proxies(vec!["1.1.1.1:80".to_string()]).await;
+    
+    pool.clear().await;
+    let stats = pool.get_stats().await;
+    assert_eq!(stats.total_proxies, 0);
+    assert_eq!(stats.active_proxy, None);
+}
