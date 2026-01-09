@@ -125,6 +125,7 @@ export function useEmailValidation() {
     setProgress(0);
     setTotal(emails.length);
     setStatus('processing');
+    statusRef.current = 'processing';
     setValidationMode(mode);
     pendingEmailsRef.current = [...emails];
     currentConcurrencyRef.current = concurrency;
@@ -133,12 +134,14 @@ export function useEmailValidation() {
 
   const pauseValidation = useCallback(async () => {
     setStatus('paused');
+    statusRef.current = 'paused';
     await invoke("pause_validation");
   }, []);
 
   const resumeValidation = useCallback(async () => {
     if (statusRef.current !== 'paused') return;
     setStatus('processing');
+    statusRef.current = 'processing';
     await invoke("resume_validation");
     mutation.mutate({
       emails: pendingEmailsRef.current,
@@ -166,6 +169,7 @@ export function useEmailValidation() {
       pendingEmailsRef.current = emailsToRevalidate;
 
       setStatus('processing');
+      statusRef.current = 'processing';
       mutation.mutate({
         emails: emailsToRevalidate,
         concurrency: 5,
@@ -177,10 +181,56 @@ export function useEmailValidation() {
     }
   }, [mutation]);
 
+  const revalidationMutation = useMutation({
+    mutationFn: async ({ items, concurrency, mode }: { items: { email: string, excluded_proxy?: string }[], concurrency: number, mode: 'quick' | 'standard' | 'thorough' }) => {
+      return invoke<ValidationResult[]>("revalidate_emails_bulk", {
+        items,
+        concurrency,
+        mode
+      });
+    },
+    onSuccess: () => {
+      if (statusRef.current === 'processing') {
+        setStatus('idle');
+      }
+    },
+    onError: (error) => {
+      if (statusRef.current === 'processing') {
+        console.error("Revalidation failed:", error);
+        notifyError(error instanceof Error ? error.message : "Revalidation failed");
+        setStatus('idle');
+      }
+    }
+  });
+
+  const retryUnknowns = useCallback(() => {
+    const unknownResults = results.filter(r => r.result === 'Unknown');
+    if (unknownResults.length === 0) return;
+
+    const items = unknownResults.map(r => ({
+      email: r.email,
+      excluded_proxy: r.proxyUsed
+    }));
+
+    setResults(prev => prev.filter(r => r.result !== 'Unknown'));
+    setProgress(prev => Math.max(0, prev - unknownResults.length));
+    
+    setStatus('processing');
+    statusRef.current = 'processing';
+    
+    revalidationMutation.mutate({
+        items,
+        concurrency: currentConcurrencyRef.current,
+        mode: validationMode
+    });
+  }, [results, validationMode, revalidationMutation]);
+
   const stopValidation = useCallback(async () => {
     setStatus('stopping');
+    statusRef.current = 'stopping';
     await invoke("stop_validation");
     setStatus('idle');
+    statusRef.current = 'idle';
     // We don't reset progress/total here because the user might want to see the partial results
   }, []);
 
@@ -195,6 +245,7 @@ export function useEmailValidation() {
     resumeValidation,
     resumeSession,
     stopValidation,
+    retryUnknowns,
     setResults,
     validationMode,
     onChangeValidationMode: setValidationMode,
