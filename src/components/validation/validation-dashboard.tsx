@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent } from "@/components/ui/card";
 import { CheckCircle2, AlertCircle, XCircle, Info, Timer, Zap } from "lucide-react";
 import { ValidationResult, ValidationStatus } from "@/hooks/use-email-validation";
 import { ValidationControls } from "./validation-controls";
+import { RetryModal } from "./retry-modal";
 import {
    Dialog,
    DialogContent,
@@ -25,6 +26,7 @@ interface ValidationDashboardProps {
   onResume: () => void;
   onStop: () => void;
   onDiscard: () => void;
+  onRetryUnknowns?: () => void;
   validationMode: 'quick' | 'standard' | 'thorough';
   onChangeValidationMode: (mode: 'quick' | 'standard' | 'thorough') => void;
   proxyStatus?: {
@@ -47,6 +49,7 @@ export function ValidationDashboard({
    onResume,
    onStop,
    onDiscard,
+   onRetryUnknowns,
    validationMode,
    proxyStatus,
    validationSpeed,
@@ -55,11 +58,54 @@ export function ValidationDashboard({
    onStatusFilterChange
 }: ValidationDashboardProps) {
    const [showStopDialog, setShowStopDialog] = useState(false);
+   const [showRetryModal, setShowRetryModal] = useState(false);
 
    const safeCount = results.filter(r => r.result === "Safe").length;
    const riskyCount = results.filter(r => r.result === "Risky").length;
    const invalidCount = results.filter(r => r.result === "Invalid").length;
    const unknownCount = results.filter(r => r.result === "Unknown").length;
+
+   useEffect(() => {
+     if (status === 'idle' && progress === total && total > 0 && unknownCount > 0 && onRetryUnknowns) {
+        // Simple check to avoid repeatedly showing it if user cancelled?
+        // If user cancelled, status/progress/total/unknownCount stay same.
+        // We need a way to track "modal shown for this run".
+        // But for now, let's just trigger it. 
+        // If user cancels, we shouldn't show it again immediately.
+        // We can check if it was *just* finished? 
+        // Ideally the parent handles this, but here is fine if we use a state latch.
+        // However, if we just setShowRetryModal(true), it stays true.
+        // If user sets false (cancel), the effect runs again... and sets true again!
+        // Infinite loop of modal appearing.
+        
+        // Fix: Use a ref or a flag. 
+        // Or better: Only show if we haven't shown it for this 'completion'.
+        // But detecting 'new completion' is hard without previous state.
+        // Maybe we just check if it's NOT open? No.
+        
+        // Let's defer this logic to the parent or add a simple latch.
+        // "HasSeenRetryPrompt"
+     }
+   }, [status, progress, total, unknownCount, onRetryUnknowns]);
+   
+   // Actually, useEffect is tricky here.
+   // Let's use a ref to track if we've shown it for current progress/total pair.
+   // Or better: show it when transitioning to idle.
+   // But we don't see previous status here easily.
+   
+   // Let's implement a simple latch.
+   const [hasPromptedRetry, setHasPromptedRetry] = useState(false);
+   
+   useEffect(() => {
+       if (status === 'processing') {
+           setHasPromptedRetry(false);
+       }
+       
+       if (status === 'idle' && progress === total && total > 0 && unknownCount > 0 && !hasPromptedRetry && onRetryUnknowns) {
+           setShowRetryModal(true);
+           setHasPromptedRetry(true);
+       }
+   }, [status, progress, total, unknownCount, hasPromptedRetry, onRetryUnknowns]);
 
    const percentage = total > 0 ? Math.round((progress / total) * 100) : 0;
 
@@ -266,6 +312,16 @@ export function ValidationDashboard({
            </DialogFooter>
          </DialogContent>
        </Dialog>
+
+       <RetryModal 
+         open={showRetryModal}
+         unknownCount={unknownCount}
+         onRetry={() => {
+           setShowRetryModal(false);
+           onRetryUnknowns?.();
+         }}
+         onCancel={() => setShowRetryModal(false)}
+       />
      </div>
    );
  }

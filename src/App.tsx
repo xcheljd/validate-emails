@@ -45,7 +45,8 @@ function App() {
     onChangeValidationMode,
     validationSpeed,
     estimatedTimeRemaining,
-    resumeSession
+    resumeSession,
+    retryUnknowns
   } = useEmailValidation();
 
   const handleNavigate = (view: SidebarView) => {
@@ -251,6 +252,7 @@ function App() {
                     onResume={resumeValidation}
                     onStop={stopValidation}
                     onDiscard={handleDiscard}
+                    onRetryUnknowns={retryUnknowns}
                     validationMode={validationMode}
                     onChangeValidationMode={onChangeValidationMode}
                     validationSpeed={validationSpeed}
