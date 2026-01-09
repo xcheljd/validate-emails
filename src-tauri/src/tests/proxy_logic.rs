@@ -66,3 +66,71 @@ async fn test_proxy_pool_add_invalid() {
     let stats = pool.get_stats().await;
     assert_eq!(stats.total_proxies, 1);
 }
+
+#[tokio::test]
+async fn test_proxy_pool_round_robin() {
+    let pool = ProxyPool::new();
+    let proxies = vec![
+        "1.1.1.1:80".to_string(),
+        "2.2.2.2:80".to_string(),
+        "3.3.3.3:80".to_string(),
+    ];
+    pool.add_proxies(proxies).await;
+
+    let p1 = pool.get_next_proxy().await.unwrap();
+    assert_eq!(p1.ip, "1.1.1.1");
+
+    let p2 = pool.get_next_proxy().await.unwrap();
+    assert_eq!(p2.ip, "2.2.2.2");
+
+    let p3 = pool.get_next_proxy().await.unwrap();
+    assert_eq!(p3.ip, "3.3.3.3");
+
+    let p4 = pool.get_next_proxy().await.unwrap();
+    assert_eq!(p4.ip, "1.1.1.1");
+}
+
+#[tokio::test]
+async fn test_proxy_pool_exclusion_basic() {
+    let pool = ProxyPool::new();
+    pool.add_proxies(vec!["1.1.1.1:80".to_string(), "2.2.2.2:80".to_string()]).await;
+
+    // Default order is 1 -> 2.
+    // If we exclude 1, we should get 2.
+    let p = pool.get_proxy_excluding(Some("1.1.1.1:80")).await.unwrap();
+    assert_eq!(p.ip, "2.2.2.2");
+}
+
+#[tokio::test]
+async fn test_proxy_pool_exclusion_fallback() {
+    let pool = ProxyPool::new();
+    pool.add_proxies(vec!["1.1.1.1:80".to_string()]).await;
+
+    // Only 1 proxy. Exclude it. Current logic says return it anyway as fallback.
+    let p = pool.get_proxy_excluding(Some("1.1.1.1:80")).await.unwrap();
+    assert_eq!(p.ip, "1.1.1.1");
+}
+
+#[tokio::test]
+async fn test_proxy_pool_exclusion_skips_index() {
+    let pool = ProxyPool::new();
+    pool.add_proxies(vec![
+        "1.1.1.1:80".to_string(), 
+        "2.2.2.2:80".to_string(), 
+        "3.3.3.3:80".to_string()
+    ]).await;
+
+    // Order: 1, 2, 3
+    // Call 1: Get 1.
+    let p1 = pool.get_next_proxy().await.unwrap();
+    assert_eq!(p1.ip, "1.1.1.1");
+
+    // Call 2: Exclude 2. Should get 3.
+    // Normal next would be 2.
+    let p2 = pool.get_proxy_excluding(Some("2.2.2.2:80")).await.unwrap();
+    assert_eq!(p2.ip, "3.3.3.3");
+
+    // Call 3: Should wrap to 1.
+    let p3 = pool.get_next_proxy().await.unwrap();
+    assert_eq!(p3.ip, "1.1.1.1");
+}
