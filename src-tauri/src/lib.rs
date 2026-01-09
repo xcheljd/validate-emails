@@ -41,6 +41,29 @@ async fn validate_emails_bulk(
 }
 
 #[tauri::command]
+async fn revalidate_emails_bulk(
+    window: tauri::Window,
+    state: tauri::State<'_, validation::ValidationState>,
+    proxy_state: tauri::State<'_, proxy::ProxyState>,
+    items: Vec<validation::RevalidationRequest>,
+    concurrency: usize,
+    mode: String,
+) -> Result<Vec<validation::ValidationResult>, String> {
+    let results = validation::revalidate_emails_bulk_core(
+        items,
+        concurrency,
+        state.get_token(),
+        proxy_state.pool.clone(),
+        mode,
+        move |res| {
+            let _ = window.emit("validation-progress", res);
+        },
+    ).await;
+
+    Ok(results)
+}
+
+#[tauri::command]
 fn pause_validation(state: tauri::State<'_, validation::ValidationState>) {
     state.cancel();
 }
@@ -66,6 +89,7 @@ pub fn run() {
             greet,
             validate_email,
             validate_emails_bulk,
+            revalidate_emails_bulk,
             pause_validation,
             resume_validation,
             stop_validation,

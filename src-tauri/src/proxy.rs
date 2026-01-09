@@ -100,16 +100,37 @@ impl ProxyPool {
     }
 
     pub async fn get_next_proxy(&self) -> Option<Proxy> {
+        self.get_proxy_excluding(None).await
+    }
+
+    pub async fn get_proxy_excluding(&self, excluded_opt: Option<&str>) -> Option<Proxy> {
         let proxies = self.proxies.lock().await;
         if proxies.is_empty() {
             return None;
         }
 
         let mut idx = self.current_index.lock().await;
+        let start_idx = *idx;
+        let count = proxies.len();
+
+        // First pass: try to find a non-excluded proxy
+        for i in 0..count {
+            let curr = (start_idx + i) % count;
+            if let Some((proxy, _)) = proxies.get(curr) {
+                 let proxy_str = format!("{}:{}", proxy.ip, proxy.port);
+                 let is_excluded = excluded_opt.map_or(false, |ex| proxy_str == ex);
+
+                 if !is_excluded {
+                     *idx = (curr + 1) % count;
+                     return Some(proxy.clone());
+                 }
+            }
+        }
+
+        // If all are excluded (e.g. only 1 proxy and it matches), fallback to just taking the next one
+        // consistent with "get_next_proxy" behavior (round robin)
         let proxy = proxies.get(*idx).map(|(p, _)| p.clone())?;
-        
-        *idx = (*idx + 1) % proxies.len();
-        
+        *idx = (*idx + 1) % count;
         Some(proxy)
     }
 
