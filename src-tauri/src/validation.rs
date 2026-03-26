@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use std::sync::Mutex;
+use std::sync::Arc;
 use chrono::Utc;
 use std::time::Instant;
+use std::collections::HashMap;
 use check_if_email_exists::{check_email, CheckEmailInputBuilder, Reachable};
 use check_if_email_exists::smtp::verif_method::{
     VerifMethod,
@@ -11,22 +13,32 @@ use check_if_email_exists::smtp::verif_method::{
     YahooVerifMethod,
     HotmailB2CVerifMethod,
 };
-use crate::proxy::{Proxy, ProxyPool};
+use crate::settings::{ProxyConfig, ProxyPool};
+#[cfg(test)]
+use crate::settings::RotationMode;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidationResult {
     pub email: String,
-    pub result: String, // Safe, Risky, Invalid, Unknown
+    pub result: String,
     pub reason: String,
     pub logs: Vec<String>,
     pub domain: String,
     pub validation_duration: u64,
-    pub proxy_used: Option<String>,
     pub mx_record_count: u32,
     pub is_disposable: bool,
     pub is_role_account: bool,
     pub is_catch_all: bool,
+    pub is_deliverable: bool,
+    pub is_disabled: bool,
+    pub has_full_inbox: bool,
+    pub can_connect_smtp: bool,
+    pub is_valid_syntax: bool,
+    pub is_b2c: bool,
+    pub suggestion: Option<String>,
+    pub gravatar_url: Option<String>,
+    pub haveibeenpwned: Option<bool>,
     pub error_type: Option<String>,
     pub timestamp: String,
     pub validation_mode: String,
@@ -36,7 +48,6 @@ pub struct ValidationResult {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RevalidationRequest {
     pub email: String,
-    pub excluded_proxy: Option<String>,
 }
 
 pub struct ValidationState {
@@ -67,37 +78,52 @@ impl ValidationState {
     }
 }
 
-pub async fn validate_email(email: String, proxy: Option<Proxy>, mode: String) -> ValidationResult {
+pub async fn validate_email(email: String, mode: String, proxy: Option<ProxyConfig>) -> ValidationResult {
     let start_time = Instant::now();
-    
+
+    // Build VerifMethod with optional proxy
+    // The library requires proxies to be registered in VerifMethod.proxies HashMap
+    // and referenced by name in VerifMethodSmtpConfig.proxy
+    let (proxies, proxy_ref) = if let Some(ref p) = proxy {
+        let mut proxy_map = HashMap::new();
+        let proxy_name = "proxy1".to_string();
+        proxy_map.insert(proxy_name.clone(), p.to_check_email_proxy());
+        (proxy_map, Some(proxy_name))
+    } else {
+        (HashMap::new(), None)
+    };
+
     let verif_method = VerifMethod {
+        proxies,
         gmail: GmailVerifMethod::Smtp(VerifMethodSmtpConfig {
             from_email: "verify@example.com".to_string(),
             hello_name: "example.com".to_string(),
-            ..Default::default()
+            proxy: proxy_ref.clone(),
+            smtp_port: 25,
+            smtp_timeout: None,
+            retries: 1,
         }),
         yahoo: YahooVerifMethod::Smtp(VerifMethodSmtpConfig {
             from_email: "verify@example.com".to_string(),
             hello_name: "example.com".to_string(),
-            ..Default::default()
+            proxy: proxy_ref.clone(),
+            smtp_port: 25,
+            smtp_timeout: None,
+            retries: 1,
         }),
         hotmailb2c: HotmailB2CVerifMethod::Smtp(VerifMethodSmtpConfig {
             from_email: "verify@example.com".to_string(),
             hello_name: "example.com".to_string(),
-            ..Default::default()
+            proxy: proxy_ref,
+            smtp_port: 25,
+            smtp_timeout: None,
+            retries: 1,
         }),
         ..Default::default()
     };
 
     let mut builder = CheckEmailInputBuilder::default();
     builder.to_email(email.clone()).verif_method(verif_method);
-
-    let proxy_str = if let Some(ref p) = proxy {
-        // TODO: Configure builder with proxy when API is confirmed
-        Some(format!("{}:{}", p.ip, p.port))
-    } else {
-        None
-    };
 
     let input = builder.build();
 
@@ -109,13 +135,21 @@ pub async fn validate_email(email: String, proxy: Option<Proxy>, mode: String) -
                 result: "Unknown".to_string(),
                 reason: format!("Builder Error: {:?}", e),
                 logs: vec![],
-                domain: email.split('@').last().unwrap_or("").to_string(),
+                domain: email.split('@').next_back().unwrap_or("").to_string(),
                 validation_duration: start_time.elapsed().as_millis() as u64,
-                proxy_used: proxy_str,
                 mx_record_count: 0,
                 is_disposable: false,
                 is_role_account: false,
                 is_catch_all: false,
+                is_deliverable: false,
+                is_disabled: false,
+                has_full_inbox: false,
+                can_connect_smtp: false,
+                is_valid_syntax: false,
+                is_b2c: false,
+                suggestion: None,
+                gravatar_url: None,
+                haveibeenpwned: None,
                 error_type: Some("BuilderError".to_string()),
                 timestamp: Utc::now().to_rfc3339(),
                 validation_mode: mode,
@@ -123,7 +157,7 @@ pub async fn validate_email(email: String, proxy: Option<Proxy>, mode: String) -
             };
         }
     };
-    
+
     let result_str = match output.is_reachable {
         Reachable::Safe => "Safe",
         Reachable::Invalid => "Invalid",
@@ -139,39 +173,62 @@ pub async fn validate_email(email: String, proxy: Option<Proxy>, mode: String) -
         output.smtp
     );
 
-    let domain = email.split('@').last().unwrap_or("").to_string();
+    let domain = output.syntax.domain;
+    let is_valid_syntax = output.syntax.is_valid_syntax;
+    let suggestion = output.syntax.suggestion;
+
     let mx_record_count = match &output.mx {
         Ok(mx) => match &mx.lookup {
             Ok(lookup) => lookup.iter().count() as u32,
             Err(_) => 0,
         },
-        Err(_) => 0,
+        Err(_) => 1,
     };
 
-    let (is_disposable, is_role_account) = match &output.misc {
-        Ok(misc) => (misc.is_disposable, misc.is_role_account),
-        Err(_) => (false, false),
+    let (is_disposable, is_role_account, is_b2c, gravatar_url, haveibeenpwned) = match &output.misc {
+        Ok(misc) => (
+            misc.is_disposable,
+            misc.is_role_account,
+            misc.is_b2c,
+            misc.gravatar_url.clone(),
+            misc.haveibeenpwned,
+        ),
+        Err(_) => (false, false, false, None, None),
     };
 
-    let is_catch_all = match &output.smtp {
-        Ok(smtp) => smtp.is_catch_all,
-        Err(_) => false,
+    let (is_catch_all, is_deliverable, is_disabled, has_full_inbox, can_connect_smtp) = match &output.smtp {
+        Ok(smtp) => (
+            smtp.is_catch_all,
+            smtp.is_deliverable,
+            smtp.is_disabled,
+            smtp.has_full_inbox,
+            smtp.can_connect_smtp,
+        ),
+        Err(_) => (false, false, false, false, false),
     };
 
-    let risk_score = calculate_risk_score(result_str, is_disposable, is_catch_all);
+    let risk_score = calculate_risk_score(result_str, is_disposable, is_catch_all, is_disabled, has_full_inbox);
 
     ValidationResult {
         email,
         result: result_str.to_string(),
         reason,
-        logs: vec![], // Logs are usually collected in builder, but for now we keep it empty or extract from output
+        logs: vec![],
         domain,
         validation_duration: start_time.elapsed().as_millis() as u64,
-        proxy_used: proxy_str,
         mx_record_count,
         is_disposable,
         is_role_account,
         is_catch_all,
+        is_deliverable,
+        is_disabled,
+        has_full_inbox,
+        can_connect_smtp,
+        is_valid_syntax,
+        is_b2c,
+        suggestion,
+        gravatar_url,
+        haveibeenpwned,
         error_type: None,
         timestamp: Utc::now().to_rfc3339(),
         validation_mode: mode,
@@ -179,9 +236,9 @@ pub async fn validate_email(email: String, proxy: Option<Proxy>, mode: String) -
     }
 }
 
-fn calculate_risk_score(result: &str, is_disposable: bool, is_catch_all: bool) -> u32 {
+fn calculate_risk_score(result: &str, is_disposable: bool, is_catch_all: bool, is_disabled: bool, has_full_inbox: bool) -> u32 {
     let mut score = match result {
-        "Safe" => 0,
+        "Safe" => 1,
         "Risky" => 30,
         "Invalid" => 100,
         "Unknown" => 50,
@@ -189,16 +246,45 @@ fn calculate_risk_score(result: &str, is_disposable: bool, is_catch_all: bool) -
     };
     if is_disposable { score += 40; }
     if is_catch_all { score += 20; }
+    if is_disabled { score = 100; }
+    if has_full_inbox { score += 30; }
     if score > 100 { score = 100; }
     score
+}
+
+/// Proxy rotation state shared across validation tasks
+pub struct ProxyRotationState {
+    pub pool: ProxyPool,
+    pub rotation_index: Mutex<usize>,
+}
+
+impl ProxyRotationState {
+    pub fn new(pool: ProxyPool) -> Self {
+        Self {
+            pool,
+            rotation_index: Mutex::new(0),
+        }
+    }
+
+    /// Get the proxy to use for a specific email
+    /// Returns None if proxy is disabled or no proxies available
+    pub fn get_proxy_for_email(&self, email: &str) -> Option<ProxyConfig> {
+        if !self.pool.enabled || self.pool.proxies.is_empty() {
+            return None;
+        }
+
+        let mut index = self.rotation_index.lock().unwrap();
+        let mut pool_clone = self.pool.clone();
+        pool_clone.get_proxy_for_email(email, &mut index)
+    }
 }
 
 pub async fn validate_emails_bulk_core<F>(
     emails: Vec<String>,
     concurrency: usize,
     token: CancellationToken,
-    pool: ProxyPool,
     mode: String,
+    proxy_state: Option<Arc<ProxyRotationState>>,
     on_progress: F,
 ) -> Vec<ValidationResult>
 where
@@ -211,20 +297,10 @@ where
 
     let mut stream = stream::iter(emails)
         .map(|email| {
-            let pool = pool.clone();
             let mode = mode_clone.clone();
+            let proxy = proxy_state.as_ref().and_then(|state| state.get_proxy_for_email(&email));
             async move {
-                let proxy = pool.get_next_proxy().await;
-                let res = validate_email(email, proxy.clone(), mode).await;
-                
-                if let Some(p) = proxy {
-                    if res.result == "Unknown" {
-                        pool.report_failure(&p).await;
-                    } else {
-                        pool.report_success(&p).await;
-                    }
-                }
-                res
+                validate_email(email, mode, proxy).await
             }
         })
         .buffer_unordered(concurrency);
@@ -253,8 +329,8 @@ pub async fn revalidate_emails_bulk_core<F>(
     items: Vec<RevalidationRequest>,
     concurrency: usize,
     token: CancellationToken,
-    pool: ProxyPool,
     mode: String,
+    proxy_state: Option<Arc<ProxyRotationState>>,
     on_progress: F,
 ) -> Vec<ValidationResult>
 where
@@ -267,26 +343,10 @@ where
 
     let mut stream = stream::iter(items)
         .map(|item| {
-            let pool = pool.clone();
             let mode = mode_clone.clone();
+            let proxy = proxy_state.as_ref().and_then(|state| state.get_proxy_for_email(&item.email));
             async move {
-                let res = validate_email_with_exclusion(
-                    item.email, 
-                    item.excluded_proxy, 
-                    pool.clone(), 
-                    mode
-                ).await;
-                
-                if let Some(ref p_str) = res.proxy_used {
-                     if let Some(proxy) = Proxy::from_str(p_str) {
-                        if res.result == "Unknown" {
-                            pool.report_failure(&proxy).await;
-                        } else {
-                            pool.report_success(&proxy).await;
-                        }
-                     }
-                }
-                res
+                validate_email(item.email, mode, proxy).await
             }
         })
         .buffer_unordered(concurrency);
@@ -317,67 +377,128 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_email_syntax_error() {
-        let result = validate_email("invalid-email".to_string(), None, "standard".to_string()).await;
+        let result = validate_email("invalid-email".to_string(), "standard".to_string(), None).await;
         assert!(result.result == "Invalid" || result.result == "Unknown");
     }
 
     #[tokio::test]
     async fn test_validate_email_reachable() {
-        let result = validate_email("test@example.com".to_string(), None, "standard".to_string()).await;
+        let result = validate_email("test@example.com".to_string(), "standard".to_string(), None).await;
         assert!(!result.timestamp.is_empty());
     }
-}
-
-pub async fn validate_email_with_exclusion(
-    email: String,
-    excluded_proxy: Option<String>,
-    pool: ProxyPool,
-    mode: String,
-) -> ValidationResult {
-    let proxy = pool.get_proxy_excluding(excluded_proxy.as_deref()).await;
-    validate_email(email, proxy, mode).await
-}
-
-#[cfg(test)]
-mod revalidation_tests {
-    use super::*;
-    use crate::proxy::ProxyPool;
 
     #[tokio::test]
-    async fn test_validate_email_excludes_specific_proxy() {
-        let pool = ProxyPool::new();
-        // Add two proxies
-        pool.add_proxies(vec!["1.1.1.1:80".to_string(), "2.2.2.2:80".to_string()]).await;
+    async fn test_validate_email_with_proxy() {
+        // Test that validation works with a proxy config (won't actually connect)
+        let proxy = ProxyConfig::new("192.168.1.1".to_string(), 8080);
+        let result = validate_email("test@example.com".to_string(), "standard".to_string(), Some(proxy)).await;
+        // The validation will likely fail due to proxy not being reachable, but should not panic
+        assert!(!result.timestamp.is_empty());
+    }
 
-        // We want to exclude 1.1.1.1:80. 
-        // Since get_next_proxy rotates, we can't be 100% sure which one calls first unless we force state.
-        // But if we exclude one, we EXPECT the other.
-        
-        // Note: Real network call will fail for 1.1.1.1, but validate_email handles errors.
-        // We only care about `proxy_used` in the result.
-        
-        let excluded = "1.1.1.1:80".to_string();
-        
-        // The stub uses get_next_proxy. If it picks 1.1.1.1, the test fails.
-        // We might need to try a few times or force the pool index? 
-        // Actually, simpler: create a pool with ONLY the excluded proxy and see if it returns None (if we implement that logic)
-        // OR create pool with 2 proxies, exclude 1, ensure we get 2.
-        
-        // Let's try to ensure we get 2.2.2.2 if we exclude 1.1.1.1.
-        // However, with get_next_proxy, it depends on index.
-        
-        let res = validate_email_with_exclusion(
-            "test@example.com".to_string(),
-            Some(excluded.clone()),
-            pool.clone(),
-            "standard".to_string()
-        ).await;
+    #[tokio::test]
+    async fn test_validate_email_with_proxy_auth() {
+        // Test that validation works with authenticated proxy config
+        let proxy = ProxyConfig::with_auth(
+            "192.168.1.1".to_string(),
+            8080,
+            "user".to_string(),
+            "pass".to_string(),
+        );
+        let result = validate_email("test@example.com".to_string(), "standard".to_string(), Some(proxy)).await;
+        assert!(!result.timestamp.is_empty());
+    }
 
-        // If the implementation is "random" or "round robin", it MIGHT pick 1.1.1.1.
-        // We need the implementation to GUARANTEE it doesn't pick 1.1.1.1.
-        
-        if let Some(p) = res.proxy_used {
-             assert_ne!(p, excluded, "Should not use the excluded proxy");
-        }
+    #[test]
+    fn test_proxy_rotation_state_new() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        let state = ProxyRotationState::new(pool);
+        assert!(state.pool.enabled);
+        assert_eq!(*state.rotation_index.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_proxy_rotation_state_disabled() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = false;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        let state = ProxyRotationState::new(pool);
+        let proxy = state.get_proxy_for_email("test@example.com");
+        assert!(proxy.is_none());
+    }
+
+    #[test]
+    fn test_proxy_rotation_state_no_proxies() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+
+        let state = ProxyRotationState::new(pool);
+        let proxy = state.get_proxy_for_email("test@example.com");
+        assert!(proxy.is_none());
+    }
+
+    #[test]
+    fn test_proxy_rotation_state_automatic_rotation() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.rotation_mode = RotationMode::Automatic;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+
+        let state = ProxyRotationState::new(pool);
+
+        // First email should use first proxy
+        let proxy1 = state.get_proxy_for_email("test1@example.com").unwrap();
+        assert_eq!(proxy1.host, "192.168.1.1");
+
+        // Second email should use second proxy
+        let proxy2 = state.get_proxy_for_email("test2@example.com").unwrap();
+        assert_eq!(proxy2.host, "192.168.1.2");
+
+        // Third email should wrap back to first proxy
+        let proxy3 = state.get_proxy_for_email("test3@example.com").unwrap();
+        assert_eq!(proxy3.host, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_proxy_rotation_state_per_domain() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.rotation_mode = RotationMode::PerDomain;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.assign_domain("gmail.com".to_string(), "192.168.1.1:8080".to_string()).unwrap();
+
+        let state = ProxyRotationState::new(pool);
+
+        // Gmail should use proxy 1
+        let gmail_proxy = state.get_proxy_for_email("user@gmail.com").unwrap();
+        assert_eq!(gmail_proxy.host, "192.168.1.1");
+
+        // Other domains should fall back to first proxy
+        let other_proxy = state.get_proxy_for_email("user@other.com").unwrap();
+        assert_eq!(other_proxy.host, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_proxy_rotation_state_manual_mode() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.rotation_mode = RotationMode::Manual;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+
+        let state = ProxyRotationState::new(pool);
+
+        // Manual mode should always use first proxy
+        let proxy1 = state.get_proxy_for_email("test1@example.com").unwrap();
+        assert_eq!(proxy1.host, "192.168.1.1");
+
+        let proxy2 = state.get_proxy_for_email("test2@example.com").unwrap();
+        assert_eq!(proxy2.host, "192.168.1.1");
     }
 }

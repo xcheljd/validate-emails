@@ -21,6 +21,7 @@ pub enum RotationMode {
 /// Configuration for a single SOCKS5 proxy
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct ProxyConfig {
     /// Proxy host (IP address or hostname)
     pub host: String,
@@ -204,6 +205,7 @@ impl ProxyConfig {
 /// Pool of proxies with configuration for rotation and management
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct ProxyPool {
     /// List of configured proxies
     pub proxies: Vec<ProxyConfig>,
@@ -327,6 +329,66 @@ impl ProxyPool {
     /// Remove a domain assignment
     pub fn unassign_domain(&mut self, domain: &str) -> bool {
         self.domain_assignments.remove(&domain.to_lowercase()).is_some()
+    }
+
+    /// Get the next proxy for automatic rotation (round-robin)
+    /// Returns None if no proxies are available
+    pub fn get_next_proxy(&mut self, rotation_index: &mut usize) -> Option<ProxyConfig> {
+        if self.proxies.is_empty() {
+            return None;
+        }
+
+        let proxy = self.proxies[*rotation_index % self.proxies.len()].clone();
+        *rotation_index = (*rotation_index + 1) % self.proxies.len();
+        Some(proxy)
+    }
+
+    /// Get the proxy to use for a specific email based on rotation mode
+    /// - Manual: returns the first proxy (user should select via UI)
+    /// - Automatic: rotates through proxies using the rotation_index
+    /// - PerDomain: uses domain assignment if available, falls back to first proxy
+    ///
+    /// Returns None if no proxies are available
+    pub fn get_proxy_for_email(
+        &mut self,
+        email: &str,
+        rotation_index: &mut usize,
+    ) -> Option<ProxyConfig> {
+        if self.proxies.is_empty() {
+            return None;
+        }
+
+        match self.rotation_mode {
+            RotationMode::Manual => {
+                // In manual mode, use the first proxy
+                self.proxies.first().cloned()
+            }
+            RotationMode::Automatic => {
+                // In automatic mode, rotate through proxies
+                self.get_next_proxy(rotation_index)
+            }
+            RotationMode::PerDomain => {
+                // Extract domain from email
+                let domain = email.split('@').next_back().unwrap_or("");
+                
+                // Check for domain assignment
+                if let Some(proxy) = self.get_domain_proxy(domain) {
+                    return Some(proxy.clone());
+                }
+
+                // Fall back to first proxy for unassigned domains
+                self.proxies.first().cloned()
+            }
+        }
+    }
+
+    /// Get the proxy for a specific domain in PerDomain mode
+    /// Returns None if not in PerDomain mode, domain not assigned, or no proxies
+    pub fn get_proxy_by_domain(&self, domain: &str) -> Option<ProxyConfig> {
+        if self.rotation_mode != RotationMode::PerDomain {
+            return None;
+        }
+        self.get_domain_proxy(domain).cloned()
     }
 }
 
@@ -1061,6 +1123,186 @@ mod tests {
 
         assert_eq!(pool.len(), 1);
         assert!(pool.domain_assignments.is_empty());
+    }
+
+    // =====================
+    // Proxy Selection Tests
+    // =====================
+
+    #[test]
+    fn test_get_next_proxy_empty_pool() {
+        let mut pool = ProxyPool::new();
+        let mut index = 0;
+
+        let proxy = pool.get_next_proxy(&mut index);
+        assert!(proxy.is_none());
+    }
+
+    #[test]
+    fn test_get_next_proxy_single_proxy() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        let mut index = 0;
+
+        // Should always return the same proxy
+        let proxy1 = pool.get_next_proxy(&mut index).unwrap();
+        assert_eq!(proxy1.host, "192.168.1.1");
+
+        let proxy2 = pool.get_next_proxy(&mut index).unwrap();
+        assert_eq!(proxy2.host, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_get_next_proxy_rotation() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.3".to_string(), 8080)).unwrap();
+        let mut index = 0;
+
+        // Should rotate through proxies in order
+        let proxy1 = pool.get_next_proxy(&mut index).unwrap();
+        assert_eq!(proxy1.host, "192.168.1.1");
+
+        let proxy2 = pool.get_next_proxy(&mut index).unwrap();
+        assert_eq!(proxy2.host, "192.168.1.2");
+
+        let proxy3 = pool.get_next_proxy(&mut index).unwrap();
+        assert_eq!(proxy3.host, "192.168.1.3");
+
+        // Should wrap around
+        let proxy4 = pool.get_next_proxy(&mut index).unwrap();
+        assert_eq!(proxy4.host, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_get_proxy_for_email_manual_mode() {
+        let mut pool = ProxyPool::new();
+        pool.rotation_mode = RotationMode::Manual;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        let mut index = 0;
+
+        // Should always return first proxy in manual mode
+        let proxy1 = pool.get_proxy_for_email("test@gmail.com", &mut index).unwrap();
+        assert_eq!(proxy1.host, "192.168.1.1");
+
+        let proxy2 = pool.get_proxy_for_email("test@yahoo.com", &mut index).unwrap();
+        assert_eq!(proxy2.host, "192.168.1.1");
+
+        // Index should not change in manual mode
+        assert_eq!(index, 0);
+    }
+
+    #[test]
+    fn test_get_proxy_for_email_automatic_mode() {
+        let mut pool = ProxyPool::new();
+        pool.rotation_mode = RotationMode::Automatic;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        let mut index = 0;
+
+        // Should rotate through proxies
+        let proxy1 = pool.get_proxy_for_email("test1@example.com", &mut index).unwrap();
+        assert_eq!(proxy1.host, "192.168.1.1");
+
+        let proxy2 = pool.get_proxy_for_email("test2@example.com", &mut index).unwrap();
+        assert_eq!(proxy2.host, "192.168.1.2");
+
+        let proxy3 = pool.get_proxy_for_email("test3@example.com", &mut index).unwrap();
+        assert_eq!(proxy3.host, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_get_proxy_for_email_per_domain_mode() {
+        let mut pool = ProxyPool::new();
+        pool.rotation_mode = RotationMode::PerDomain;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.3".to_string(), 8080)).unwrap();
+        pool.assign_domain("gmail.com".to_string(), "192.168.1.1:8080".to_string()).unwrap();
+        pool.assign_domain("yahoo.com".to_string(), "192.168.1.2:8080".to_string()).unwrap();
+        let mut index = 0;
+
+        // Gmail should use proxy 1
+        let gmail_proxy = pool.get_proxy_for_email("user@gmail.com", &mut index).unwrap();
+        assert_eq!(gmail_proxy.host, "192.168.1.1");
+
+        // Yahoo should use proxy 2
+        let yahoo_proxy = pool.get_proxy_for_email("user@yahoo.com", &mut index).unwrap();
+        assert_eq!(yahoo_proxy.host, "192.168.1.2");
+
+        // Unassigned domain should fall back to first proxy
+        let unknown_proxy = pool.get_proxy_for_email("user@unknown.com", &mut index).unwrap();
+        assert_eq!(unknown_proxy.host, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_get_proxy_for_email_empty_pool() {
+        let mut pool = ProxyPool::new();
+        let mut index = 0;
+
+        let proxy = pool.get_proxy_for_email("test@example.com", &mut index);
+        assert!(proxy.is_none());
+    }
+
+    #[test]
+    fn test_get_proxy_for_email_disabled_pool() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = false;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        let mut index = 0;
+
+        // Even if disabled, get_proxy_for_email returns a proxy
+        // (the enabled flag should be checked by the caller)
+        let proxy = pool.get_proxy_for_email("test@example.com", &mut index);
+        assert!(proxy.is_some());
+    }
+
+    #[test]
+    fn test_get_proxy_by_domain_per_domain_mode() {
+        let mut pool = ProxyPool::new();
+        pool.rotation_mode = RotationMode::PerDomain;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.assign_domain("gmail.com".to_string(), "192.168.1.1:8080".to_string()).unwrap();
+
+        let proxy = pool.get_proxy_by_domain("gmail.com");
+        assert!(proxy.is_some());
+        assert_eq!(proxy.unwrap().host, "192.168.1.1");
+
+        let no_proxy = pool.get_proxy_by_domain("yahoo.com");
+        assert!(no_proxy.is_none());
+    }
+
+    #[test]
+    fn test_get_proxy_by_domain_wrong_mode() {
+        let mut pool = ProxyPool::new();
+        pool.rotation_mode = RotationMode::Automatic;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.assign_domain("gmail.com".to_string(), "192.168.1.1:8080".to_string()).unwrap();
+
+        // Should return None when not in PerDomain mode
+        let proxy = pool.get_proxy_by_domain("gmail.com");
+        assert!(proxy.is_none());
+    }
+
+    #[test]
+    fn test_rotation_index_wrapping() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Start with index at max value that could overflow
+        let mut index = usize::MAX - 1;
+        pool.rotation_mode = RotationMode::Automatic;
+
+        // Should not panic on overflow
+        let proxy1 = pool.get_proxy_for_email("test1@example.com", &mut index).unwrap();
+        let proxy2 = pool.get_proxy_for_email("test2@example.com", &mut index).unwrap();
+        
+        // Just verify it doesn't panic and returns valid proxies
+        assert!(proxy1.host.starts_with("192.168.1"));
+        assert!(proxy2.host.starts_with("192.168.1"));
     }
 
     // =====================

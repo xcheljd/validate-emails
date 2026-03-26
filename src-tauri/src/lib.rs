@@ -3,20 +3,35 @@ mod settings;
 mod session;
 
 use tauri::Emitter;
+use std::sync::Arc;
 
 #[tauri::command]
 async fn validate_emails_bulk(
     window: tauri::Window,
-    state: tauri::State<'_, validation::ValidationState>,
+    validation_state: tauri::State<'_, validation::ValidationState>,
+    settings_state: tauri::State<'_, settings::SettingsState>,
     emails: Vec<String>,
     concurrency: usize,
     mode: String,
 ) -> Result<Vec<validation::ValidationResult>, String> {
+    // Get the current proxy pool configuration
+    let settings = settings_state.settings.read().await;
+    let proxy_pool = settings.proxy_pool.clone();
+    drop(settings);
+
+    // Create proxy rotation state if proxy is enabled and has proxies
+    let proxy_state = if proxy_pool.enabled && !proxy_pool.proxies.is_empty() {
+        Some(Arc::new(validation::ProxyRotationState::new(proxy_pool)))
+    } else {
+        None
+    };
+
     let results = validation::validate_emails_bulk_core(
         emails,
         concurrency,
-        state.get_token(),
+        validation_state.get_token(),
         mode,
+        proxy_state,
         move |res| {
             let _ = window.emit("validation-progress", res);
         },
@@ -28,16 +43,30 @@ async fn validate_emails_bulk(
 #[tauri::command]
 async fn revalidate_emails_bulk(
     window: tauri::Window,
-    state: tauri::State<'_, validation::ValidationState>,
+    validation_state: tauri::State<'_, validation::ValidationState>,
+    settings_state: tauri::State<'_, settings::SettingsState>,
     items: Vec<validation::RevalidationRequest>,
     concurrency: usize,
     mode: String,
 ) -> Result<Vec<validation::ValidationResult>, String> {
+    // Get the current proxy pool configuration
+    let settings = settings_state.settings.read().await;
+    let proxy_pool = settings.proxy_pool.clone();
+    drop(settings);
+
+    // Create proxy rotation state if proxy is enabled and has proxies
+    let proxy_state = if proxy_pool.enabled && !proxy_pool.proxies.is_empty() {
+        Some(Arc::new(validation::ProxyRotationState::new(proxy_pool)))
+    } else {
+        None
+    };
+
     let results = validation::revalidate_emails_bulk_core(
         items,
         concurrency,
-        state.get_token(),
+        validation_state.get_token(),
         mode,
+        proxy_state,
         move |res| {
             let _ = window.emit("validation-progress", res);
         },
