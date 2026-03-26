@@ -2,9 +2,8 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
-import { RefreshCw, Trash2, Save, History, Globe, ShieldCheck } from "lucide-react";
-import { useSettings, AppSettings } from '@/hooks/use-settings';
+import { Trash2, Save, History, ShieldCheck, Shield } from "lucide-react";
+import { useSettings, AppSettings, ProxySettings, RotationMode } from '@/hooks/use-settings';
 import { toast } from "sonner";
 
 interface SettingsContentProps {
@@ -30,6 +29,13 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
     setLocalSettings(prev => ({ ...prev, [key]: value }));
   };
 
+  const handleProxyChange = (key: keyof ProxySettings, value: any) => {
+    setLocalSettings(prev => ({
+      ...prev,
+      proxy: { ...prev.proxy, [key]: value },
+    }));
+  };
+
   return (
     <div className="space-y-6">
         <div className="flex space-x-1 border-b pb-2 overflow-x-auto">
@@ -41,14 +47,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
              <ShieldCheck className="h-4 w-4" />
              Validation
            </Button>
-           <Button
-             variant={activeTab === 'proxy' ? "secondary" : "ghost"}
-             onClick={() => setActiveTab('proxy')}
-             className="gap-2"
-           >
-             <Globe className="h-4 w-4" />
-             Proxy
-           </Button>
+
            <Button
              variant={activeTab === 'history' ? "secondary" : "ghost"}
              onClick={() => setActiveTab('history')}
@@ -56,6 +55,15 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
            >
              <History className="h-4 w-4" />
              History
+           </Button>
+
+           <Button
+             variant={activeTab === 'proxy' ? "secondary" : "ghost"}
+             onClick={() => setActiveTab('proxy')}
+             className="gap-2"
+           >
+             <Shield className="h-4 w-4" />
+             Proxy
            </Button>
         </div>
 
@@ -138,113 +146,6 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
             </div>
           )}
 
-          {activeTab === 'proxy' && (
-            <div className="space-y-4 max-w-lg">
-              <div className="flex items-center space-x-2 border p-4 rounded-md">
-                <Checkbox 
-                    id="enable-proxy" 
-                    checked={localSettings.proxyEnabled}
-                    onCheckedChange={(c) => handleChange('proxyEnabled', !!c)}
-                />
-                <div className="grid gap-1.5 leading-none">
-                  <Label htmlFor="enable-proxy" className="font-medium">
-                    Enable Proxy Rotation
-                  </Label>
-                  <p className="text-sm text-muted-foreground">
-                    Route validations through proxy servers to avoid IP blocking.
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="rotation-strategy">Rotation Strategy</Label>
-                <select
-                  id="rotation-strategy"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                  value={localSettings.proxyRotation}
-                  onChange={(e) => handleChange('proxyRotation', e.target.value)}
-                >
-                  <option value="on-failure">Rotate on Failure (Recommended)</option>
-                  <option value="per-email">Rotate Per Email</option>
-                  <option value="per-batch">Rotate Per Batch</option>
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="max-emails-proxy">Max Emails Per Proxy</Label>
-                <div className="flex items-center gap-4">
-                  <Input
-                    id="max-emails-proxy"
-                    type="number"
-                    min="10"
-                    max="100"
-                    value={localSettings.maxEmailsPerProxy}
-                    onChange={(e) => handleChange('maxEmailsPerProxy', parseInt(e.target.value) || 10)}
-                  />
-                  <span className="text-xs text-muted-foreground">Limit before forced rotation</span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="protocol">Protocol Preference</Label>
-                <select
-                  id="protocol"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                  value={localSettings.protocolPreference}
-                  onChange={(e) => handleChange('protocolPreference', e.target.value)}
-                >
-                  <option value="any">Any (HTTP/SOCKS4/SOCKS5)</option>
-                  <option value="http">HTTP/HTTPS Only</option>
-                  <option value="socks5">SOCKS5 Only</option>
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="min-uptime">Min Proxy Uptime (%)</Label>
-                <div className="flex items-center gap-4">
-                  <Input
-                    id="min-uptime"
-                    type="number"
-                    min="50"
-                    max="100"
-                    value={localSettings.minProxyUptime}
-                    onChange={(e) => handleChange('minProxyUptime', parseInt(e.target.value) || 50)}
-                  />
-                  <span className="text-xs text-muted-foreground">80%</span>
-                </div>
-              </div>
-
-              <div className="pt-4 border-t">
-                 <div className="mb-4">
-                  <h4 className="text-sm font-medium mb-2">Proxy Pool Management</h4>
-                  <div className="grid grid-cols-3 gap-2 text-center text-sm">
-                    <div className="bg-muted p-2 rounded">
-                      <div className="font-bold">0</div>
-                      <div className="text-[10px] uppercase text-muted-foreground">Total</div>
-                    </div>
-                    <div className="bg-muted p-2 rounded">
-                      <div className="font-bold">-</div>
-                      <div className="text-[10px] uppercase text-muted-foreground">Active</div>
-                    </div>
-                    <div className="bg-muted p-2 rounded">
-                      <div className="font-bold">0%</div>
-                      <div className="text-[10px] uppercase text-muted-foreground">Success</div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="w-full gap-2">
-                    <RefreshCw className="h-3 w-3" /> Refresh List
-                  </Button>
-                  <Button variant="outline" size="sm" className="w-full gap-2 text-destructive hover:text-destructive">
-                    <Trash2 className="h-3 w-3" /> Clear Pool
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-
           {activeTab === 'history' && (
             <div className="space-y-4 max-w-lg">
               <div className="space-y-2">
@@ -267,6 +168,95 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                     <Trash2 className="h-4 w-4" />
                     Clean Up Old Sessions Now
                 </Button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'proxy' && (
+            <div className="space-y-6 max-w-lg">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="proxy-enabled">Enable Proxy</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Route email validation through SOCKS5 proxies
+                  </p>
+                </div>
+                <button
+                  id="proxy-enabled"
+                  type="button"
+                  role="switch"
+                  aria-checked={localSettings.proxy.enabled}
+                  onClick={() => handleProxyChange('enabled', !localSettings.proxy.enabled)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+                    localSettings.proxy.enabled ? 'bg-primary' : 'bg-input'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                      localSettings.proxy.enabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="rotation-mode">Rotation Mode</Label>
+                <select
+                  id="rotation-mode"
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  value={localSettings.proxy.rotationMode}
+                  onChange={(e) => handleProxyChange('rotationMode', e.target.value as RotationMode)}
+                  disabled={!localSettings.proxy.enabled}
+                >
+                  <option value="manual">Manual - Select proxy manually</option>
+                  <option value="automatic">Automatic - Rotate through all proxies</option>
+                  <option value="perDomain">Per-Domain - Assign proxies to email domains</option>
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  {localSettings.proxy.rotationMode === 'manual' && 'Proxy only changes when you manually select a different proxy.'}
+                  {localSettings.proxy.rotationMode === 'automatic' && 'Proxies rotate automatically during validation (round-robin or weighted).'}
+                  {localSettings.proxy.rotationMode === 'perDomain' && 'Assign specific proxies to Gmail, Yahoo, Hotmail domains.'}
+                </p>
+              </div>
+
+              <div className="space-y-2 pt-2">
+                <div className="flex items-center justify-between">
+                  <Label>Proxy List</Label>
+                  <span className="text-xs text-muted-foreground">
+                    {localSettings.proxy.proxies.length} configured
+                  </span>
+                </div>
+                <div className="border rounded-md p-4 min-h-[120px] bg-muted/30">
+                  {localSettings.proxy.proxies.length === 0 ? (
+                    <div className="text-center text-sm text-muted-foreground py-6">
+                      <Shield className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p>No proxies configured</p>
+                      <p className="text-xs mt-1">Add proxies to enable proxy-based validation</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {localSettings.proxy.proxies.map((proxy) => (
+                        <div
+                          key={`${proxy.host}:${proxy.port}`}
+                          className="flex items-center justify-between rounded border bg-background px-3 py-2 text-sm"
+                        >
+                          <span className="font-mono">
+                            {proxy.host}:{proxy.port}
+                            {proxy.username && <span className="text-muted-foreground ml-2">(authenticated)</span>}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                            aria-label="Delete proxy"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
