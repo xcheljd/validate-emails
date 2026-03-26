@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Trash2, Save, History, ShieldCheck, Shield } from "lucide-react";
-import { useSettings, AppSettings, ProxySettings, RotationMode, ProxyConfig } from '@/hooks/use-settings';
+import { useSettings, AppSettings, RotationMode, ProxyConfig } from '@/hooks/use-settings';
 import { toast } from "sonner";
 import { ProxyList } from './proxy-list';
+import { PerDomainAssignment } from './per-domain-assignment';
 
 interface SettingsContentProps {
   onClose?: () => void;
@@ -18,7 +20,9 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
     addProxy, 
     updateProxy, 
     deleteProxy,
-    updateProxyPoolConfig 
+    updateProxyPoolConfig,
+    assignDomainProxy,
+    unassignDomainProxy,
   } = useSettings();
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings);
   const [activeTab, setActiveTab] = useState('validation');
@@ -35,13 +39,6 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
 
   const handleChange = (key: keyof AppSettings, value: any) => {
     setLocalSettings(prev => ({ ...prev, [key]: value }));
-  };
-
-  const handleProxyChange = (key: keyof ProxySettings, value: any) => {
-    setLocalSettings(prev => ({
-      ...prev,
-      proxy: { ...prev.proxy, [key]: value },
-    }));
   };
 
   // Proxy enabled toggle - persists to backend immediately
@@ -143,6 +140,44 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
       }));
     }
   }, [localSettings.proxy.proxies, deleteProxy]);
+
+  // Per-domain proxy assignment handler
+  const handleDomainAssign = useCallback(async (domain: string, proxyId: string | null) => {
+    setLocalSettings(prev => {
+      const newAssignments = { ...prev.proxy.domainAssignments };
+      if (proxyId === null) {
+        delete newAssignments[domain.toLowerCase()];
+      } else {
+        newAssignments[domain.toLowerCase()] = proxyId;
+      }
+      return {
+        ...prev,
+        proxy: { ...prev.proxy, domainAssignments: newAssignments },
+      };
+    });
+
+    try {
+      if (proxyId === null) {
+        await unassignDomainProxy(domain);
+        toast.success(`Removed proxy assignment for ${domain}`);
+      } else {
+        await assignDomainProxy(domain, proxyId);
+        toast.success(`Assigned proxy to ${domain}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update domain assignment";
+      toast.error(message);
+      // Refresh from backend on error
+      interface ProxyPool {
+        domain_assignments: Record<string, string>;
+      }
+      const pool = await invoke<ProxyPool>('get_proxy_pool');
+      setLocalSettings(prev => ({
+        ...prev,
+        proxy: { ...prev.proxy, domainAssignments: pool.domain_assignments },
+      }));
+    }
+  }, [assignDomainProxy, unassignDomainProxy]);
 
   return (
     <div className="space-y-6">
@@ -336,6 +371,17 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                   disabled={!localSettings.proxy.enabled}
                 />
               </div>
+
+              {localSettings.proxy.rotationMode === 'perDomain' && (
+                <div className="pt-4">
+                  <PerDomainAssignment
+                    proxies={localSettings.proxy.proxies}
+                    domainAssignments={localSettings.proxy.domainAssignments}
+                    onAssign={handleDomainAssign}
+                    disabled={!localSettings.proxy.enabled}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>

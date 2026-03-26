@@ -2,6 +2,22 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { SettingsContent } from './settings-content';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Mock the invoke function
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockResolvedValue({
+    validation_mode: 'standard',
+    concurrency: 5,
+    timeout_ms: 30000,
+    max_retries: 3,
+    auto_save_interval: 10,
+    history_retention_days: 90,
+    proxies: [],
+    enabled: false,
+    rotation_mode: 'manual',
+    domain_assignments: {},
+  }),
+}));
+
 describe('SettingsContent', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -108,5 +124,73 @@ describe('ProxySettings Tab', () => {
     // Switch to Per-Domain
     fireEvent.change(select, { target: { value: 'perDomain' } });
     expect(screen.getByText(/Assign specific proxies to Gmail, Yahoo, Hotmail/i)).toBeInTheDocument();
+  });
+});
+
+describe('Per-Domain Proxy Assignment', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('shows per-domain assignment section when Per-Domain mode is selected', async () => {
+    render(<SettingsContent />);
+    fireEvent.click(screen.getByText('Proxy'));
+    
+    // Enable proxy
+    const toggle = screen.getByRole('switch', { name: /enable proxy/i });
+    fireEvent.click(toggle);
+    
+    // Switch to Per-Domain mode
+    const select = screen.getByLabelText('Rotation Mode');
+    fireEvent.change(select, { target: { value: 'perDomain' } });
+
+    // Per-domain section should be visible
+    expect(screen.getByText('Domain Assignments')).toBeInTheDocument();
+  });
+
+  it('hides per-domain assignment section when not in Per-Domain mode', () => {
+    render(<SettingsContent />);
+    fireEvent.click(screen.getByText('Proxy'));
+    
+    // Enable proxy
+    const toggle = screen.getByRole('switch', { name: /enable proxy/i });
+    fireEvent.click(toggle);
+    
+    // In Manual or Automatic mode, per-domain section should not be visible
+    expect(screen.queryByText('Domain Assignments')).not.toBeInTheDocument();
+  });
+
+  it('shows Gmail, Yahoo, and Hotmail domain options', async () => {
+    render(<SettingsContent />);
+    fireEvent.click(screen.getByText('Proxy'));
+    
+    // Enable proxy
+    const toggle = screen.getByRole('switch', { name: /enable proxy/i });
+    fireEvent.click(toggle);
+    
+    // Switch to Per-Domain mode
+    const select = screen.getByLabelText('Rotation Mode');
+    fireEvent.change(select, { target: { value: 'perDomain' } });
+
+    expect(screen.getByText('Gmail')).toBeInTheDocument();
+    expect(screen.getByText('Yahoo')).toBeInTheDocument();
+    expect(screen.getByText('Hotmail')).toBeInTheDocument();
+  });
+
+  it('shows default dropdown option for unassigned domains', async () => {
+    render(<SettingsContent />);
+    fireEvent.click(screen.getByText('Proxy'));
+    
+    // Enable proxy
+    const toggle = screen.getByRole('switch', { name: /enable proxy/i });
+    fireEvent.click(toggle);
+    
+    // Switch to Per-Domain mode
+    const select = screen.getByLabelText('Rotation Mode');
+    fireEvent.change(select, { target: { value: 'perDomain' } });
+
+    const defaultOptions = screen.getAllByText('Default (rotation)');
+    expect(defaultOptions.length).toBeGreaterThanOrEqual(3);
   });
 });
