@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Trash2, Save, History, ShieldCheck, Shield } from "lucide-react";
-import { useSettings, AppSettings, ProxySettings, RotationMode } from '@/hooks/use-settings';
+import { useSettings, AppSettings, ProxySettings, RotationMode, ProxyConfig } from '@/hooks/use-settings';
 import { toast } from "sonner";
+import { ProxyList } from './proxy-list';
 
 interface SettingsContentProps {
   onClose?: () => void;
@@ -35,6 +36,32 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
       proxy: { ...prev.proxy, [key]: value },
     }));
   };
+
+  // Proxy list handlers - defined at component level to avoid hook order issues
+  const handleAddProxy = useCallback((proxy: ProxyConfig) => {
+    setLocalSettings(prev => ({
+      ...prev,
+      proxy: { ...prev.proxy, proxies: [...prev.proxy.proxies, proxy] },
+    }));
+  }, []);
+
+  const handleUpdateProxy = useCallback((index: number, proxy: ProxyConfig) => {
+    setLocalSettings(prev => {
+      const newProxies = [...prev.proxy.proxies];
+      newProxies[index] = proxy;
+      return {
+        ...prev,
+        proxy: { ...prev.proxy, proxies: newProxies },
+      };
+    });
+  }, []);
+
+  const handleDeleteProxy = useCallback((index: number) => {
+    setLocalSettings(prev => ({
+      ...prev,
+      proxy: { ...prev.proxy, proxies: prev.proxy.proxies.filter((_, i) => i !== index) },
+    }));
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -219,44 +246,14 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                 </p>
               </div>
 
-              <div className="space-y-2 pt-2">
-                <div className="flex items-center justify-between">
-                  <Label>Proxy List</Label>
-                  <span className="text-xs text-muted-foreground">
-                    {localSettings.proxy.proxies.length} configured
-                  </span>
-                </div>
-                <div className="border rounded-md p-4 min-h-[120px] bg-muted/30">
-                  {localSettings.proxy.proxies.length === 0 ? (
-                    <div className="text-center text-sm text-muted-foreground py-6">
-                      <Shield className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                      <p>No proxies configured</p>
-                      <p className="text-xs mt-1">Add proxies to enable proxy-based validation</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {localSettings.proxy.proxies.map((proxy) => (
-                        <div
-                          key={`${proxy.host}:${proxy.port}`}
-                          className="flex items-center justify-between rounded border bg-background px-3 py-2 text-sm"
-                        >
-                          <span className="font-mono">
-                            {proxy.host}:{proxy.port}
-                            {proxy.username && <span className="text-muted-foreground ml-2">(authenticated)</span>}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
-                            aria-label="Delete proxy"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+              <div className="pt-2">
+                <ProxyList
+                  proxies={localSettings.proxy.proxies}
+                  onAdd={handleAddProxy}
+                  onUpdate={handleUpdateProxy}
+                  onDelete={handleDeleteProxy}
+                  disabled={!localSettings.proxy.enabled}
+                />
               </div>
             </div>
           )}
