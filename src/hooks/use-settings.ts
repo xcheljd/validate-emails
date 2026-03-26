@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
 /** Rotation mode for proxy selection */
@@ -56,6 +56,13 @@ interface BackendSettings {
   history_retention_days: number;
 }
 
+interface BackendProxyPool {
+  proxies: ProxyConfig[];
+  enabled: boolean;
+  rotation_mode: RotationMode;
+  domain_assignments: Record<string, string>;
+}
+
 export const defaultSettings: AppSettings = {
   validationMode: 'standard',
   concurrency: 5,
@@ -90,6 +97,15 @@ function frontendToBackend(frontend: AppSettings): BackendSettings {
   };
 }
 
+function backendProxyPoolToFrontend(backend: BackendProxyPool): ProxySettings {
+  return {
+    proxies: backend.proxies,
+    enabled: backend.enabled,
+    rotationMode: backend.rotation_mode,
+    domainAssignments: backend.domain_assignments,
+  };
+}
+
 export function useSettings() {
   const [settings, setSettings] = useState<AppSettings>(() => {
     const stored = localStorage.getItem('app-settings');
@@ -112,6 +128,16 @@ export function useSettings() {
       .catch(err => {
         console.warn('Failed to load settings from backend, using localStorage:', err);
       });
+
+    // Load proxy pool from backend
+    invoke<BackendProxyPool>('get_proxy_pool')
+      .then(backendPool => {
+        const proxySettings = backendProxyPoolToFrontend(backendPool);
+        setSettings(prev => ({ ...prev, proxy: proxySettings }));
+      })
+      .catch(err => {
+        console.warn('Failed to load proxy pool from backend:', err);
+      });
   }, []);
 
   const updateSettings = async (newSettings: Partial<AppSettings>) => {
@@ -127,5 +153,96 @@ export function useSettings() {
     });
   };
 
-  return { settings, updateSettings };
+  // Proxy management functions
+  const addProxy = useCallback(async (proxy: ProxyConfig): Promise<void> => {
+    await invoke('add_proxy', { proxy });
+    // Refresh proxy list from backend
+    const pool = await invoke<BackendProxyPool>('get_proxy_pool');
+    const proxySettings = backendProxyPoolToFrontend(pool);
+    setSettings(prev => ({ ...prev, proxy: proxySettings }));
+    localStorage.setItem('app-settings', JSON.stringify({ ...settings, proxy: proxySettings }));
+  }, [settings]);
+
+  const updateProxy = useCallback(async (oldId: string, proxy: ProxyConfig): Promise<void> => {
+    await invoke('update_proxy', { oldId, proxy });
+    // Refresh proxy list from backend
+    const pool = await invoke<BackendProxyPool>('get_proxy_pool');
+    const proxySettings = backendProxyPoolToFrontend(pool);
+    setSettings(prev => ({ ...prev, proxy: proxySettings }));
+    localStorage.setItem('app-settings', JSON.stringify({ ...settings, proxy: proxySettings }));
+  }, [settings]);
+
+  const deleteProxy = useCallback(async (id: string): Promise<boolean> => {
+    const result = await invoke<boolean>('delete_proxy', { id });
+    if (result) {
+      // Refresh proxy list from backend
+      const pool = await invoke<BackendProxyPool>('get_proxy_pool');
+      const proxySettings = backendProxyPoolToFrontend(pool);
+      setSettings(prev => ({ ...prev, proxy: proxySettings }));
+      localStorage.setItem('app-settings', JSON.stringify({ ...settings, proxy: proxySettings }));
+    }
+    return result;
+  }, [settings]);
+
+  const clearProxies = useCallback(async (): Promise<void> => {
+    await invoke('clear_proxies');
+    setSettings(prev => ({
+      ...prev,
+      proxy: { ...prev.proxy, proxies: [], domainAssignments: {} }
+    }));
+    localStorage.setItem('app-settings', JSON.stringify({
+      ...settings,
+      proxy: { ...settings.proxy, proxies: [], domainAssignments: {} }
+    }));
+  }, [settings]);
+
+  const updateProxyPoolConfig = useCallback(async (
+    enabled?: boolean,
+    rotationMode?: RotationMode
+  ): Promise<void> => {
+    await invoke('update_proxy_pool_config', { enabled, rotationMode });
+    setSettings(prev => {
+      const updated = {
+        ...prev,
+        proxy: {
+          ...prev.proxy,
+          ...(enabled !== undefined && { enabled }),
+          ...(rotationMode !== undefined && { rotationMode })
+        }
+      };
+      localStorage.setItem('app-settings', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
+  const assignDomainProxy = useCallback(async (domain: string, proxyId: string): Promise<void> => {
+    await invoke('assign_domain_proxy', { domain, proxyId });
+    const pool = await invoke<BackendProxyPool>('get_proxy_pool');
+    const proxySettings = backendProxyPoolToFrontend(pool);
+    setSettings(prev => ({ ...prev, proxy: proxySettings }));
+    localStorage.setItem('app-settings', JSON.stringify({ ...settings, proxy: proxySettings }));
+  }, [settings]);
+
+  const unassignDomainProxy = useCallback(async (domain: string): Promise<boolean> => {
+    const result = await invoke<boolean>('unassign_domain_proxy', { domain });
+    if (result) {
+      const pool = await invoke<BackendProxyPool>('get_proxy_pool');
+      const proxySettings = backendProxyPoolToFrontend(pool);
+      setSettings(prev => ({ ...prev, proxy: proxySettings }));
+      localStorage.setItem('app-settings', JSON.stringify({ ...settings, proxy: proxySettings }));
+    }
+    return result;
+  }, [settings]);
+
+  return {
+    settings,
+    updateSettings,
+    addProxy,
+    updateProxy,
+    deleteProxy,
+    clearProxies,
+    updateProxyPoolConfig,
+    assignDomainProxy,
+    unassignDomainProxy,
+  };
 }

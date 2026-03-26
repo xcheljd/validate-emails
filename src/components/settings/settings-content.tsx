@@ -12,7 +12,14 @@ interface SettingsContentProps {
 }
 
 export function SettingsContent({ onClose }: SettingsContentProps) {
-  const { settings, updateSettings } = useSettings();
+  const { 
+    settings, 
+    updateSettings, 
+    addProxy, 
+    updateProxy, 
+    deleteProxy,
+    updateProxyPoolConfig 
+  } = useSettings();
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings);
   const [activeTab, setActiveTab] = useState('validation');
 
@@ -37,15 +44,56 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
     }));
   };
 
-  // Proxy list handlers - defined at component level to avoid hook order issues
-  const handleAddProxy = useCallback((proxy: ProxyConfig) => {
+  // Proxy enabled toggle - persists to backend immediately
+  const handleProxyEnabledChange = useCallback(async (enabled: boolean) => {
+    setLocalSettings(prev => ({
+      ...prev,
+      proxy: { ...prev.proxy, enabled },
+    }));
+    try {
+      await updateProxyPoolConfig(enabled, undefined);
+    } catch (error) {
+      toast.error("Failed to update proxy settings");
+    }
+  }, [updateProxyPoolConfig]);
+
+  // Proxy rotation mode change - persists to backend immediately
+  const handleRotationModeChange = useCallback(async (rotationMode: RotationMode) => {
+    setLocalSettings(prev => ({
+      ...prev,
+      proxy: { ...prev.proxy, rotationMode },
+    }));
+    try {
+      await updateProxyPoolConfig(undefined, rotationMode);
+    } catch (error) {
+      toast.error("Failed to update rotation mode");
+    }
+  }, [updateProxyPoolConfig]);
+
+  // Proxy list handlers - persist to backend immediately
+  const handleAddProxy = useCallback(async (proxy: ProxyConfig) => {
     setLocalSettings(prev => ({
       ...prev,
       proxy: { ...prev.proxy, proxies: [...prev.proxy.proxies, proxy] },
     }));
-  }, []);
+    try {
+      await addProxy(proxy);
+      toast.success("Proxy added successfully");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to add proxy";
+      toast.error(message);
+      // Revert local state on error
+      setLocalSettings(prev => ({
+        ...prev,
+        proxy: { ...prev.proxy, proxies: prev.proxy.proxies.slice(0, -1) },
+      }));
+    }
+  }, [addProxy]);
 
-  const handleUpdateProxy = useCallback((index: number, proxy: ProxyConfig) => {
+  const handleUpdateProxy = useCallback(async (index: number, proxy: ProxyConfig) => {
+    const oldProxy = localSettings.proxy.proxies[index];
+    const oldId = `${oldProxy.host}:${oldProxy.port}`;
+    
     setLocalSettings(prev => {
       const newProxies = [...prev.proxy.proxies];
       newProxies[index] = proxy;
@@ -54,14 +102,47 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
         proxy: { ...prev.proxy, proxies: newProxies },
       };
     });
-  }, []);
+    
+    try {
+      await updateProxy(oldId, proxy);
+      toast.success("Proxy updated successfully");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update proxy";
+      toast.error(message);
+      // Revert local state on error
+      setLocalSettings(prev => {
+        const newProxies = [...prev.proxy.proxies];
+        newProxies[index] = oldProxy;
+        return {
+          ...prev,
+          proxy: { ...prev.proxy, proxies: newProxies },
+        };
+      });
+    }
+  }, [localSettings.proxy.proxies, updateProxy]);
 
-  const handleDeleteProxy = useCallback((index: number) => {
+  const handleDeleteProxy = useCallback(async (index: number) => {
+    const proxyToDelete = localSettings.proxy.proxies[index];
+    const proxyId = `${proxyToDelete.host}:${proxyToDelete.port}`;
+    
     setLocalSettings(prev => ({
       ...prev,
       proxy: { ...prev.proxy, proxies: prev.proxy.proxies.filter((_, i) => i !== index) },
     }));
-  }, []);
+    
+    try {
+      await deleteProxy(proxyId);
+      toast.success("Proxy removed successfully");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to delete proxy";
+      toast.error(message);
+      // Revert local state on error
+      setLocalSettings(prev => ({
+        ...prev,
+        proxy: { ...prev.proxy, proxies: [...prev.proxy.proxies.slice(0, index), proxyToDelete, ...prev.proxy.proxies.slice(index)] },
+      }));
+    }
+  }, [localSettings.proxy.proxies, deleteProxy]);
 
   return (
     <div className="space-y-6">
@@ -213,7 +294,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                   type="button"
                   role="switch"
                   aria-checked={localSettings.proxy.enabled}
-                  onClick={() => handleProxyChange('enabled', !localSettings.proxy.enabled)}
+                  onClick={() => handleProxyEnabledChange(!localSettings.proxy.enabled)}
                   className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
                     localSettings.proxy.enabled ? 'bg-primary' : 'bg-input'
                   }`}
@@ -232,7 +313,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                   id="rotation-mode"
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                   value={localSettings.proxy.rotationMode}
-                  onChange={(e) => handleProxyChange('rotationMode', e.target.value as RotationMode)}
+                  onChange={(e) => handleRotationModeChange(e.target.value as RotationMode)}
                   disabled={!localSettings.proxy.enabled}
                 >
                   <option value="manual">Manual - Select proxy manually</option>
