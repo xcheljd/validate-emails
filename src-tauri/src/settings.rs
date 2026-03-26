@@ -354,6 +354,8 @@ pub struct Settings {
     pub auto_save_interval: usize,
     pub history_retention_days: u32,
     pub rate_limiter: RateLimiterConfig,
+    #[serde(default)]
+    pub proxy_pool: ProxyPool,
 }
 
 impl Default for Settings {
@@ -366,6 +368,7 @@ impl Default for Settings {
             auto_save_interval: 10,
             history_retention_days: 90,
             rate_limiter: RateLimiterConfig::default(),
+            proxy_pool: ProxyPool::default(),
         }
     }
 }
@@ -458,6 +461,107 @@ pub async fn get_validator_config(
 ) -> Result<RateLimiterConfig, String> {
     let settings = state.settings.read().await;
     Ok(settings.rate_limiter.clone())
+}
+
+// =====================
+// Proxy Management Commands
+// =====================
+
+/// Add a proxy to the pool
+#[tauri::command]
+pub async fn add_proxy(
+    state: tauri::State<'_, SettingsState>,
+    proxy: ProxyConfig,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.add_proxy(proxy)
+}
+
+/// Update an existing proxy in the pool
+#[tauri::command]
+pub async fn update_proxy(
+    state: tauri::State<'_, SettingsState>,
+    old_id: String,
+    proxy: ProxyConfig,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.update_proxy(&old_id, proxy)
+}
+
+/// Delete a proxy from the pool
+#[tauri::command]
+pub async fn delete_proxy(
+    state: tauri::State<'_, SettingsState>,
+    id: String,
+) -> Result<bool, String> {
+    let mut settings = state.settings.write().await;
+    Ok(settings.proxy_pool.remove_proxy(&id))
+}
+
+/// Get all proxies from the pool
+#[tauri::command]
+pub async fn get_proxies(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<Vec<ProxyConfig>, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.proxy_pool.proxies.clone())
+}
+
+/// Clear all proxies from the pool
+#[tauri::command]
+pub async fn clear_proxies(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.clear();
+    Ok(())
+}
+
+/// Get the entire proxy pool configuration
+#[tauri::command]
+pub async fn get_proxy_pool(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<ProxyPool, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.proxy_pool.clone())
+}
+
+/// Update proxy pool configuration (enabled, rotation_mode)
+#[tauri::command]
+pub async fn update_proxy_pool_config(
+    state: tauri::State<'_, SettingsState>,
+    enabled: Option<bool>,
+    rotation_mode: Option<RotationMode>,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    if let Some(e) = enabled {
+        settings.proxy_pool.enabled = e;
+    }
+    if let Some(rm) = rotation_mode {
+        settings.proxy_pool.rotation_mode = rm;
+    }
+    Ok(())
+}
+
+/// Assign a proxy to a specific domain
+#[tauri::command]
+pub async fn assign_domain_proxy(
+    state: tauri::State<'_, SettingsState>,
+    domain: String,
+    proxy_id: String,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.assign_domain(domain, proxy_id)
+}
+
+/// Remove a domain proxy assignment
+#[tauri::command]
+pub async fn unassign_domain_proxy(
+    state: tauri::State<'_, SettingsState>,
+    domain: String,
+) -> Result<bool, String> {
+    let mut settings = state.settings.write().await;
+    Ok(settings.proxy_pool.unassign_domain(&domain))
 }
 
 #[cfg(test)]
@@ -957,5 +1061,226 @@ mod tests {
 
         assert_eq!(pool.len(), 1);
         assert!(pool.domain_assignments.is_empty());
+    }
+
+    // =====================
+    // Settings with ProxyPool Tests
+    // =====================
+
+    #[test]
+    fn test_settings_default_has_proxy_pool() {
+        let settings = Settings::default();
+        assert!(!settings.proxy_pool.enabled);
+        assert_eq!(settings.proxy_pool.rotation_mode, RotationMode::Manual);
+        assert!(settings.proxy_pool.proxies.is_empty());
+    }
+
+    #[test]
+    fn test_settings_serialize_with_proxy_pool() {
+        let settings = Settings::default();
+        let json = serde_json::to_string(&settings).unwrap();
+
+        // Verify proxy_pool is in the JSON (uses snake_case in backend Settings)
+        assert!(json.contains("proxy_pool"));
+        // ProxyPool fields use camelCase due to #[serde(rename_all = "camelCase")]
+        assert!(json.contains("proxies"));
+        assert!(json.contains("enabled"));
+        assert!(json.contains("rotationMode"));
+    }
+
+    #[test]
+    fn test_settings_deserialize_with_proxy_pool() {
+        // Settings uses snake_case, but ProxyPool uses camelCase
+        let json = r#"{
+            "validation_mode": "standard",
+            "timeout_ms": 30000,
+            "concurrency": 5,
+            "max_retries": 3,
+            "auto_save_interval": 10,
+            "history_retention_days": 90,
+            "rate_limiter": {"max_per_second": 1, "max_per_minute": 60},
+            "proxy_pool": {
+                "proxies": [{"host": "192.168.1.1", "port": 8080, "username": null, "password": null}],
+                "enabled": true,
+                "rotationMode": "automatic",
+                "domainAssignments": {}
+            }
+        }"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+
+        assert!(settings.proxy_pool.enabled);
+        assert_eq!(settings.proxy_pool.rotation_mode, RotationMode::Automatic);
+        assert_eq!(settings.proxy_pool.proxies.len(), 1);
+        assert_eq!(settings.proxy_pool.proxies[0].host, "192.168.1.1");
+        assert_eq!(settings.proxy_pool.proxies[0].port, 8080);
+    }
+
+    #[test]
+    fn test_settings_deserialize_without_proxy_pool() {
+        // Test that settings deserialize correctly even without proxyPool field
+        let json = r#"{
+            "validation_mode": "standard",
+            "timeout_ms": 30000,
+            "concurrency": 5,
+            "max_retries": 3,
+            "auto_save_interval": 10,
+            "history_retention_days": 90,
+            "rate_limiter": {"max_per_second": 1, "max_per_minute": 60}
+        }"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+
+        // proxyPool should use default
+        assert!(!settings.proxy_pool.enabled);
+        assert!(settings.proxy_pool.proxies.is_empty());
+    }
+
+    // =====================
+    // Proxy Command Logic Tests
+    // =====================
+
+    #[test]
+    fn test_add_proxy_command_logic() {
+        let mut settings = Settings::default();
+        let proxy = ProxyConfig::new("192.168.1.1".to_string(), 8080);
+
+        // Simulate add_proxy command
+        let result = settings.proxy_pool.add_proxy(proxy);
+        assert!(result.is_ok());
+        assert_eq!(settings.proxy_pool.proxies.len(), 1);
+    }
+
+    #[test]
+    fn test_add_proxy_duplicate_command_logic() {
+        let mut settings = Settings::default();
+        let proxy1 = ProxyConfig::new("192.168.1.1".to_string(), 8080);
+        let proxy2 = ProxyConfig::new("192.168.1.1".to_string(), 8080);
+
+        settings.proxy_pool.add_proxy(proxy1).unwrap();
+        let result = settings.proxy_pool.add_proxy(proxy2);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("already exists"));
+    }
+
+    #[test]
+    fn test_update_proxy_command_logic() {
+        let mut settings = Settings::default();
+        settings.proxy_pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        let updated = ProxyConfig::new("192.168.1.1".to_string(), 9090);
+        let result = settings.proxy_pool.update_proxy("192.168.1.1:8080", updated);
+        assert!(result.is_ok());
+
+        // Verify update
+        let proxy = settings.proxy_pool.get_proxy("192.168.1.1:9090");
+        assert!(proxy.is_some());
+        assert_eq!(proxy.unwrap().port, 9090);
+    }
+
+    #[test]
+    fn test_update_proxy_not_found_command_logic() {
+        let mut settings = Settings::default();
+        let updated = ProxyConfig::new("192.168.1.1".to_string(), 9090);
+
+        let result = settings.proxy_pool.update_proxy("192.168.1.1:8080", updated);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+    }
+
+    #[test]
+    fn test_delete_proxy_command_logic() {
+        let mut settings = Settings::default();
+        settings.proxy_pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // Simulate delete_proxy command
+        let removed = settings.proxy_pool.remove_proxy("192.168.1.1:8080");
+        assert!(removed);
+        assert!(settings.proxy_pool.proxies.is_empty());
+    }
+
+    #[test]
+    fn test_delete_proxy_not_found_command_logic() {
+        let mut settings = Settings::default();
+
+        let removed = settings.proxy_pool.remove_proxy("192.168.1.1:8080");
+        assert!(!removed);
+    }
+
+    #[test]
+    fn test_get_proxies_command_logic() {
+        let mut settings = Settings::default();
+        settings.proxy_pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        settings.proxy_pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+
+        // Simulate get_proxies command
+        let proxies = settings.proxy_pool.proxies.clone();
+        assert_eq!(proxies.len(), 2);
+    }
+
+    #[test]
+    fn test_clear_proxies_command_logic() {
+        let mut settings = Settings::default();
+        settings.proxy_pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        settings.proxy_pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        settings.proxy_pool.assign_domain("gmail.com".to_string(), "192.168.1.1:8080".to_string()).unwrap();
+
+        // Simulate clear_proxies command
+        settings.proxy_pool.clear();
+
+        assert!(settings.proxy_pool.proxies.is_empty());
+        assert!(settings.proxy_pool.domain_assignments.is_empty());
+    }
+
+    #[test]
+    fn test_get_proxy_pool_command_logic() {
+        let mut settings = Settings::default();
+        settings.proxy_pool.enabled = true;
+        settings.proxy_pool.rotation_mode = RotationMode::Automatic;
+        settings.proxy_pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // Simulate get_proxy_pool command
+        let pool = settings.proxy_pool.clone();
+        assert!(pool.enabled);
+        assert_eq!(pool.rotation_mode, RotationMode::Automatic);
+        assert_eq!(pool.proxies.len(), 1);
+    }
+
+    #[test]
+    fn test_update_proxy_pool_config_command_logic() {
+        let mut settings = Settings::default();
+
+        // Simulate update_proxy_pool_config command - enable proxy
+        settings.proxy_pool.enabled = true;
+        settings.proxy_pool.rotation_mode = RotationMode::Automatic;
+
+        assert!(settings.proxy_pool.enabled);
+        assert_eq!(settings.proxy_pool.rotation_mode, RotationMode::Automatic);
+    }
+
+    #[test]
+    fn test_assign_domain_proxy_command_logic() {
+        let mut settings = Settings::default();
+        settings.proxy_pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // Simulate assign_domain_proxy command
+        let result = settings.proxy_pool.assign_domain("gmail.com".to_string(), "192.168.1.1:8080".to_string());
+        assert!(result.is_ok());
+
+        let assigned = settings.proxy_pool.get_domain_proxy("gmail.com");
+        assert!(assigned.is_some());
+        assert_eq!(assigned.unwrap().host, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_unassign_domain_proxy_command_logic() {
+        let mut settings = Settings::default();
+        settings.proxy_pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        settings.proxy_pool.assign_domain("gmail.com".to_string(), "192.168.1.1:8080".to_string()).unwrap();
+
+        // Simulate unassign_domain_proxy command
+        let removed = settings.proxy_pool.unassign_domain("gmail.com");
+        assert!(removed);
+
+        let assigned = settings.proxy_pool.get_domain_proxy("gmail.com");
+        assert!(assigned.is_none());
     }
 }
