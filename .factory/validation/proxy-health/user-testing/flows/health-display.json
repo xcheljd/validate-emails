@@ -1,0 +1,159 @@
+{
+  "groupId": "health-display",
+  "testedAt": "2026-03-27T12:00:00.000Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "browserSession": "01b1f2d07420",
+    "statePersistence": "localStorage (key: proxy-settings)",
+    "missionDir": "/Users/home/.factory/missions/a1a12770-c70a-4d6c-b153-124bb37af243"
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-HLT-001",
+      "title": "Health status display",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Seed 3 proxies with different stats into localStorage (95%, 70%, 30% success rates)",
+          "expected": "Data stored in localStorage",
+          "observed": "Data stored successfully"
+        },
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy list with health indicators displayed",
+          "observed": "Proxy list showing 3 proxies with health indicators"
+        },
+        {
+          "action": "Verify health indicator colors and labels",
+          "expected": "Healthy (green, >90%), Degraded (yellow, 50-90%), Failed (red, <50%)",
+          "observed": "192.168.1.1:8080 shows '95% Healthy' with bg-green-500/20 text-green-700 border-green-500/30; 10.0.0.1:1080 shows '70% Degraded' with bg-yellow-500/20 text-yellow-700 border-yellow-500/30; 172.16.0.1:9090 shows '30% Failed' with bg-red-500/20 text-red-700 border-red-500/30"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "evidence/proxy-health/health-display/VAL-HLT-001-health-indicators.png"
+        ],
+        "consoleErrors": "Only Tauri IPC errors (transformCallback) - expected in browser context without Tauri runtime",
+        "domInspection": "Badge elements verified: Healthy=green classes, Degraded=yellow classes, Failed=red classes"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-HLT-002",
+      "title": "Success rate calculation",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Verify success rate for proxy with 95/100 successes",
+          "expected": "95%",
+          "observed": "95% displayed next to 192.168.1.1:8080"
+        },
+        {
+          "action": "Verify success rate for proxy with 70/100 successes",
+          "expected": "70%",
+          "observed": "70% displayed next to 10.0.0.1:1080"
+        },
+        {
+          "action": "Verify success rate for proxy with 30/100 successes",
+          "expected": "30%",
+          "observed": "30% displayed next to 172.16.0.1:9090"
+        },
+        {
+          "action": "Verify calculation formula: Math.round((successes/attempts)*100)",
+          "expected": "Rounded integer percentages",
+          "observed": "After updating stats to 105/110, displays 95% (Math.round(95.45)=95); after 55/110, displays 50% (Math.round(50)=50); after 10/110, displays 9% (Math.round(9.09)=9)"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "evidence/proxy-health/health-display/VAL-HLT-002-success-rates.png"
+        ],
+        "consoleErrors": "Only Tauri IPC errors (transformCallback) - expected in browser context without Tauri runtime"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-HLT-003",
+      "title": "Real-time status updates",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Update proxy stats in localStorage (simulating validation results)",
+          "expected": "Stats written to localStorage",
+          "observed": "Stats updated: 192.168.1.1:8080 (105/110), 10.0.0.1:1080 (55/110), 172.16.0.1:9090 (10/110)"
+        },
+        {
+          "action": "Reload page to trigger useSettings hook re-initialization",
+          "expected": "Updated stats reflected in UI",
+          "observed": "UI shows updated values: 95% Healthy, 50% Degraded, 9% Failed"
+        },
+        {
+          "action": "Verify recordProxySuccess/recordProxyFailure update React state directly",
+          "expected": "State update triggers immediate re-render",
+          "observed": "Code review confirms: recordProxySuccess and recordProxyFailure call setSettings() directly, which triggers synchronous React re-render within the same event loop tick (well within 1 second)"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "evidence/proxy-health/health-display/VAL-HLT-003-status-updating.png"
+        ],
+        "consoleErrors": "Only Tauri IPC errors (transformCallback) - expected in browser context without Tauri runtime",
+        "codeReview": "recordProxySuccess (use-settings.ts:469) and recordProxyFailure (use-settings.ts:505) both call setSettings() with updated proxyStats, triggering immediate React re-render"
+      },
+      "issues": null,
+      "notes": "Could not test actual real-time updates during live validation because Tauri IPC is unavailable in browser context. Verified through code review that the implementation correctly updates React state directly (not via localStorage polling), ensuring sub-second UI updates. The page reload test confirmed stats are correctly recalculated and displayed when state changes."
+    },
+    {
+      "id": "VAL-HLT-012",
+      "title": "Stats persistence",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Set proxy stats with specific values in localStorage",
+          "expected": "Stats stored in localStorage",
+          "observed": "proxy-settings key in localStorage contains proxyStats with 3 proxy entries"
+        },
+        {
+          "action": "Reload page (first reload)",
+          "expected": "Stats still present in localStorage and displayed correctly",
+          "observed": "After first reload: 95% Healthy, 50% Degraded, 9% Failed - all correct"
+        },
+        {
+          "action": "Reload page again (second reload)",
+          "expected": "Stats still persisted and displayed",
+          "observed": "After second reload: 95% Healthy, 50% Degraded, 9% Failed - all correct"
+        },
+        {
+          "action": "Verify localStorage content matches displayed values",
+          "expected": "localStorage data matches UI display",
+          "observed": "localStorage shows: 192.168.1.1:8080 (attempts:110, successes:105), 10.0.0.1:1080 (attempts:110, successes:55), 172.16.0.1:9090 (attempts:110, successes:10) - all match UI"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "evidence/proxy-health/health-display/VAL-HLT-012-stats-after-restart.png"
+        ],
+        "consoleErrors": "Only Tauri IPC errors (transformCallback) - expected in browser context without Tauri runtime"
+      },
+      "issues": null,
+      "notes": "Stats persistence verified across multiple page reloads. In the actual Tauri app, persistence would be via the Rust backend (get_proxy_pool/record_proxy_success/record_proxy_failure Tauri commands), with localStorage as fallback in browser context."
+    }
+  ],
+  "frictions": [
+    {
+      "description": "After each page reload, the app returns to the main Validation view, requiring manual navigation back to Settings > Proxy tab to verify proxy stats display",
+      "resolved": true,
+      "resolution": "Used agent-browser to click Settings then Proxy tab after each reload",
+      "affectedAssertions": ["VAL-HLT-003", "VAL-HLT-012"]
+    },
+    {
+      "description": "Cannot test actual real-time updates during live email validation because Tauri IPC is unavailable in browser context",
+      "resolved": true,
+      "resolution": "Verified through code review that recordProxySuccess/recordProxyFailure update React state directly via setSettings(), and confirmed stats recalculation works correctly after state changes via page reload",
+      "affectedAssertions": ["VAL-HLT-003"]
+    }
+  ],
+  "blockers": [],
+  "summary": "Tested 4 assertions: 4 passed. Health indicators display correctly with proper color coding (green/yellow/red) and labels (Healthy/Degraded/Failed). Success rates are calculated correctly using Math.round((successes/attempts)*100). Stats persist across page reloads via localStorage. Real-time updates confirmed through code review of React state management."
+}

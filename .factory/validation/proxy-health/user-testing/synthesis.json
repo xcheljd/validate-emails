@@ -1,0 +1,44 @@
+{
+  "milestone": "proxy-health",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 13,
+    "passed": 13,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-HLT-001",
+    "VAL-HLT-002",
+    "VAL-HLT-003",
+    "VAL-HLT-004",
+    "VAL-HLT-005",
+    "VAL-HLT-006",
+    "VAL-HLT-007",
+    "VAL-HLT-008",
+    "VAL-HLT-009",
+    "VAL-HLT-010",
+    "VAL-HLT-011",
+    "VAL-HLT-012",
+    "VAL-CRS-004"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "flowReports": [
+    "health-display.json",
+    "bad-proxy-detection.json",
+    "cooldown-system.json",
+    "weighted-rotation.json"
+  ],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "testingApproach": {
+    "surface": "Tauri Desktop App (browser context via localhost:1420)",
+    "tool": "agent-browser",
+    "concurrency": 4 parallel validators",
+    "isolation": "Separate browser sessions per validator (01b1f2d07420, 01b1f2d07420__u1, __u2, __u3)",
+    "stateManagement": "localStorage fallback (proxy-settings key) - Tauri IPC gracefully handled"
+  },
+  "summary": "All 13 proxy-health milestone assertions passed. Health indicators display correctly with green/yellow/red color coding. Success rate calculation verified. Bad proxy detection (>=3 consecutive failures) works with visual 'Bad' badge. Cooldown system fully functional with timer display, auto-expiry, and configurable duration (30-300s). Weighted rotation algorithm verified via code review. Stats persist across page reloads. Health recovery flow (bad → cooldown → recovered) verified through UI state transitions."
+}

@@ -1,0 +1,131 @@
+{
+  "groupId": "bad-proxy-detection",
+  "testedAt": "2026-03-27T12:00:00.000Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "browserSession": "01b1f2d07420__u1",
+    "storageKey": "proxy-settings",
+    "testProxies": ["192.168.1.1:8080", "10.0.0.1:1080", "172.16.0.1:9090"]
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-HLT-004",
+      "title": "Bad proxy detection",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Seed localStorage with 3 proxies: consecutiveFailures=2, 3, and 5",
+          "expected": "Proxy data stored in localStorage",
+          "observed": "Proxy data seeded successfully via eval"
+        },
+        {
+          "action": "Reload page and navigate to Settings > Proxy tab",
+          "expected": "Proxy list renders with 3 proxies showing health indicators",
+          "observed": "3 proxies displayed with correct health badges"
+        },
+        {
+          "action": "Verify 192.168.1.1:8080 (consecutiveFailures=2) has no Bad indicator",
+          "expected": "No 'Bad' badge shown",
+          "observed": "Text: '192.168.1.1:8080 80% Degraded' — no Bad badge"
+        },
+        {
+          "action": "Verify 10.0.0.1:1080 (consecutiveFailures=3) has Bad indicator",
+          "expected": "'Bad' badge displayed",
+          "observed": "Text: '10.0.0.1:1080 50% Degraded Bad' — Bad badge present"
+        },
+        {
+          "action": "Verify 172.16.0.1:9090 (consecutiveFailures=5) has Bad indicator",
+          "expected": "'Bad' badge displayed",
+          "observed": "Text: '172.16.0.1:9090 0% Failed Bad' — Bad badge present"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "evidence/proxy-health/bad-proxy-detection/VAL-HLT-004-bad-proxy-marked.png",
+          "evidence/proxy-health/bad-proxy-detection/VAL-HLT-004-005-bad-proxy-marked.png"
+        ],
+        "consoleErrors": "Only Tauri IPC errors ('Cannot read properties of undefined (reading transformCallback)') — expected in browser context without Tauri runtime",
+        "network": "N/A — localStorage-based state, no network requests for proxy health"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-HLT-005",
+      "title": "Bad proxy visual indicator",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "View proxy list on Settings > Proxy tab",
+          "expected": "Bad proxies show red 'Failed' badge or 'Bad' indicator",
+          "observed": "Bad proxies display a 'Bad' badge rendered as a red Badge component (bg-red-600/20 text-red-700) next to the health status badge"
+        },
+        {
+          "action": "Verify non-bad proxy does not show Bad indicator",
+          "expected": "192.168.1.1:8080 (consecutiveFailures=2) shows no Bad badge",
+          "observed": "Only shows '80% Degraded' health badge, no Bad indicator"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "evidence/proxy-health/bad-proxy-detection/VAL-HLT-005-bad-proxy-indicator.png",
+          "evidence/proxy-health/bad-proxy-detection/VAL-HLT-004-005-bad-proxy-marked.png"
+        ],
+        "consoleErrors": "Only Tauri IPC errors — expected in browser context",
+        "network": "N/A"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-HLT-006",
+      "title": "Failure counter reset",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Update 10.0.0.1:1080 stats via eval: consecutiveFailures reset to 0, successes incremented (5→6), attempts incremented (10→11)",
+          "expected": "localStorage updated with new stats",
+          "observed": "Stats updated successfully via eval"
+        },
+        {
+          "action": "Reload page and navigate to Settings > Proxy tab",
+          "expected": "Proxy list reflects updated stats",
+          "observed": "10.0.0.1:1080 now shows '55% Degraded' with no Bad badge"
+        },
+        {
+          "action": "Verify Bad indicator is gone for 10.0.0.1:1080",
+          "expected": "No 'Bad' badge displayed",
+          "observed": "Text: '10.0.0.1:1080 55% Degraded' — Bad badge removed"
+        },
+        {
+          "action": "Verify 172.16.0.1:9090 still shows Bad indicator (unchanged)",
+          "expected": "'Bad' badge still present",
+          "observed": "Text: '172.16.0.1:9090 0% Failed Bad' — Bad badge still present"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "evidence/proxy-health/bad-proxy-detection/VAL-HLT-006-counter-reset.png"
+        ],
+        "consoleErrors": "Only Tauri IPC errors — expected in browser context",
+        "network": "N/A"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Page reloads (due to eval-based localStorage updates) reset navigation state to the Validation view, requiring re-navigation to Settings > Proxy tab each time.",
+      "resolved": true,
+      "resolution": "Re-navigated to Settings > Proxy after each reload via snapshot + click.",
+      "affectedAssertions": ["VAL-HLT-006"]
+    },
+    {
+      "description": "Tauri IPC errors appear in console ('Cannot read properties of undefined (reading transformCallback)') because the app runs in a browser context without the Tauri runtime.",
+      "resolved": true,
+      "resolution": "Identified as expected behavior per user-testing.md documentation. Not related to the assertions being tested.",
+      "affectedAssertions": ["VAL-HLT-004", "VAL-HLT-005", "VAL-HLT-006"]
+    }
+  ],
+  "blockers": [],
+  "summary": "Tested 3 assertions: 3 passed. Bad proxy detection correctly identifies proxies with >=3 consecutive failures, shows red 'Bad' badge visually, and resets the indicator when consecutive failure counter returns to 0."
+}
