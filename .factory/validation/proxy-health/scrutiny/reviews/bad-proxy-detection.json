@@ -1,0 +1,26 @@
+{
+  "featureId": "bad-proxy-detection",
+  "reviewedAt": "2026-03-27T17:00:00.000Z",
+  "commitId": "a30df81",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean implementation of bad proxy detection and exclusion from rotation. The commit adds is_proxy_bad(), get_available_proxies(), has_available_proxies() methods, and modifies get_next_proxy(), get_proxy_for_email(), and get_proxy_by_domain() to exclude bad proxies (3+ consecutive failures). All three rotation modes (Manual, Automatic, PerDomain) are correctly handled. 14 new unit tests provide thorough coverage of the detection logic, threshold behavior, reset-on-success, and exclusion in all modes.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The task description listed 4 files as changed (settings.rs, proxy-list.tsx, settings-content.tsx, use-settings.ts) but the actual commit only changed settings.rs. The UI indicator work (isProxyBad in use-settings.ts, HealthIndicator with 'Bad' badge, proxy-list.tsx integration) was done in the prior proxy-health-tracking commit (d0eeefc). This mismatch in the task description doesn't affect the feature but indicates the task description was generated with imprecise file attribution.",
+      "evidence": "git show a30df81 --stat shows only settings.rs changed. git show d0eeefc --stat shows use-settings.ts, health-indicator.tsx, proxy-list.tsx changes."
+    },
+    {
+      "area": "conventions",
+      "observation": "The library/proxy-settings-conventions.md documents snake_case vs camelCase serialization patterns and the frontend hook pattern, but does not document the ProxyStats struct or the bad-proxy detection pattern (consecutive_failures threshold, is_bad() method). This is a common pattern now used across multiple proxy-health features that future workers would benefit from having documented.",
+      "evidence": "ProxyStats struct at settings.rs:236-246 with consecutive_failures field and is_bad() method at line 295-297. Used by proxy-health-tracking, bad-proxy-detection, and cooldown features."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Bad proxy detection feature passes review. The implementation correctly marks proxies as 'bad' after 3 consecutive failures, excludes them from all rotation modes (Manual, Automatic, PerDomain), and resets the counter on success. The UI 'Bad' badge was already implemented in the prior proxy-health-tracking commit. 14 new backend unit tests cover all rotation modes, threshold detection, reset behavior, and edge cases (all proxies bad, empty pool). All 128 Rust tests and 167 frontend tests pass."
+}

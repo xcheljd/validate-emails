@@ -1,0 +1,28 @@
+{
+  "featureId": "weighted-rotation",
+  "reviewedAt": "2026-03-27T16:45:00.000Z",
+  "commitId": "88237f7",
+  "transcriptSkeletonReviewed": false,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean implementation of weighted rotation algorithm for proxy selection. The code adds get_weight() to ProxyStats (returns 0 for cooldown, 50 for new, success_rate otherwise), select_weighted_proxy() using cumulative weight distribution, and modifies get_next_proxy() to use weighted selection when weights differ, falling back to round-robin when equal. 18 unit tests cover weight calculation, equal-weights detection, weighted selection distribution, and edge cases. All 162 tests pass including the 7 weighted-specific filtered tests.",
+    "issues": [
+      {
+        "file": "src-tauri/src/settings.rs",
+        "line": 11,
+        "severity": "non_blocking",
+        "description": "pseudo_random() uses SystemTime::now().subsec_nanos() which is not cryptographically random and can produce predictable sequences when called in rapid succession (e.g., within the same nanosecond). For proxy selection this is acceptable — true randomness is not required, only statistical weighting. However, if get_next_proxy() is called in a tight loop, the same proxy could be selected repeatedly. The test test_proxy_pool_weighted_selection_favors_higher_weight mitigates this by running 1000 iterations, suggesting adequate entropy in practice. No action required for the current use case."
+      },
+      {
+        "file": "src-tauri/src/settings.rs",
+        "line": 680,
+        "severity": "non_blocking",
+        "description": "When total_weight is 0 (all proxies have 0% success rate and none are in cooldown), select_weighted_proxy() falls back to returning available[0]. This is a reasonable fallback but means a consistently failing proxy always gets selected. An alternative would be to fall back to round-robin in this case. Not blocking since this edge case is unlikely in practice (bad proxies with 3+ consecutive failures are already excluded from available list)."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Weighted rotation implementation is correct and well-tested. The algorithm properly weights proxies by success rate, excludes cooldown proxies (weight 0), gives new proxies a neutral weight of 50, and falls back to round-robin when all weights are equal. 18 unit tests provide good coverage including statistical distribution verification. Both VAL-HLT-011 (higher success rate = more frequent selection) and VAL-CRS-004 (recovery flow integration via cooldown weight exclusion) are fulfilled. Two non-blocking observations noted about pseudo-random entropy in tight loops and the zero-total-weight fallback behavior."
+}

@@ -1,0 +1,34 @@
+{
+  "featureId": "proxy-cooldown-system",
+  "reviewedAt": "2026-03-27T16:45:00.000Z",
+  "commitId": "aad147c",
+  "transcriptSkeletonReviewed": false,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The cooldown system is well-implemented across the full stack. The Rust backend provides cooldown entry/exit logic with configurable duration, JSON persistence, and Tauri IPC commands. The frontend adds timer display, a 'Retry Now' bypass button, and a settings slider. 13 backend unit tests cover the core logic thoroughly. The implementation correctly uses lazy evaluation for auto-rejoin (cooldown expiry is checked on each availability query rather than requiring a background timer).",
+    "issues": [
+      {
+        "file": "src/hooks/use-settings.ts",
+        "line": 641,
+        "severity": "non_blocking",
+        "description": "File is missing a trailing newline (EOF without newline). AGENTS.md and standard conventions expect files to end with a newline."
+      },
+      {
+        "file": "src-tauri/src/settings.rs",
+        "line": 2580,
+        "severity": "non_blocking",
+        "description": "The bypass_cooldown test resets consecutive_failures to 0, which means the proxy is no longer 'bad' after bypass. This is by design (giving fresh start), but the interaction means 'is_proxy_bad' and 'is_proxy_in_cooldown' are not independent states — bypass clears both. This is fine behavior but worth noting for the VAL-HLT-006 assertion (failure counter reset): bypass achieves the same effect as a success."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "Missing trailing newline at EOF in use-settings.ts. The AGENTS.md doesn't explicitly mention the trailing newline convention, but it's a widely expected practice and some linters enforce it.",
+      "evidence": "src/hooks/use-settings.ts — git diff shows the file ends without a newline character (reported by diff as 'No newline at end of file')"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "The proxy-cooldown-system feature passes review. It fully implements all four assigned assertions (VAL-HLT-007 through VAL-HLT-010): cooldown entry on 3 consecutive failures with configurable duration (default 60s, range 30-300s), UI timer display with 1-second polling, automatic rejoin via lazy cooldown expiry check, and settings slider for configuration. The code is clean, well-tested (13 new backend tests), and properly integrated into both the Rust backend and React frontend. Two non-blocking issues noted: missing trailing newline in use-settings.ts and a minor design note about bypass clearing both cooldown and bad status."
+}

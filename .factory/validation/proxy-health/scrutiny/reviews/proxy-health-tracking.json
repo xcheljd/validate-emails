@@ -1,0 +1,51 @@
+{
+  "featureId": "proxy-health-tracking",
+  "reviewedAt": "2026-03-27T17:30:00.000Z",
+  "commitId": "d0eeefc",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation is well-structured and covers all required functionality. ProxyStats struct tracks attempts/successes/failures/consecutive_failures with correct health status thresholds (Healthy >90%, Degraded 50-90%, Failed <50%). The Rust backend provides 6 Tauri commands for stats management, the HealthIndicator React component renders status badges with appropriate colors, and stats persist via the settings file serialization. Code duplication exists in lib.rs (stats recording logic duplicated between validate_emails_bulk and revalidate_emails_bulk) but is non-blocking.",
+    "issues": [
+      {
+        "file": "src-tauri/src/lib.rs",
+        "line": 40,
+        "severity": "non_blocking",
+        "description": "Code duplication: the proxy stats recording block (iterating results, checking proxy_id, calling record_success/record_failure) is copy-pasted identically in both validate_emails_bulk and revalidate_emails_bulk. This should be extracted into a shared helper function to reduce maintenance burden and ensure consistency."
+      },
+      {
+        "file": "src-tauri/src/lib.rs",
+        "line": 40,
+        "severity": "non_blocking",
+        "description": "Stats recording acquires a write lock on settings AFTER validation completes but BEFORE returning results. This adds latency to the response for every validation call. Consider whether stats recording could be done asynchronously or with a lighter-weight mechanism, though for the current scale this is acceptable."
+      },
+      {
+        "file": "src/hooks/use-settings.ts",
+        "line": 415,
+        "severity": "non_blocking",
+        "description": "The recordProxySuccess and recordProxyFailure callbacks have empty dependency arrays []. This means they capture stale closures. If the settings object changes, the fallback localStorage logic reads the latest via getProxyFromStorage() which mitigates this, but the Tauri success path refreshes the entire proxy pool anyway. This is fine in practice but worth noting."
+      },
+      {
+        "file": "src-tauri/src/settings.rs",
+        "line": 207,
+        "severity": "non_blocking",
+        "description": "ProxyStats derives Default but new proxies start with 100% success rate (success_rate() returns 100 when attempts==0). This design choice is reasonable (neutral/optimistic for new proxies) but is a behavioral choice worth documenting, as it means a brand new proxy appears 'Healthy' before any validation runs."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The lib.rs stats recording pattern duplicates code between validate_emails_bulk and revalidate_emails_bulk. This is a recurring pattern in the codebase where validation commands share logic. The proxy-settings-conventions.md already documents the frontend hook pattern but doesn't cover backend code reuse patterns for Tauri commands.",
+      "evidence": "src-tauri/src/lib.rs:40-52 and src-tauri/src/lib.rs:88-100 — identical stats recording blocks"
+    },
+    {
+      "area": "conventions",
+      "observation": "New fields added to ProxyPool use the #[serde(default)] attribute for backward compatibility. This pattern is already documented in proxy-settings-conventions.md under 'Backward Compatibility Pattern'. The worker correctly followed this convention.",
+      "evidence": "src-tauri/src/settings.rs:302 — proxy_stats field uses #[serde(default)]"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Feature proxy-health-tracking PASSES review. The implementation correctly fulfills assertions VAL-HLT-001 (health status display with colored badges), VAL-HLT-002 (success rate calculation as percentage), VAL-HLT-003 (real-time status updates during validation via stats recording in lib.rs), and VAL-HLT-012 (stats persistence via serde serialization in settings file). Backend has 26 unit tests covering ProxyStats calculations, health thresholds, and persistence. Frontend has 13 tests covering HealthIndicator rendering for all status levels. Code duplication in lib.rs between the two validation commands is the only notable non-blocking issue."
+}

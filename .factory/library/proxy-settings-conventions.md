@@ -87,6 +87,46 @@ const [backendSettings, proxyPool] = await Promise.all([
 ]);
 ```
 
+## ProxyStats and Health Tracking
+
+### ProxyStats Struct
+
+Each proxy has associated `ProxyStats` tracking validation performance. Stats are stored in a `HashMap<String, ProxyStats>` keyed by proxy ID within `ProxyPool`.
+
+```rust
+pub struct ProxyStats {
+    pub attempts: u32,
+    pub successes: u32,
+    pub failures: u32,
+    pub consecutive_failures: u32,
+    pub last_failure: Option<u64>,    // Unix timestamp in milliseconds
+    pub cooldown_until: Option<u64>,  // Unix timestamp in milliseconds
+}
+```
+
+### Health Status Thresholds
+
+- **Healthy**: success_rate > 90% (green indicator)
+- **Degraded**: success_rate 50-90% (yellow indicator)
+- **Failed**: success_rate < 50% (red indicator)
+- **New proxy** (0 attempts): treated as Healthy with 100% success rate
+
+### Bad Proxy Detection
+
+A proxy is marked "bad" when `consecutive_failures >= 3`. Bad proxies are excluded from rotation in all modes (Manual, Automatic, Per-Domain). The counter resets to 0 on any success.
+
+### Cooldown System
+
+When a proxy is marked bad, it enters cooldown (configurable duration, default 60s, range 30-300s). Cooldown is checked lazily — `is_in_cooldown()` compares `now < cooldown_until` on each availability query, so no background timer is needed. `bypass_cooldown()` clears both cooldown and bad status.
+
+### Weighted Rotation
+
+In automatic rotation mode, proxy selection uses cumulative weight distribution:
+- Weight = success_rate (0-100) for proxies with stats
+- Weight = 50 for new proxies (no attempts)
+- Weight = 0 for proxies in cooldown
+- Falls back to round-robin when all weights are equal
+
 ## Tauri Commands
 
 ### Error Handling Pattern

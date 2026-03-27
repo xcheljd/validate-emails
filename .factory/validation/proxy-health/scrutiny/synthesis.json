@@ -1,0 +1,110 @@
+{
+  "milestone": "proxy-health",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "npm test",
+      "exitCode": 0,
+      "details": "167 tests passed across 19 test files"
+    },
+    "typecheck": {
+      "passed": false,
+      "command": "npm run build (tsc && vite build)",
+      "exitCode": 2,
+      "details": "TypeScript errors in test files are pre-existing (documented in proxy-core synthesis). Errors are in mock objects missing new ValidationResult fields — not introduced by proxy-health features."
+    },
+    "rustTest": {
+      "passed": true,
+      "command": "cargo test --manifest-path src-tauri/Cargo.toml --lib",
+      "exitCode": 0,
+      "details": "162 Rust tests passed (up from 85 in proxy-core milestone)"
+    },
+    "rustCheck": {
+      "passed": true,
+      "command": "cargo check --manifest-path src-tauri/Cargo.toml",
+      "exitCode": 0,
+      "details": "4 warnings for dead_code (foundational structs used by frontend via IPC) and 3 clippy suggestions in session.rs (pre-existing)"
+    },
+    "clippy": {
+      "passed": true,
+      "command": "cargo clippy --manifest-path src-tauri/Cargo.toml",
+      "exitCode": 0,
+      "details": "7 warnings — 4 dead_code (same as cargo check), 3 clippy suggestions in session.rs (redundant_closure, needless_borrow). All pre-existing, none in proxy-health code."
+    }
+  },
+  "reviewsSummary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "nonBlockingIssues": [
+    {
+      "featureId": "proxy-health-tracking",
+      "severity": "non_blocking",
+      "description": "Code duplication in lib.rs: proxy stats recording block is copy-pasted between validate_emails_bulk and revalidate_emails_bulk. Should be extracted to a shared helper function."
+    },
+    {
+      "featureId": "proxy-health-tracking",
+      "severity": "non_blocking",
+      "description": "Stats recording acquires write lock on settings after validation but before returning results, adding latency to every validation call. Acceptable at current scale."
+    },
+    {
+      "featureId": "proxy-health-tracking",
+      "severity": "non_blocking",
+      "description": "recordProxySuccess and recordProxyFailure callbacks have empty dependency arrays [] in use-settings.ts, creating stale closures. Mitigated by getProxyFromStorage() reading latest state."
+    },
+    {
+      "featureId": "proxy-health-tracking",
+      "severity": "non_blocking",
+      "description": "New proxies start with 100% success rate (0 attempts) making them appear 'Healthy'. Reasonable optimistic default but worth documenting."
+    },
+    {
+      "featureId": "proxy-cooldown-system",
+      "severity": "non_blocking",
+      "description": "bypass_cooldown resets both cooldown and bad status (consecutive_failures = 0). This means bypass achieves the same effect as a success for VAL-HLT-006 (failure counter reset)."
+    },
+    {
+      "featureId": "weighted-rotation",
+      "severity": "non_blocking",
+      "description": "pseudo_random() uses SystemTime::now().subsec_nanos() which could produce predictable sequences in tight loops. Adequate entropy in practice per distribution tests."
+    },
+    {
+      "featureId": "weighted-rotation",
+      "severity": "non_blocking",
+      "description": "When total_weight is 0 (all proxies failed but not bad), select_weighted_proxy() returns available[0]. Could fall back to round-robin instead. Edge case unlikely in practice since bad proxies are already excluded."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Added ProxyStats and Health Tracking section to proxy-settings-conventions.md documenting ProxyStats struct, health status thresholds, bad proxy detection (consecutive_failures >= 3), cooldown system (lazy evaluation, configurable duration), and weighted rotation algorithm (cumulative weight distribution, neutral weight for new proxies)",
+      "sourceFeature": "bad-proxy-detection (observation), proxy-cooldown-system, weighted-rotation"
+    },
+    {
+      "target": "code",
+      "description": "Fixed missing trailing newline in use-settings.ts (EOF without newline)",
+      "sourceFeature": "proxy-cooldown-system"
+    }
+  ],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [
+    {
+      "observation": "Backend code reuse pattern for Tauri commands (lib.rs stats recording duplication)",
+      "reason": "Too generic to be actionable as a convention. The duplication is a code quality issue specific to lib.rs, not a pattern that needs documentation for future workers."
+    },
+    {
+      "observation": "Worker correctly followed #[serde(default)] backward compatibility pattern",
+      "reason": "Already documented in proxy-settings-conventions.md under 'Backward Compatibility Pattern'. No update needed."
+    },
+    {
+      "observation": "Task description file attribution mismatch (UI changes attributed to bad-proxy-detection but actually in proxy-health-tracking)",
+      "reason": "Internal task generation issue, not a convention or pattern relevant to future workers."
+    }
+  ],
+  "previousRound": null,
+  "summary": "All 4 proxy-health features passed review with no blocking issues. The implementation adds comprehensive health tracking (ProxyStats with success/failure counters), bad proxy detection (3 consecutive failures threshold), cooldown system (configurable 30-300s with lazy evaluation), and weighted rotation (cumulative weight distribution). Test coverage is strong: 162 Rust tests (77 new since proxy-core) and 167 frontend tests. TypeScript build errors remain pre-existing and non-blocking. Code quality is high across all features with consistent patterns. Non-blocking issues include lib.rs code duplication and minor edge cases in weighted rotation fallback behavior."
+}
