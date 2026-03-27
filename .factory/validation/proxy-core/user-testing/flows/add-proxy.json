@@ -1,0 +1,98 @@
+{
+  "groupId": "add-proxy",
+  "testedAt": "2026-03-26T20:55:00Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "testIpRange": "10.0.10.X",
+    "sessionId": "c84c94062fed__add",
+    "credentials": "none (local app)"
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-CFG-002",
+      "title": "Add single proxy",
+      "status": "blocked",
+      "steps": [
+        { "action": "Navigate to http://localhost:1420", "expected": "App loads", "observed": "App loaded successfully" },
+        { "action": "Click Settings in sidebar", "expected": "Settings page shown", "observed": "Settings page displayed with tabs" },
+        { "action": "Click Proxy tab", "expected": "Proxy settings shown", "observed": "Proxy tab displayed with enable toggle, rotation mode, and proxy list" },
+        { "action": "Toggle Enable Proxy ON", "expected": "Proxy enabled, inputs enabled", "observed": "Toggle switched to ON, Add/Bulk buttons became active" },
+        { "action": "Type 10.0.10.10:8080 in proxy input", "expected": "Input field populated", "observed": "Input field populated correctly" },
+        { "action": "Click Add button", "expected": "Proxy added to list with host:port shown", "observed": "Proxy NOT added - list shows '0 configured'" }
+      ],
+      "evidence": {
+        "screenshots": ["proxy-core/add-proxy/VAL-CFG-002-proxy-added.png"],
+        "consoleErrors": "Cannot read properties of undefined (reading 'transformCallback') - Tauri invoke API not available in browser context",
+        "network": "N/A - Tauri IPC not available in browser"
+      },
+      "issues": "BLOCKED: Proxy add functionality requires Tauri runtime (window.__TAURI__) which is only available in the Tauri desktop app WebView, not in a regular browser accessing the Vite dev server. The handleAddProxy function calls invoke('add_proxy') which fails silently when Tauri is not available."
+    },
+    {
+      "id": "VAL-CFG-003",
+      "title": "Add proxy with credentials",
+      "status": "blocked",
+      "steps": [
+        { "action": "Navigate to Proxy settings", "expected": "Proxy tab visible", "observed": "Cannot proceed - prerequisite VAL-CFG-002 blocked" }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "Same Tauri runtime issue as VAL-CFG-002",
+        "network": "N/A"
+      },
+      "issues": "BLOCKED: Same Tauri runtime dependency as VAL-CFG-002. Cannot test proxy with credentials (socks5://testuser:testpass@10.0.10.11:1080) without working Tauri backend connection."
+    },
+    {
+      "id": "VAL-CFG-004",
+      "title": "Add multiple proxies",
+      "status": "blocked",
+      "steps": [
+        { "action": "Navigate to Proxy settings", "expected": "Proxy tab visible", "observed": "Cannot proceed - prerequisite VAL-CFG-002 blocked" }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "Same Tauri runtime issue as VAL-CFG-002",
+        "network": "N/A"
+      },
+      "issues": "BLOCKED: Same Tauri runtime dependency. Bulk add functionality requires invoke('add_proxy') for each proxy."
+    },
+    {
+      "id": "VAL-CFG-005",
+      "title": "Invalid proxy handling",
+      "status": "blocked",
+      "steps": [
+        { "action": "Navigate to Proxy settings", "expected": "Proxy tab visible", "observed": "Cannot proceed - prerequisite VAL-CFG-002 blocked" }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "Same Tauri runtime issue as VAL-CFG-002",
+        "network": "N/A"
+      },
+      "issues": "BLOCKED: Same Tauri runtime dependency. Note: Frontend validation in proxy-list.tsx parseProxyString() should work in browser, but persistence requires Tauri."
+    },
+    {
+      "id": "VAL-CFG-006",
+      "title": "Duplicate proxy deduplication",
+      "status": "blocked",
+      "steps": [
+        { "action": "Navigate to Proxy settings", "expected": "Proxy tab visible", "observed": "Cannot proceed - prerequisite VAL-CFG-002 blocked" }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "Same Tauri runtime issue as VAL-CFG-002",
+        "network": "N/A"
+      },
+      "issues": "BLOCKED: Same Tauri runtime dependency. Note: Frontend duplicate check in handleAddProxy should work, but cannot verify without persistence."
+    }
+  ],
+  "frictions": [],
+  "blockers": [
+    {
+      "description": "Tauri desktop app not accessible for automated testing. The proxy add/delete/update functionality requires Tauri's invoke() IPC mechanism which only works in the Tauri WebView, not in a regular browser. Testing via Chrome connecting to http://localhost:1420 (Vite dev server) does not have access to window.__TAURI__.",
+      "affectedAssertions": ["VAL-CFG-002", "VAL-CFG-003", "VAL-CFG-004", "VAL-CFG-005", "VAL-CFG-006"],
+      "quickFixAttempted": "Tried clicking Add button - console shows 'Cannot read properties of undefined (reading transformCallback)' errors. Verified Tauri app process is running (PID 67733) but it was not launched with --remote-debugging-port flag for CDP connection.",
+      "resolution": "To test these assertions, the Tauri desktop app must be launched with remote debugging enabled (e.g., on macOS: open -a 'tauri-app' --args --remote-debugging-port=9222). Then agent-browser can connect via CDP and test the full Tauri functionality."
+    }
+  ],
+  "summary": "Tested 5 assertions: 0 passed, 0 failed, 5 blocked. All proxy add operations require Tauri runtime which is not available when testing via browser connecting to Vite dev server. The Tauri desktop app is running but was not launched with remote debugging enabled for CDP connection."
+}

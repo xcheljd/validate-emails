@@ -1,0 +1,52 @@
+{
+  "milestone": "proxy-core",
+  "round": 1,
+  "status": "fail",
+  "assertionsSummary": {
+    "total": 18,
+    "passed": 6,
+    "failed": 12,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-CFG-001",
+    "VAL-CFG-009",
+    "VAL-CFG-010",
+    "VAL-CRS-002",
+    "VAL-CRS-005",
+    "VAL-CRS-006"
+  ],
+  "failedAssertions": [
+    { "id": "VAL-CFG-002", "reason": "Blocked: Tauri IPC (window.__TAURI__) not available in browser context - proxy add requires Tauri desktop app" },
+    { "id": "VAL-CFG-003", "reason": "Blocked: Tauri IPC (window.__TAURI__) not available in browser context - proxy add requires Tauri desktop app" },
+    { "id": "VAL-CFG-004", "reason": "Blocked: Tauri IPC (window.__TAURI__) not available in browser context - proxy add requires Tauri desktop app" },
+    { "id": "VAL-CFG-005", "reason": "Blocked: Tauri IPC (window.__TAURI__) not available in browser context - proxy add requires Tauri desktop app" },
+    { "id": "VAL-CFG-006", "reason": "Blocked: Tauri IPC (window.__TAURI__) not available in browser context - proxy add requires Tauri desktop app" },
+    { "id": "VAL-CFG-007", "reason": "Blocked: Tauri IPC (window.__TAURI__) not available in browser context - proxy edit requires Tauri desktop app" },
+    { "id": "VAL-CFG-008", "reason": "Blocked: Tauri IPC (window.__TAURI__) not available in browser context - proxy delete requires Tauri desktop app" },
+    { "id": "VAL-CFG-011", "reason": "Blocked: Tauri IPC not available - rotation mode selection verified in UI but behavior cannot be tested without working backend" },
+    { "id": "VAL-CFG-012", "reason": "Blocked: Tauri IPC not available - rotation mode selection verified in UI but behavior cannot be tested without working backend" },
+    { "id": "VAL-CFG-013", "reason": "Blocked: Tauri IPC not available - per-domain UI verified in VAL-CRS-006 but full flow requires working backend" },
+    { "id": "VAL-CFG-014", "reason": "Blocked: Tauri IPC not available - per-domain UI verified but fallback behavior requires working backend" },
+    { "id": "VAL-CRS-001", "reason": "Blocked: Tauri IPC not available - proxy add/update/delete operations fail in web dev mode because use-settings.ts calls Tauri invoke without fallback" }
+  ],
+  "blockedAssertions": [],
+  "appliedUpdates": [
+    { "target": "user-testing.md", "description": "Added Flow Validator Guidance sections for Settings UI and Validation Dashboard surfaces with isolation rules and test data conventions", "source": "setup" }
+  ],
+  "previousRound": null,
+  "rootCauseAnalysis": {
+    "issue": "Tauri IPC not available in browser testing context",
+    "description": "The proxy management features (add/edit/delete proxies) require Tauri's invoke() IPC mechanism which only works in the Tauri desktop WebView, not when accessing the app via web browser at localhost:1420. The use-settings.ts functions call Tauri invoke without try-catch fallback for web dev mode.",
+    "affectedAssertions": 12,
+    "suggestedFix": "Either (a) add try-catch fallback in use-settings.ts proxy functions to use localStorage in dev mode, or (b) use Tauri's WebDriver testing framework for proper desktop app testing"
+  },
+  "uiComponentsVerified": [
+    "Proxy tab navigation works correctly",
+    "Enable/disable toggle functions properly",
+    "Rotation mode selector (Manual, Automatic, Per-Domain) displays correctly",
+    "Per-domain assignment UI renders with Gmail, Yahoo, Hotmail dropdowns",
+    "Settings persist via localStorage correctly",
+    "Proxy list displays configured proxies correctly"
+  ]
+}

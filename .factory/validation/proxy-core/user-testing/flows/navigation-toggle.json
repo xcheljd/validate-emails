@@ -1,0 +1,72 @@
+{
+  "groupId": "navigation-toggle",
+  "testedAt": "2026-03-26T00:00:00.000Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "sessionId": "c84c94062fed__nav",
+    "uniqueTestData": true
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-CFG-001",
+      "title": "Proxy tab navigation",
+      "status": "pass",
+      "steps": [
+        { "action": "Navigate to http://localhost:1420", "expected": "App loads with sidebar visible", "observed": "App loaded with sidebar showing Settings button" },
+        { "action": "Click Settings button", "expected": "Settings panel opens with tabs", "observed": "Settings panel opened with Validation, History, Proxy tabs" },
+        { "action": "Click Proxy tab", "expected": "Proxy settings UI displayed", "observed": "Proxy tab displayed with enable/disable toggle, rotation mode selector, and proxy list section" }
+      ],
+      "evidence": {
+        "screenshots": ["proxy-core/navigation-toggle/VAL-CFG-001-proxy-tab-visible.png"],
+        "consoleErrors": "Cannot read properties of undefined (reading 'transformCallback') - Tauri backend issue, not UI issue",
+        "network": "N/A - local app"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-CFG-009",
+      "title": "Enable proxy toggle ON",
+      "status": "pass",
+      "steps": [
+        { "action": "Click Enable Proxy switch", "expected": "Toggle switches to ON state, fields become enabled", "observed": "Toggle switched to checked state, Rotation Mode and Proxy List fields became enabled" }
+      ],
+      "evidence": {
+        "screenshots": ["proxy-core/navigation-toggle/VAL-CFG-009-toggle-on.png"],
+        "consoleErrors": "Cannot read properties of undefined (reading 'transformCallback') - Tauri backend issue",
+        "network": "N/A - local app"
+      },
+      "issues": "Notification 'Failed to update proxy settings' appeared - Tauri backend not fully configured for proxy settings persistence, but UI behavior is correct"
+    },
+    {
+      "id": "VAL-CFG-010",
+      "title": "Enable proxy toggle OFF",
+      "status": "pass",
+      "steps": [
+        { "action": "Click Enable Proxy switch again", "expected": "Toggle switches to OFF state, fields become disabled", "observed": "Toggle switched to unchecked state, Rotation Mode and Proxy List fields became disabled" }
+      ],
+      "evidence": {
+        "screenshots": ["proxy-core/navigation-toggle/VAL-CFG-010-toggle-off.png"],
+        "consoleErrors": "Cannot read properties of undefined (reading 'transformCallback') - Tauri backend issue",
+        "network": "N/A - local app"
+      },
+      "issues": "Notification 'Failed to update proxy settings' appeared - Tauri backend not fully configured for proxy settings persistence, but UI behavior is correct"
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Console errors related to Tauri transformCallback appear when interacting with proxy settings - indicates backend integration may not be fully complete",
+      "resolved": false,
+      "resolution": "Not resolved - this is a backend issue, not a UI testing issue. The UI behavior is correct.",
+      "affectedAssertions": ["VAL-CFG-009", "VAL-CFG-010"]
+    },
+    {
+      "description": "Notification 'Failed to update proxy settings' appears when toggling proxy on/off - settings may not persist across sessions",
+      "resolved": false,
+      "resolution": "Not resolved - this is a backend persistence issue. The UI toggle works correctly.",
+      "affectedAssertions": ["VAL-CFG-009", "VAL-CFG-010"]
+    }
+  ],
+  "blockers": [],
+  "summary": "Tested 3 assertions: 3 passed. All UI elements are present and functional. Console errors and notifications indicate Tauri backend integration may need attention, but the UI behavior matches specifications. The proxy tab displays correctly with enable/disable toggle, rotation mode selector (Manual, Automatic, Per-Domain), and proxy list section. Toggle correctly enables/disables related fields."
+}

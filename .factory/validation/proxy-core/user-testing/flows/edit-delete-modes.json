@@ -1,0 +1,173 @@
+{
+  "groupId": "edit-delete-modes",
+  "testedAt": "2026-03-26T21:10:00Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "testIpRange": "10.0.20.X",
+    "sessionId": "c84c94062fed__edit",
+    "credentials": "none (local app)"
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-CFG-007",
+      "title": "Edit proxy",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy settings UI displayed",
+          "observed": "UI displayed but Tauri backend not connected"
+        },
+        {
+          "action": "Enable proxy toggle",
+          "expected": "Proxy controls enabled",
+          "observed": "Toggle switched but proxy add functionality not working"
+        },
+        {
+          "action": "Add test proxy 10.0.20.10:8080",
+          "expected": "Proxy added to list",
+          "observed": "Proxy not persisted - list remains empty (0 configured)"
+        },
+        {
+          "action": "Click edit button on proxy",
+          "expected": "Edit dialog opens",
+          "observed": "Could not test - no proxy appeared in list"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-core/edit-delete-modes/initial-proxy-tab.png",
+          "proxy-core/edit-delete-modes/proxy-not-adding.png"
+        ],
+        "consoleErrors": "TypeError: Cannot read properties of undefined (reading 'invoke') - window.__TAURI__ is undefined",
+        "network": "N/A - Tauri invoke calls failing"
+      },
+      "issues": "Tauri backend integration broken - frontend cannot communicate with Rust backend via invoke()"
+    },
+    {
+      "id": "VAL-CFG-008",
+      "title": "Delete proxy",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy settings UI displayed",
+          "observed": "UI displayed but Tauri backend not connected"
+        },
+        {
+          "action": "Attempt to add proxy for deletion test",
+          "expected": "Proxy added to list",
+          "observed": "Proxy not persisted - backend integration broken"
+        },
+        {
+          "action": "Click delete button and confirm dialog",
+          "expected": "Proxy removed from list",
+          "observed": "Could not test - no proxy appeared in list to delete"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-core/edit-delete-modes/initial-proxy-tab.png",
+          "proxy-core/edit-delete-modes/proxy-not-adding.png"
+        ],
+        "consoleErrors": "TypeError: Cannot read properties of undefined (reading 'invoke')",
+        "network": "N/A"
+      },
+      "issues": "Cannot test deletion without ability to add proxies - blocked by backend integration issue"
+    },
+    {
+      "id": "VAL-CFG-011",
+      "title": "Rotation mode - Manual",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy settings UI displayed",
+          "observed": "UI displayed with Manual mode already selected"
+        },
+        {
+          "action": "Verify Manual mode is selected",
+          "expected": "Manual mode option shows selected",
+          "observed": "Manual mode selected in UI, but backend not connected to verify behavior"
+        },
+        {
+          "action": "Test proxy selection behavior",
+          "expected": "Proxy only changes on manual selection",
+          "observed": "Could not verify - no proxies can be added due to backend issue"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-core/edit-delete-modes/initial-proxy-tab.png"
+        ],
+        "consoleErrors": "TypeError: Cannot read properties of undefined (reading 'invoke')",
+        "network": "N/A"
+      },
+      "issues": "UI shows Manual mode but cannot verify actual behavior without working backend integration"
+    },
+    {
+      "id": "VAL-CFG-012",
+      "title": "Rotation mode - Automatic",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy settings UI displayed",
+          "observed": "UI displayed with rotation mode dropdown"
+        },
+        {
+          "action": "Select Automatic mode",
+          "expected": "Automatic mode selected",
+          "observed": "Could not test - dropdown interaction requires working backend to persist selection"
+        },
+        {
+          "action": "Run validation with multiple proxies",
+          "expected": "Proxies rotate through pool",
+          "observed": "Could not test - cannot add proxies due to backend issue"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-core/edit-delete-modes/initial-proxy-tab.png"
+        ],
+        "consoleErrors": "TypeError: Cannot read properties of undefined (reading 'invoke')",
+        "network": "N/A"
+      },
+      "issues": "Cannot test rotation without ability to add multiple proxies and working backend integration"
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Tauri app running with --remote-debugging-port but agent-browser cannot connect via CDP to port 9222",
+      "resolved": false,
+      "resolution": "Attempted to connect via web URL (localhost:1420) instead, which worked for UI viewing but Tauri backend was not connected",
+      "affectedAssertions": ["VAL-CFG-007", "VAL-CFG-008", "VAL-CFG-011", "VAL-CFG-012"]
+    },
+    {
+      "description": "Console shows repeated errors: 'TypeError: Cannot read properties of undefined (reading 'invoke')' - window.__TAURI__ is undefined",
+      "resolved": false,
+      "resolution": "Not resolved - this is a fundamental integration issue between frontend and Tauri backend",
+      "affectedAssertions": ["VAL-CFG-007", "VAL-CFG-008", "VAL-CFG-011", "VAL-CFG-012"]
+    },
+    {
+      "description": "Adding proxies via UI does not persist them - list count remains at 0 even after successful Add button click",
+      "resolved": false,
+      "resolution": "Not resolved - related to Tauri invoke() not working",
+      "affectedAssertions": ["VAL-CFG-007", "VAL-CFG-008"]
+    }
+  ],
+  "blockers": [
+    {
+      "description": "Tauri backend integration is broken - frontend cannot invoke Tauri commands (window.__TAURI__ is undefined). This prevents all proxy management functionality (add, edit, delete, mode changes) from working.",
+      "affectedAssertions": ["VAL-CFG-007", "VAL-CFG-008", "VAL-CFG-011", "VAL-CFG-012"],
+      "quickFixAttempted": "Attempted to reload page, reconnect browser session, set localStorage directly - none resolved the Tauri integration issue"
+    },
+    {
+      "description": "Agent-browser cannot connect to running Tauri app via CDP port 9222 even though process is running with --remote-debugging-port flag",
+      "affectedAssertions": ["VAL-CFG-007", "VAL-CFG-008", "VAL-CFG-011", "VAL-CFG-012"],
+      "quickFixAttempted": "Tried agent-browser connect 9222, auto-connect, and opening web URL directly - web URL worked for UI but not for Tauri integration"
+    }
+  ],
+  "summary": "Tested 4 assertions: 0 passed, 0 failed, 4 blocked. All assertions blocked due to Tauri backend integration issue - window.__TAURI__ is undefined causing all invoke() calls to fail. UI loads and displays correctly, but no proxy management functionality works because frontend cannot communicate with Rust backend."
+}

@@ -1,0 +1,103 @@
+{
+  "groupId": "per-domain",
+  "testedAt": "2026-03-26T21:10:00Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "testIpRange": "10.0.30.X",
+    "sessionId": "c84c94062fed__domain"
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-CFG-013",
+      "title": "Rotation mode - Per-domain",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy settings UI visible with enable toggle, rotation mode selector, and proxy list",
+          "observed": "Proxy settings UI visible with enable toggle, rotation mode selector (Manual, Automatic, Per-Domain options), but no proxy list rendered"
+        },
+        {
+          "action": "Enable proxy toggle",
+          "expected": "Toggle switches to ON, form fields become enabled",
+          "observed": "Toggle switched to ON (checked state confirmed in snapshot), rotation mode dropdown and proxy input field enabled"
+        },
+        {
+          "action": "Add proxy 10.0.30.10:8080",
+          "expected": "Proxy added to list, appears in proxy pool",
+          "observed": "Input field filled correctly, Add button clicked, but proxy not appearing in list due to backend IPC failure"
+        },
+        {
+          "action": "Select Per-Domain rotation mode",
+          "expected": "Per-Domain mode selected, domain assignment UI appears",
+          "observed": "Not tested - prerequisite blocked (no proxies available to assign)"
+        },
+        {
+          "action": "Assign proxies to Gmail, Yahoo, Hotmail",
+          "expected": "Domain assignments saved, proxy shown for each domain",
+          "observed": "Not tested - prerequisite blocked"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-core/per-domain/initial-proxy-state.png",
+          "proxy-core/per-domain/after-add-attempt.png"
+        ],
+        "consoleErrors": "Cannot read properties of undefined (reading 'transformCallback') - Tauri IPC invoke not available in browser context",
+        "network": "N/A - IPC calls failing before network layer"
+      },
+      "issues": "BLOCKED: Tauri backend IPC commands (add_proxy, assign_domain_proxy) require Tauri desktop app context. When accessing app via web browser at localhost:1420, Tauri API invoke() returns undefined, causing all proxy management operations to fail with 'Cannot read properties of undefined (reading 'transformCallback')' error."
+    },
+    {
+      "id": "VAL-CFG-014",
+      "title": "Per-domain fallback",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Configure Per-Domain mode with Gmail assigned to proxy A",
+          "expected": "Gmail domain shows assigned proxy",
+          "observed": "Not tested - prerequisite blocked by VAL-CFG-013 (cannot add proxies)"
+        },
+        {
+          "action": "Validate email from unassigned domain",
+          "expected": "Unassigned domain uses default proxy or rotation",
+          "observed": "Not tested - prerequisite blocked"
+        }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "Same as VAL-CFG-013 - Tauri IPC not available",
+        "network": "N/A"
+      },
+      "issues": "BLOCKED: Dependent on VAL-CFG-013 which is blocked by Tauri IPC unavailability in browser context"
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Tauri apps require desktop app context for IPC - web browser access bypasses Tauri runtime",
+      "resolved": false,
+      "resolution": "Attempted to connect via CDP to running Tauri app with --remote-debugging-port=9222, but Tauri CLI does not support passing this flag directly to the webview",
+      "affectedAssertions": ["VAL-CFG-013", "VAL-CFG-014"]
+    },
+    {
+      "description": "Per-Domain Assignment component exists in codebase (per-domain-assignment.tsx) but only renders when rotationMode is 'perDomain' and proxies exist - cannot verify UI without working backend",
+      "resolved": false,
+      "resolution": "N/A - blocked by IPC issue",
+      "affectedAssertions": ["VAL-CFG-013", "VAL-CFG-014"]
+    }
+  ],
+  "blockers": [
+    {
+      "description": "Tauri IPC invoke() returns undefined when app is accessed via web browser instead of Tauri desktop context. The app uses Tauri commands (add_proxy, update_proxy_pool_config, assign_domain_proxy) which require the Tauri runtime to function. agent-browser cannot test Tauri apps through web browser access.",
+      "affectedAssertions": ["VAL-CFG-013", "VAL-CFG-014"],
+      "quickFixAttempted": "1) Tried connecting to Tauri app via CDP port 9222 - Tauri CLI does not support --remote-debugging-port flag. 2) Tried launching Tauri binary directly with --remote-debugging-port - port not exposed. 3) Verified all Tauri IPC calls fail with 'Cannot read properties of undefined (reading 'transformCallback')' error."
+    },
+    {
+      "description": "Alternative testing approach needed: Tauri apps require either (a) native OS automation tools, (b) Tauri's built-in testing framework with WebDriver, or (c) mocking the Tauri IPC layer for browser-based testing",
+      "affectedAssertions": ["VAL-CFG-013", "VAL-CFG-014"],
+      "quickFixAttempted": "None - requires infrastructure changes beyond validator scope"
+    }
+  ],
+  "summary": "Tested 2 assertions: 0 passed, 0 failed, 2 blocked. Both assertions are blocked by fundamental infrastructure limitation: Tauri apps cannot be tested via web browser automation because the Tauri IPC layer (window.__TAURI__) is not available outside the Tauri desktop app context. The per-domain assignment UI code exists and appears correctly implemented (per-domain-assignment.tsx with SUPPORTED_DOMAINS for gmail.com, yahoo.com, hotmail.com), but cannot be exercised through agent-browser. Recommendation: Use Tauri's WebDriver testing framework or implement a mock IPC layer for browser-based testing."
+}
