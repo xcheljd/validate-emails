@@ -397,6 +397,40 @@ fn default_cooldown_duration() -> u64 {
     60
 }
 
+/// Information about a failed proxy for the all-proxies-failed state
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedProxyInfo {
+    /// Proxy ID (host:port)
+    pub id: String,
+    /// Whether the proxy is marked as "bad" (3 consecutive failures)
+    pub is_bad: bool,
+    /// Remaining cooldown time in seconds (0 if not in cooldown)
+    pub remaining_cooldown_secs: u64,
+    /// Number of consecutive failures
+    pub consecutive_failures: u32,
+    /// Success rate percentage (0-100)
+    pub success_rate: u32,
+}
+
+/// State returned when all proxies are unavailable
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AllProxiesFailedState {
+    /// List of all proxies with their failure status
+    pub failed_proxies: Vec<FailedProxyInfo>,
+    /// Whether proxy support is enabled
+    pub proxy_enabled: bool,
+    /// Total number of proxies configured
+    pub total_proxies: usize,
+    /// Number of proxies that are bad (3+ consecutive failures)
+    pub bad_count: usize,
+    /// Number of proxies in cooldown
+    pub cooldown_count: usize,
+    /// The nearest cooldown expiry time in seconds (0 if none in cooldown)
+    pub nearest_cooldown_secs: u64,
+}
+
 impl ProxyPool {
     /// Create a new empty proxy pool
     pub fn new() -> Self {
@@ -617,6 +651,60 @@ impl ProxyPool {
     /// Check if there are any available (non-bad, not in cooldown) proxies
     pub fn has_available_proxies(&self) -> bool {
         self.proxies.iter().any(|p| self.is_proxy_available(&p.id()))
+    }
+
+    /// Check if all proxies have failed (all are either bad or in cooldown)
+    /// Returns true if proxy is enabled, has proxies configured, but none are available
+    pub fn all_proxies_failed(&self) -> bool {
+        self.enabled && !self.proxies.is_empty() && !self.has_available_proxies()
+    }
+
+    /// Get the detailed state for when all proxies have failed
+    /// Returns None if not in all-proxies-failed state
+    pub fn get_all_proxies_failed_state(&self) -> Option<AllProxiesFailedState> {
+        if !self.all_proxies_failed() {
+            return None;
+        }
+
+        let failed_proxies: Vec<FailedProxyInfo> = self.proxies
+            .iter()
+            .map(|p| {
+                let id = p.id();
+                let stats = self.get_stats(&id);
+                FailedProxyInfo {
+                    id: id.clone(),
+                    is_bad: stats.is_bad(),
+                    remaining_cooldown_secs: stats.remaining_cooldown_secs(),
+                    consecutive_failures: stats.consecutive_failures,
+                    success_rate: stats.success_rate(),
+                }
+            })
+            .collect();
+
+        let bad_count = failed_proxies.iter().filter(|p| p.is_bad).count();
+        let cooldown_count = failed_proxies.iter().filter(|p| p.remaining_cooldown_secs > 0).count();
+        
+        // Find the nearest cooldown expiry
+        let nearest_cooldown_secs = failed_proxies
+            .iter()
+            .filter(|p| p.remaining_cooldown_secs > 0)
+            .map(|p| p.remaining_cooldown_secs)
+            .min()
+            .unwrap_or(0);
+
+        Some(AllProxiesFailedState {
+            failed_proxies,
+            proxy_enabled: self.enabled,
+            total_proxies: self.proxies.len(),
+            bad_count,
+            cooldown_count,
+            nearest_cooldown_secs,
+        })
+    }
+
+    /// Check if proxy is enabled but no proxies are configured
+    pub fn no_proxies_configured(&self) -> bool {
+        self.enabled && self.proxies.is_empty()
     }
 
     /// Get the weight for a specific proxy (used for weighted rotation)
@@ -1112,6 +1200,68 @@ pub async fn set_cooldown_duration(
     let mut settings = state.settings.write().await;
     settings.proxy_pool.set_cooldown_duration(duration_secs);
     Ok(())
+}
+
+// =====================
+// All Proxies Failed Detection Commands
+// =====================
+
+/// Check if all proxies have failed (all are either bad or in cooldown)
+#[tauri::command]
+pub async fn check_all_proxies_failed(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<bool, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.proxy_pool.all_proxies_failed())
+}
+
+/// Get detailed state when all proxies have failed
+/// Returns None if not in all-proxies-failed state
+#[tauri::command]
+pub async fn get_all_proxies_failed_state(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<Option<AllProxiesFailedState>, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.proxy_pool.get_all_proxies_failed_state())
+}
+
+/// Check if proxy is enabled but no proxies are configured
+#[tauri::command]
+pub async fn check_no_proxies_configured(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<bool, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.proxy_pool.no_proxies_configured())
+}
+
+/// Check proxy availability before starting validation
+/// Returns Ok(true) if validation can proceed, Err with message if blocked
+#[tauri::command]
+pub async fn check_proxy_availability(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<Result<(), String>, String> {
+    let settings = state.settings.read().await;
+    
+    // Check if proxy is enabled but no proxies configured
+    if settings.proxy_pool.no_proxies_configured() {
+        return Ok(Err("No proxies configured. Please add at least one proxy or disable proxy support.".to_string()));
+    }
+    
+    // Check if all proxies have failed
+    if settings.proxy_pool.all_proxies_failed() {
+        let state = settings.proxy_pool.get_all_proxies_failed_state();
+        if let Some(failed_state) = state {
+            return Ok(Err(format!(
+                "All {} proxy(ies) are unavailable. {} bad, {} in cooldown. Nearest cooldown expires in {}s.",
+                failed_state.total_proxies,
+                failed_state.bad_count,
+                failed_state.cooldown_count,
+                failed_state.nearest_cooldown_secs
+            )));
+        }
+    }
+    
+    Ok(Ok(()))
 }
 
 #[cfg(test)]
@@ -3179,5 +3329,275 @@ mod tests {
             let host = proxy.unwrap().host.clone();
             assert!(host == "192.168.1.1" || host == "192.168.1.2" || host == "192.168.1.3");
         }
+    }
+
+    // =====================
+    // All Proxies Failed Detection Tests
+    // =====================
+
+    #[test]
+    fn test_all_proxies_failed_disabled_pool() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = false;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // Even if all proxies are bad, should return false if disabled
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        assert!(!pool.all_proxies_failed());
+    }
+
+    #[test]
+    fn test_all_proxies_failed_empty_pool() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+
+        // Empty pool should not trigger all-proxies-failed
+        assert!(!pool.all_proxies_failed());
+    }
+
+    #[test]
+    fn test_all_proxies_failed_has_available() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+
+        // Mark first proxy as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        // Second proxy is still available
+        assert!(!pool.all_proxies_failed());
+    }
+
+    #[test]
+    fn test_all_proxies_failed_all_bad() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+
+        // Mark all proxies as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+            pool.record_failure("192.168.1.2:8080");
+        }
+        
+        assert!(pool.all_proxies_failed());
+    }
+
+    #[test]
+    fn test_all_proxies_failed_all_in_cooldown() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // Mark proxy as bad (enters cooldown)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        assert!(pool.all_proxies_failed());
+    }
+
+    #[test]
+    fn test_get_all_proxies_failed_state_returns_none_when_not_failed() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // Not in failed state
+        assert!(pool.get_all_proxies_failed_state().is_none());
+    }
+
+    #[test]
+    fn test_get_all_proxies_failed_state_returns_state_when_failed() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+
+        // Mark all as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+            pool.record_failure("192.168.1.2:8080");
+        }
+        
+        let state = pool.get_all_proxies_failed_state();
+        assert!(state.is_some());
+        
+        let state = state.unwrap();
+        assert_eq!(state.total_proxies, 2);
+        assert_eq!(state.bad_count, 2);
+        assert!(state.proxy_enabled);
+        assert_eq!(state.failed_proxies.len(), 2);
+    }
+
+    #[test]
+    fn test_get_all_proxies_failed_state_includes_cooldown_info() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // Mark as bad (enters cooldown)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        let state = pool.get_all_proxies_failed_state().unwrap();
+        assert!(state.failed_proxies[0].is_bad);
+        assert!(state.failed_proxies[0].remaining_cooldown_secs > 0);
+        assert!(state.nearest_cooldown_secs > 0);
+    }
+
+    #[test]
+    fn test_get_all_proxies_failed_state_consecutive_failures() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // 3 failures
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        let state = pool.get_all_proxies_failed_state().unwrap();
+        assert_eq!(state.failed_proxies[0].consecutive_failures, 3);
+    }
+
+    #[test]
+    fn test_get_all_proxies_failed_state_success_rate() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // 1 success, 3 failures = 25% success rate
+        pool.record_success("192.168.1.1:8080");
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        let state = pool.get_all_proxies_failed_state().unwrap();
+        assert_eq!(state.failed_proxies[0].success_rate, 25);
+    }
+
+    #[test]
+    fn test_no_proxies_configured_enabled_empty() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        
+        assert!(pool.no_proxies_configured());
+    }
+
+    #[test]
+    fn test_no_proxies_configured_disabled_empty() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = false;
+        
+        // Should be false because proxy is disabled
+        assert!(!pool.no_proxies_configured());
+    }
+
+    #[test]
+    fn test_no_proxies_configured_enabled_with_proxies() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        assert!(!pool.no_proxies_configured());
+    }
+
+    #[test]
+    fn test_failed_proxy_info_serialize() {
+        let info = FailedProxyInfo {
+            id: "192.168.1.1:8080".to_string(),
+            is_bad: true,
+            remaining_cooldown_secs: 45,
+            consecutive_failures: 3,
+            success_rate: 50,
+        };
+        
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("\"id\""));
+        assert!(json.contains("\"isBad\""));
+        assert!(json.contains("\"remainingCooldownSecs\""));
+        assert!(json.contains("\"consecutiveFailures\""));
+        assert!(json.contains("\"successRate\""));
+    }
+
+    #[test]
+    fn test_all_proxies_failed_state_serialize() {
+        let state = AllProxiesFailedState {
+            failed_proxies: vec![FailedProxyInfo {
+                id: "192.168.1.1:8080".to_string(),
+                is_bad: true,
+                remaining_cooldown_secs: 45,
+                consecutive_failures: 3,
+                success_rate: 50,
+            }],
+            proxy_enabled: true,
+            total_proxies: 1,
+            bad_count: 1,
+            cooldown_count: 1,
+            nearest_cooldown_secs: 45,
+        };
+        
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("\"failedProxies\""));
+        assert!(json.contains("\"proxyEnabled\""));
+        assert!(json.contains("\"totalProxies\""));
+        assert!(json.contains("\"badCount\""));
+        assert!(json.contains("\"cooldownCount\""));
+        assert!(json.contains("\"nearestCooldownSecs\""));
+    }
+
+    #[test]
+    fn test_all_proxies_failed_mixed_bad_and_cooldown() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+
+        // First proxy: bad (3 consecutive failures, enters cooldown)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        // Second proxy: manually put in cooldown without being bad
+        // Use entry API to ensure the stats entry exists
+        pool.proxy_stats.entry("192.168.1.2:8080".to_string()).or_default().enter_cooldown(60);
+        
+        assert!(pool.all_proxies_failed());
+        
+        let state = pool.get_all_proxies_failed_state().unwrap();
+        assert_eq!(state.total_proxies, 2);
+        assert_eq!(state.bad_count, 1); // Only first proxy is bad
+        assert_eq!(state.cooldown_count, 2); // Both in cooldown
+    }
+
+    #[test]
+    fn test_all_proxies_failed_nearest_cooldown() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+
+        // First proxy: bad with default cooldown (60s)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        // Second proxy: put in cooldown manually (will have ~60s as well)
+        // Use entry API to ensure the stats entry exists
+        pool.proxy_stats.entry("192.168.1.2:8080".to_string()).or_default().enter_cooldown(60);
+        
+        let state = pool.get_all_proxies_failed_state().unwrap();
+        // Both should have similar cooldown times, nearest should be > 0
+        assert!(state.nearest_cooldown_secs > 0);
+        assert!(state.nearest_cooldown_secs <= 60);
     }
 }
