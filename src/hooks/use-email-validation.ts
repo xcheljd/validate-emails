@@ -12,18 +12,46 @@ export interface ValidationResult {
   logs: string[];
   domain: string;
   validationDuration: number;
-  proxyUsed?: string;
   mxRecordCount: number;
   isDisposable: boolean;
   isRoleAccount: boolean;
   isCatchAll: boolean;
+  isDeliverable: boolean;
+  isDisabled: boolean;
+  hasFullInbox: boolean;
+  canConnectSmtp: boolean;
+  acceptsMail: boolean;
+  isValidSyntax: boolean;
+  isB2c: boolean;
+  suggestion?: string;
+  gravatarUrl?: string;
+  haveibeenpwned?: boolean;
   errorType?: string;
   timestamp: string;
   validationMode: "quick" | "standard" | "thorough";
   riskScore: number;
+  /** The proxy ID used for this validation (if any) */
+  proxyId?: string;
 }
 
 export type ValidationStatus = 'idle' | 'processing' | 'paused' | 'stopping';
+
+export interface FailedProxyInfo {
+  id: string;
+  isBad: boolean;
+  remainingCooldownSecs: number;
+  consecutiveFailures: number;
+  successRate: number;
+}
+
+export interface AllProxiesFailedPayload {
+  failedProxies: FailedProxyInfo[];
+  proxyEnabled: boolean;
+  totalProxies: number;
+  badCount: number;
+  cooldownCount: number;
+  nearestCooldownSecs: number;
+}
 
 export function useEmailValidation() {
   const [results, setResults] = useState<ValidationResult[]>([]);
@@ -34,6 +62,7 @@ export function useEmailValidation() {
   const [validationSpeed, setValidationSpeed] = useState<number>(0);
   const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<number>(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [allProxiesFailedState, setAllProxiesFailedState] = useState<AllProxiesFailedPayload | null>(null);
 
   const pendingEmailsRef = useRef<string[]>([]);
   const currentConcurrencyRef = useRef<number>(5);
@@ -72,28 +101,38 @@ export function useEmailValidation() {
 
   // Event listener
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let unlistenValidationProgress: (() => void) | undefined;
+    let unlistenAllProxiesFailed: (() => void) | undefined;
     let isActive = true;
 
-    const setupListener = async () => {
-      const unlistenFn = await listen<ValidationResult>("validation-progress", (event) => {
+    const setupListeners = async () => {
+      const unlistenProgressFn = await listen<ValidationResult>("validation-progress", (event) => {
         setResults((prev) => [...prev, event.payload]);
         setProgress((prev) => prev + 1);
         pendingEmailsRef.current = pendingEmailsRef.current.filter(e => e !== event.payload.email);
       });
 
+      const unlistenProxiesFailedFn = await listen<AllProxiesFailedPayload>("all-proxies-failed", (event) => {
+        setAllProxiesFailedState(event.payload);
+        setStatus('paused');
+        statusRef.current = 'paused';
+      });
+
       if (!isActive) {
-        unlistenFn();
+        unlistenProgressFn();
+        unlistenProxiesFailedFn();
       } else {
-        unlisten = unlistenFn;
+        unlistenValidationProgress = unlistenProgressFn;
+        unlistenAllProxiesFailed = unlistenProxiesFailedFn;
       }
     };
 
-    setupListener();
+    setupListeners();
 
     return () => {
       isActive = false;
-      if (unlisten) unlisten();
+      if (unlistenValidationProgress) unlistenValidationProgress();
+      if (unlistenAllProxiesFailed) unlistenAllProxiesFailed();
     };
   }, []);
 
@@ -182,7 +221,7 @@ export function useEmailValidation() {
   }, [mutation]);
 
   const revalidationMutation = useMutation({
-    mutationFn: async ({ items, concurrency, mode }: { items: { email: string, excluded_proxy?: string }[], concurrency: number, mode: 'quick' | 'standard' | 'thorough' }) => {
+    mutationFn: async ({ items, concurrency, mode }: { items: { email: string }[], concurrency: number, mode: 'quick' | 'standard' | 'thorough' }) => {
       return invoke<ValidationResult[]>("revalidate_emails_bulk", {
         items,
         concurrency,
@@ -208,8 +247,7 @@ export function useEmailValidation() {
     if (unknownResults.length === 0) return;
 
     const items = unknownResults.map(r => ({
-      email: r.email,
-      excluded_proxy: r.proxyUsed
+      email: r.email
     }));
 
     setResults(prev => prev.filter(r => r.result !== 'Unknown'));
@@ -234,6 +272,60 @@ export function useEmailValidation() {
     // We don't reset progress/total here because the user might want to see the partial results
   }, []);
 
+  // Clear the all-proxies-failed state
+  const clearAllProxiesFailedState = useCallback(() => {
+    setAllProxiesFailedState(null);
+  }, []);
+
+  // Continue without proxy - temporarily disable proxy and resume
+  const continueWithoutProxy = useCallback(async () => {
+    try {
+      // Temporarily disable proxy for this session
+      await invoke("update_proxy_pool_config", { enabled: false });
+      setAllProxiesFailedState(null);
+      
+      // Resume validation with remaining emails
+      setStatus('processing');
+      statusRef.current = 'processing';
+      mutation.mutate({
+        emails: pendingEmailsRef.current,
+        concurrency: currentConcurrencyRef.current,
+        mode: validationMode
+      });
+    } catch (error) {
+      console.error("Failed to continue without proxy:", error);
+      notifyError(error instanceof Error ? error.message : "Failed to continue without proxy");
+    }
+  }, [mutation, validationMode]);
+
+  // Retry with cooldown - wait for nearest cooldown to expire then retry
+  const retryWithCooldown = useCallback(async () => {
+    if (!allProxiesFailedState || allProxiesFailedState.cooldownCount === 0) {
+      return;
+    }
+
+    try {
+      // Wait for the nearest cooldown to expire
+      const waitTime = allProxiesFailedState.nearestCooldownSecs * 1000;
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+      
+      // Clear the state
+      setAllProxiesFailedState(null);
+      
+      // Resume validation with remaining emails
+      setStatus('processing');
+      statusRef.current = 'processing';
+      mutation.mutate({
+        emails: pendingEmailsRef.current,
+        concurrency: currentConcurrencyRef.current,
+        mode: validationMode
+      });
+    } catch (error) {
+      console.error("Failed to retry with cooldown:", error);
+      notifyError(error instanceof Error ? error.message : "Failed to retry with cooldown");
+    }
+  }, [allProxiesFailedState, mutation, validationMode]);
+
   return {
     results,
     isProcessing,
@@ -253,5 +345,10 @@ export function useEmailValidation() {
     setSessionId,
     validationSpeed,
     estimatedTimeRemaining,
+    // All proxies failed state and handlers
+    allProxiesFailedState,
+    clearAllProxiesFailedState,
+    continueWithoutProxy,
+    retryWithCooldown,
   };
 }

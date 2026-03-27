@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent } from "@/components/ui/card";
 import { CheckCircle2, AlertCircle, XCircle, Info, Timer, Zap } from "lucide-react";
-import { ValidationResult, ValidationStatus } from "@/hooks/use-email-validation";
+import { ValidationResult, ValidationStatus, AllProxiesFailedPayload } from "@/hooks/use-email-validation";
 import { ValidationControls } from "./validation-controls";
 import { RetryModal } from "./retry-modal";
+import { ProxyFailureModal } from "./proxy-failure-modal";
 import {
    Dialog,
    DialogContent,
@@ -29,15 +30,14 @@ interface ValidationDashboardProps {
   onRetryUnknowns?: () => void;
   validationMode: 'quick' | 'standard' | 'thorough';
   onChangeValidationMode: (mode: 'quick' | 'standard' | 'thorough') => void;
-  proxyStatus?: {
-    totalProxies: number;
-    activeProxy: string | null;
-    successRate: number;
-  };
   validationSpeed?: number;
   estimatedTimeRemaining?: number;
   statusFilter?: string;
   onStatusFilterChange?: (filter: string) => void;
+  // All proxies failed handling
+  allProxiesFailedState?: AllProxiesFailedPayload | null;
+  onContinueWithoutProxy?: () => void;
+  onRetryWithCooldown?: () => void;
 }
 
 export function ValidationDashboard({
@@ -51,11 +51,13 @@ export function ValidationDashboard({
    onDiscard,
    onRetryUnknowns,
    validationMode,
-   proxyStatus,
    validationSpeed,
    estimatedTimeRemaining,
    statusFilter = "all",
-   onStatusFilterChange
+   onStatusFilterChange,
+   allProxiesFailedState,
+   onContinueWithoutProxy,
+   onRetryWithCooldown,
 }: ValidationDashboardProps) {
    const [showStopDialog, setShowStopDialog] = useState(false);
    const [showRetryModal, setShowRetryModal] = useState(false);
@@ -270,27 +272,6 @@ export function ValidationDashboard({
          </CardContent>
        </Card>
 
-       {proxyStatus && proxyStatus.totalProxies > 0 && (
-         <Card className="border-dashed bg-muted/10">
-           <CardContent className="py-2 md:py-3 px-4 md:px-6 flex items-center justify-between gap-4">
-             <div className="flex items-center gap-2 text-xs md:text-sm">
-               <span className="font-bold text-muted-foreground uppercase text-[10px] tracking-widest">Proxy Node:</span>
-               <Badge variant="outline" className="bg-background max-w-[150px] md:max-w-none truncate font-mono">{proxyStatus.activeProxy || 'Initializing...'}</Badge>
-             </div>
-             <div className="flex items-center gap-3 md:gap-6">
-               <div className="flex flex-col items-end">
-                 <span className="text-[8px] md:text-[10px] uppercase text-muted-foreground font-bold">Success</span>
-                 <span className="text-xs md:text-sm font-mono font-black text-green-600">{Math.round(proxyStatus.successRate)}%</span>
-               </div>
-               <div className="flex flex-col items-end border-l pl-3 md:pl-6">
-                 <span className="text-[8px] md:text-[10px] uppercase text-muted-foreground font-bold">Pool</span>
-                 <span className="text-xs md:text-sm font-mono font-black">{proxyStatus.totalProxies}</span>
-               </div>
-             </div>
-           </CardContent>
-         </Card>
-       )}
-
        <Dialog open={showStopDialog} onOpenChange={setShowStopDialog}>
          <DialogContent className="max-w-[90vw] sm:max-w-md">
            <DialogHeader>
@@ -313,7 +294,7 @@ export function ValidationDashboard({
          </DialogContent>
        </Dialog>
 
-       <RetryModal 
+       <RetryModal
          open={showRetryModal}
          unknownCount={unknownCount}
          onRetry={() => {
@@ -322,6 +303,26 @@ export function ValidationDashboard({
          }}
          onCancel={() => setShowRetryModal(false)}
        />
+
+       {allProxiesFailedState && (
+         <ProxyFailureModal
+           open={!!allProxiesFailedState}
+           failedProxies={allProxiesFailedState.failedProxies}
+           totalProxies={allProxiesFailedState.totalProxies}
+           badCount={allProxiesFailedState.badCount}
+           cooldownCount={allProxiesFailedState.cooldownCount}
+           nearestCooldownSecs={allProxiesFailedState.nearestCooldownSecs}
+           onContinueWithoutProxy={() => {
+             onContinueWithoutProxy?.();
+           }}
+           onRetryWithCooldown={() => {
+             onRetryWithCooldown?.();
+           }}
+           onStop={() => {
+             onStop();
+           }}
+         />
+       )}
      </div>
    );
  }

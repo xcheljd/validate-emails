@@ -11,7 +11,7 @@ import { useEmailValidation, ValidationResult } from "@/hooks/use-email-validati
 import { formatAsCSV } from "@/lib/export-utils";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
-import { SettingsContent } from "@/components/settings/settings-panel";
+import { SettingsContent } from "@/components/settings/settings-content";
 import { StatisticsDashboard } from "@/components/analytics/statistics-dashboard";
 import { DomainAnalysis } from "@/components/analytics/domain-analysis";
 import { SessionHistory } from "@/components/history/session-history";
@@ -46,7 +46,10 @@ function App() {
     validationSpeed,
     estimatedTimeRemaining,
     resumeSession,
-    retryUnknowns
+    retryUnknowns,
+    allProxiesFailedState,
+    continueWithoutProxy,
+    retryWithCooldown,
   } = useEmailValidation();
 
   const handleNavigate = (view: SidebarView) => {
@@ -259,6 +262,9 @@ function App() {
                     estimatedTimeRemaining={estimatedTimeRemaining}
                     statusFilter={statusFilter}
                     onStatusFilterChange={setStatusFilter}
+                    allProxiesFailedState={allProxiesFailedState}
+                    onContinueWithoutProxy={continueWithoutProxy}
+                    onRetryWithCooldown={retryWithCooldown}
                   />
                   <ResultsTable
                     results={results}
