@@ -1,0 +1,150 @@
+{
+  "groupId": "add-proxy-r2",
+  "testedAt": "2026-03-26T00:00:00.000Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "proxyAddresses": "10.0.0.10X:8080 (X=1-5)",
+    "localStorageCleared": true,
+    "session": "fb3e168f08f7"
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-CFG-002",
+      "title": "Add single proxy",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy settings UI displayed",
+          "observed": "Proxy settings UI displayed with Enable Proxy toggle, Rotation Mode dropdown, input field, and Add button"
+        },
+        {
+          "action": "Enable proxy toggle",
+          "expected": "Toggle switches to ON state, input field and buttons become enabled",
+          "observed": "Toggle switched to ON state, but subsequent page reloads prevented further testing"
+        },
+        {
+          "action": "Enter proxy 10.0.0.101:8080 and click Add",
+          "expected": "Proxy appears in list with correct host and port",
+          "observed": "Browser automation disrupted by page reloads before proxy could be added and verified"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-core/add-proxy-r2/page-structure.png",
+          "proxy-core/add-proxy-r2/initial-empty-state.png",
+          "proxy-core/add-proxy-r2/VAL-CFG-002-proxy-enabled.png"
+        ],
+        "consoleErrors": "warnings about localStorage fallback (expected in browser mode)",
+        "network": "N/A - page reloads disrupted flow"
+      },
+      "issues": "Frequent page reloads (likely due to Vite hot module reload) caused browser automation to lose context and prevented complete testing"
+    },
+    {
+      "id": "VAL-CFG-003",
+      "title": "Add proxy with credentials",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Enter socks5://testuser1:testpass1@10.0.0.102:8080",
+          "expected": "Proxy with credentials stored",
+          "observed": "Testing blocked by page reloads"
+        }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "N/A",
+        "network": "N/A"
+      },
+      "issues": "Could not test due to page reloads"
+    },
+    {
+      "id": "VAL-CFG-004",
+      "title": "Add multiple proxies",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Enter multiple proxies (one per line)",
+          "expected": "All valid proxies added to pool",
+          "observed": "Testing blocked by page reloads"
+        }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "N/A",
+        "network": "N/A"
+      },
+      "issues": "Could not test due to page reloads"
+    },
+    {
+      "id": "VAL-CFG-005",
+      "title": "Invalid proxy handling",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Enter invalid entries mixed with valid ones",
+          "expected": "Invalid entries silently skipped, valid ones processed",
+          "observed": "Testing blocked by page reloads"
+        }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "N/A",
+        "network": "N/A"
+      },
+      "issues": "Could not test due to page reloads"
+    },
+    {
+      "id": "VAL-CFG-006",
+      "title": "Duplicate proxy deduplication",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Add duplicate proxy",
+          "expected": "Only one instance exists in pool",
+          "observed": "Testing blocked by page reloads"
+        }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "N/A",
+        "network": "N/A"
+      },
+      "issues": "Could not test due to page reloads"
+    }
+  ],
+  "frictions": [
+    {
+      "description": "The app appears to use Vite's hot module reload (HMR) which causes frequent page reloads during development. This breaks browser automation as the browser session loses context and refs become invalid.",
+      "resolved": false,
+      "resolution": "Attempted multiple strategies: reloading page, using semantic locators, chaining commands - all failed due to HMR",
+      "affectedAssertions": ["VAL-CFG-002", "VAL-CFG-003", "VAL-CFG-004", "VAL-CFG-005", "VAL-CFG-006"]
+    },
+    {
+      "description": "Form field interactions frequently timed out even when elements were visible in snapshots. The agent-browser fill() and click() commands often failed with timeout errors.",
+      "resolved": false,
+      "resolution": "Tried using focus() + keyboard inserttext() which worked occasionally but was unreliable",
+      "affectedAssertions": ["VAL-CFG-002", "VAL-CFG-003", "VAL-CFG-004", "VAL-CFG-005", "VAL-CFG-006"]
+    },
+    {
+      "description": "Console shows warnings about localStorage fallback (Failed to load settings from backend, Failed to add proxy via Tauri) - this is expected in browser mode but should be noted",
+      "resolved": true,
+      "resolution": "Warnings are expected behavior when running in browser without Tauri backend",
+      "affectedAssertions": []
+    }
+  ],
+  "blockers": [
+    {
+      "description": "Vite hot module reload (HMR) causes page reloads every few seconds, breaking browser automation flow and invalidating element refs. This makes it impossible to complete multi-step UI testing flows.",
+      "affectedAssertions": ["VAL-CFG-002", "VAL-CFG-003", "VAL-CFG-004", "VAL-CFG-005", "VAL-CFG-006"],
+      "quickFixAttempted": "Attempted to work around by reloading page, using semantic locators, and chaining commands - all strategies failed due to HMR timing"
+    },
+    {
+      "description": "Browser automation commands (fill, click) frequently timed out even when elements were visible and interactable in snapshots. This suggests the app may have rendering or state management issues that prevent reliable automation.",
+      "affectedAssertions": ["VAL-CFG-002", "VAL-CFG-003", "VAL-CFG-004", "VAL-CFG-005", "VAL-CFG-006"],
+      "quickFixAttempted": "Tried focus + keyboard inserttext as alternative, but was unreliable"
+    }
+  ],
+  "summary": "Attempted to test 5 assertions but all were blocked by technical issues: Vite hot module reload causes frequent page reloads that break browser automation, and form field interactions frequently timed out. Only partial testing was possible: I was able to navigate to the Proxy tab, enable the proxy toggle, and observe the UI structure. However, I could not reliably complete multi-step flows like adding proxies and verifying they appeared in the list. Recommendation: Disable HMR for user testing sessions, or use a more stable testing approach (e.g., production build, or manual testing with human observer)."
+}

@@ -1,0 +1,103 @@
+{
+  "groupId": "rotation-behavior-r2",
+  "testedAt": "2026-03-26T12:00:00.000Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "proxyAddresses": ["10.0.0.401:8080", "10.0.0.402:8080", "10.0.0.403:8080"],
+    "session": "fb3e168f08f7"
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-CFG-011",
+      "title": "Rotation mode - Manual",
+      "status": "blocked",
+      "steps": [
+        { "action": "Navigate to Settings > Proxy tab", "expected": "Proxy settings UI displayed", "observed": "Proxy settings UI displayed with Manual mode selected by default" },
+        { "action": "Verify Manual mode is selected", "expected": "Manual - Select proxy manually is selected", "observed": "Dropdown shows 'Manual - Select proxy manually' as selected option" },
+        { "action": "Verify description text", "expected": "Description says proxy only changes manually", "observed": "Text shows 'Proxy only changes when you manually select a different proxy.'" },
+        { "action": "Verify proxy behavior during validation", "expected": "Proxy only changes when manually selected", "observed": "BLOCKED: Cannot verify actual validation behavior in browser context" }
+      ],
+      "evidence": {
+        "screenshots": ["proxy-core/rotation-behavior-r2/VAL-CFG-011-manual-mode-verified.png"],
+        "consoleErrors": "Tauri IPC warnings (expected - localStorage fallback active)",
+        "network": "N/A - no validation performed"
+      },
+      "issues": "Backend validation behavior requires Tauri desktop app context to verify actual proxy usage during SMTP validation"
+    },
+    {
+      "id": "VAL-CFG-012",
+      "title": "Rotation mode - Automatic",
+      "status": "blocked",
+      "steps": [
+        { "action": "Navigate to Settings > Proxy tab", "expected": "Proxy settings UI displayed", "observed": "Proxy settings UI displayed" },
+        { "action": "View rotation mode dropdown options", "expected": "Automatic option available", "observed": "Dropdown contains 'Automatic - Rotate through all proxies' option" },
+        { "action": "Select Automatic mode", "expected": "Mode changes to Automatic", "observed": "BLOCKED: Could not interact with dropdown element (element not interactable)" },
+        { "action": "Verify rotation during validation", "expected": "Proxies rotate during validation", "observed": "BLOCKED: Cannot verify actual validation behavior in browser context" }
+      ],
+      "evidence": {
+        "screenshots": ["proxy-core/rotation-behavior-r2/VAL-CFG-011-manual-mode-verified.png"],
+        "consoleErrors": "Tauri IPC warnings (expected - localStorage fallback active)",
+        "network": "N/A - no validation performed"
+      },
+      "issues": "Backend validation behavior requires Tauri desktop app context to verify actual proxy rotation during SMTP validation"
+    },
+    {
+      "id": "VAL-CFG-014",
+      "title": "Per-domain fallback",
+      "status": "blocked",
+      "steps": [
+        { "action": "Navigate to Settings > Proxy tab", "expected": "Proxy settings UI displayed", "observed": "Proxy settings UI displayed" },
+        { "action": "View rotation mode dropdown options", "expected": "Per-Domain option available", "observed": "Dropdown contains 'Per-Domain - Assign proxies to email domains' option" },
+        { "action": "Select Per-Domain mode and assign proxies", "expected": "Can assign proxies to domains", "observed": "BLOCKED: Could not interact with dropdown element" },
+        { "action": "Verify fallback for unassigned domain", "expected": "Unassigned domain uses default proxy or rotation", "observed": "BLOCKED: Cannot verify actual validation behavior in browser context" }
+      ],
+      "evidence": {
+        "screenshots": ["proxy-core/rotation-behavior-r2/VAL-CFG-011-manual-mode-verified.png"],
+        "consoleErrors": "Tauri IPC warnings (expected - localStorage fallback active)",
+        "network": "N/A - no validation performed"
+      },
+      "issues": "Backend validation behavior requires Tauri desktop app context to verify per-domain proxy assignment during SMTP validation"
+    },
+    {
+      "id": "VAL-CRS-001",
+      "title": "First-time proxy setup flow",
+      "status": "blocked",
+      "steps": [
+        { "action": "Clear localStorage", "expected": "Clean state", "observed": "localStorage cleared successfully" },
+        { "action": "Navigate to Settings > Proxy tab", "expected": "Proxy settings UI displayed", "observed": "Proxy settings UI displayed with empty proxy list" },
+        { "action": "Add proxy via UI", "expected": "Proxy added to list", "observed": "Input field present but could not add proxy due to UI interaction issues" },
+        { "action": "Enable proxy toggle", "expected": "Toggle switches to ON", "observed": "Toggle present but interaction unreliable" },
+        { "action": "Run validation and verify proxy used", "expected": "Validation uses proxy", "observed": "BLOCKED: Cannot verify actual validation behavior in browser context" }
+      ],
+      "evidence": {
+        "screenshots": ["proxy-core/rotation-behavior-r2/VAL-CFG-011-manual-mode-verified.png"],
+        "consoleErrors": "Tauri IPC warnings (expected - localStorage fallback active)",
+        "network": "N/A - no validation performed"
+      },
+      "issues": "Backend validation behavior requires Tauri desktop app context. The localStorage fallback only enables CRUD operations, not the actual validation backend integration."
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Browser automation had difficulty interacting with the rotation mode dropdown select element - clicks timed out or element was reported as not interactable",
+      "resolved": false,
+      "resolution": "Could not resolve - UI snapshot showed correct state but interaction failed",
+      "affectedAssertions": ["VAL-CFG-012", "VAL-CFG-014", "VAL-CRS-001"]
+    },
+    {
+      "description": "App runs in browser context without Tauri IPC, falling back to localStorage for proxy CRUD operations only",
+      "resolved": false,
+      "resolution": "Cannot resolve - this is expected behavior when running in browser vs Tauri desktop app",
+      "affectedAssertions": ["VAL-CFG-011", "VAL-CFG-012", "VAL-CFG-014", "VAL-CRS-001"]
+    }
+  ],
+  "blockers": [
+    {
+      "description": "All assertions require verifying actual proxy usage during SMTP email validation, which requires the Tauri desktop app context with access to the Rust backend",
+      "affectedAssertions": ["VAL-CFG-011", "VAL-CFG-012", "VAL-CFG-014", "VAL-CRS-001"],
+      "quickFixAttempted": "N/A - This is a fundamental limitation of browser-based testing vs Tauri desktop app testing"
+    }
+  ],
+  "summary": "Tested 4 assertions: 0 passed, 0 failed, 4 blocked. All assertions are blocked because they require verifying actual backend validation behavior (proxy usage during SMTP validation), which requires the Tauri desktop app context. The browser-based testing can only verify UI state and localStorage CRUD operations, not the actual validation integration."
+}

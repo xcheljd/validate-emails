@@ -55,6 +55,32 @@ Testing surface, required testing skills/tools, and resource cost classification
 - Cooldown timing tests may be flaky (time-dependent)
 - Per-domain assignment requires emails from multiple providers
 
+### Browser Automation Testing Limitations (Round 2 Findings)
+
+**Vite HMR Issue:**
+- The development server uses Vite's hot module reload (HMR) which causes frequent page reloads
+- This breaks browser automation as refs become invalid and flows are interrupted
+- **Workaround**: Disable HMR for testing sessions or use a production build
+
+**Tauri IPC in Browser Context:**
+- Running the app at `localhost:1420` without the Tauri desktop wrapper causes `invoke()` calls to fail
+- The localStorage fallback in `use-settings.ts` handles CRUD operations correctly
+- However, assertions requiring actual backend validation behavior (SMTP with proxy) cannot be tested in browser context
+- **Recommendation**: For assertions requiring backend behavior, use Tauri's native testing framework or manual testing with the real desktop app
+
+**Assertions Testable in Browser Context:**
+- UI navigation and component rendering
+- Toggle state changes (enable/disable proxy)
+- Rotation mode selection (UI only)
+- Per-domain assignment UI (localStorage CRUD)
+- Settings persistence via localStorage
+
+**Assertions Requiring Tauri Desktop App:**
+- Actual proxy usage during SMTP validation
+- Rotation behavior during validation
+- Per-domain fallback during validation
+- First-time proxy setup flow (validation step)
+
 ---
 
 ## Flow Validator Guidance: Settings UI (Proxy Tab)

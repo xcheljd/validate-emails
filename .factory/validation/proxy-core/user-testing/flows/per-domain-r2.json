@@ -1,0 +1,98 @@
+{
+  "groupId": "per-domain-r2",
+  "testedAt": "2026-03-26T22:15:00Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "proxyAddresses": ["10.0.0.301:8080", "10.0.0.302:8080", "10.0.0.303:8080"],
+    "sessionId": "fb3e168f08f7"
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-CFG-013",
+      "title": "Rotation mode - Per-domain",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy settings UI visible with enable toggle, rotation mode selector, and proxy list",
+          "observed": "Proxy settings UI visible with enable toggle, rotation mode selector (Manual, Automatic, Per-Domain options), and proxy list area"
+        },
+        {
+          "action": "Enable proxy toggle",
+          "expected": "Toggle switches to ON, form fields become enabled",
+          "observed": "Toggle switched to ON (checked state confirmed in snapshot), rotation mode dropdown and proxy input field enabled"
+        },
+        {
+          "action": "Add proxy 10.0.0.301:8080",
+          "expected": "Proxy added to list, appears in proxy pool",
+          "observed": "Proxy added successfully, 'Proxy List 1 configured' shown, proxy 10.0.0.301:8080 displayed with Edit/Delete buttons"
+        },
+        {
+          "action": "Add proxy 10.0.0.302:8080",
+          "expected": "Second proxy added to list",
+          "observed": "Proxy added successfully, 'Proxy List 2 configured' shown"
+        },
+        {
+          "action": "Add proxy 10.0.0.303:8080",
+          "expected": "Third proxy added to list",
+          "observed": "Proxy added successfully, 'Proxy List 3 configured' shown, all three proxies displayed"
+        },
+        {
+          "action": "Select Per-Domain rotation mode from dropdown",
+          "expected": "Per-Domain mode selected, domain assignment UI appears with Gmail, Yahoo, Hotmail dropdowns",
+          "observed": "Per-Domain mode selected successfully. Domain Assignments section appeared with three domain rows: Gmail (gmail.com), Yahoo (yahoo.com), Hotmail (hotmail.com), each with a dropdown containing 'Default (rotation)' and the three proxy options"
+        },
+        {
+          "action": "Assign 10.0.0.301:8080 to Gmail",
+          "expected": "Gmail shows assigned proxy",
+          "observed": "Gmail dropdown changed to show '10.0.0.301:8080', badge appeared showing the assigned proxy"
+        },
+        {
+          "action": "Assign 10.0.0.302:8080 to Yahoo",
+          "expected": "Yahoo shows assigned proxy",
+          "observed": "Yahoo dropdown changed to show '10.0.0.302:8080', badge appeared showing the assigned proxy"
+        },
+        {
+          "action": "Assign 10.0.0.303:8080 to Hotmail",
+          "expected": "Hotmail shows assigned proxy",
+          "observed": "Hotmail dropdown changed to show '10.0.0.303:8080', badge appeared showing the assigned proxy"
+        },
+        {
+          "action": "Verify localStorage persistence",
+          "expected": "Domain assignments persisted to localStorage",
+          "observed": "localStorage showed: {domainAssignments: {gmail.com: '10.0.0.301:8080', yahoo.com: '10.0.0.302:8080', hotmail.com: '10.0.0.303:8080'}, enabled: true, proxies: [...], rotationMode: 'perDomain'}"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-core/per-domain-r2/VAL-CFG-013-11-proxy-tab.png",
+          "proxy-core/per-domain-r2/VAL-CFG-013-14-proxy-enabled.png",
+          "proxy-core/per-domain-r2/VAL-CFG-013-15-two-proxies.png",
+          "proxy-core/per-domain-r2/VAL-CFG-013-16-per-domain-mode-selected.png",
+          "proxy-core/per-domain-r2/VAL-CFG-013-17-per-domain-assignments.png",
+          "proxy-core/per-domain-r2/VAL-CFG-013-18-final-per-domain-assignments.png"
+        ],
+        "consoleErrors": "Cannot read properties of undefined (reading 'transformCallback') - Expected error when Tauri IPC is unavailable; localStorage fallback handled all operations correctly",
+        "network": "N/A - all operations handled via localStorage fallback"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Tauri IPC commands fail in browser context, but localStorage fallback works correctly for proxy operations",
+      "resolved": true,
+      "resolution": "The use-settings.ts hook has localStorage fallback that successfully handles addProxy, updateProxyPoolConfig, and assignDomainProxy operations when Tauri invoke() fails",
+      "affectedAssertions": ["VAL-CFG-013"]
+    },
+    {
+      "description": "Annotated screenshots with --annotate require separate snapshot command to get refs",
+      "resolved": true,
+      "resolution": "Used snapshot after each navigation to get fresh refs, then clicked using those refs",
+      "affectedAssertions": ["VAL-CFG-013"]
+    }
+  ],
+  "blockers": [],
+  "summary": "Tested 1 assertion: 1 passed, 0 failed, 0 blocked. VAL-CFG-013 (Per-Domain rotation mode) works correctly. The Per-Domain assignment UI successfully renders when Per-Domain mode is selected with proxies configured. Users can assign specific proxies to Gmail, Yahoo, and Hotmail domains via dropdown menus. Assignments are persisted to localStorage and display correctly with proxy badges. Note: Tauri IPC errors appear in console but do not affect functionality due to localStorage fallback implementation."
+}

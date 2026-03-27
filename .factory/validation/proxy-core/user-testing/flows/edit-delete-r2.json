@@ -1,0 +1,112 @@
+{
+  "groupId": "edit-delete-r2",
+  "testedAt": "2026-03-27T00:00:00Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "proxyAddresses": ["10.0.0.201:8080", "10.0.0.202:8080"],
+    "session": "fb3e168f08f7",
+    "localStorageCleared": true
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-CFG-007",
+      "title": "Edit proxy",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy tab with settings UI visible",
+          "observed": "Proxy tab visible but components unmount after navigation"
+        },
+        {
+          "action": "Enable proxy toggle",
+          "expected": "Proxy controls enabled",
+          "observed": "Toggle click causes page state reset, components unmount"
+        },
+        {
+          "action": "Click edit button on first proxy",
+          "expected": "Edit dialog opens",
+          "observed": "Unable to reach this step - component unmounts before interaction"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-core/edit-delete-r2/VAL-CFG-007-1-initial-state.png",
+          "proxy-core/edit-delete-r2/proxy-tab-after-reload.png"
+        ],
+        "consoleErrors": "transformCallback errors from Tauri API (backend unavailable in browser context)",
+        "network": "N/A - UI blocked before network operations"
+      },
+      "issues": "Blocked: React components unmount and state resets when interacting with proxy settings UI. Root cause: Tauri backend invoke() calls fail in browser context (transformCallback undefined), causing errors that trigger component unmounting. The localStorage fallback is implemented but errors cause cascading failures."
+    },
+    {
+      "id": "VAL-CFG-008",
+      "title": "Delete proxy",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy tab with settings UI visible",
+          "observed": "Proxy tab visible but components unmount after navigation"
+        },
+        {
+          "action": "Enable proxy toggle",
+          "expected": "Proxy controls enabled",
+          "observed": "Toggle click causes page state reset"
+        },
+        {
+          "action": "Click delete button on proxy row",
+          "expected": "Confirmation dialog appears",
+          "observed": "Unable to reach this step - component unmounts"
+        },
+        {
+          "action": "Confirm deletion",
+          "expected": "Proxy removed from list, count decrements",
+          "observed": "Unable to test"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-core/edit-delete-r2/proxy-tab-after-reload.png"
+        ],
+        "consoleErrors": "transformCallback errors from Tauri API",
+        "network": "N/A - UI blocked before network operations"
+      },
+      "issues": "Blocked: Same root cause as VAL-CFG-007. Tauri backend calls fail in browser context, causing React component unmounting when attempting to interact with proxy settings."
+    }
+  ],
+  "frictions": [
+    {
+      "description": "agent-browser snapshot refs (@e1, @e10, etc.) become invalid after page state changes - must re-snapshot before every interaction",
+      "resolved": true,
+      "resolution": "Called snapshot -i after each wait/state change to get fresh refs",
+      "affectedAssertions": ["VAL-CFG-007", "VAL-CFG-008"]
+    },
+    {
+      "description": "Settings page navigation causes complete state reset - Proxy tab UI appears but unmounts when attempting interactions",
+      "resolved": false,
+      "resolution": "Could not resolve - appears to be React component lifecycle issue triggered by Tauri API errors",
+      "affectedAssertions": ["VAL-CFG-007", "VAL-CFG-008"]
+    },
+    {
+      "description": "Console shows 'Cannot read properties of undefined (reading transformCallback)' errors repeatedly - Tauri invoke() failing in browser context",
+      "resolved": false,
+      "resolution": "localStorage fallback exists in use-settings.ts but errors cause cascading failures",
+      "affectedAssertions": ["VAL-CFG-007", "VAL-CFG-008"]
+    }
+  ],
+  "blockers": [
+    {
+      "description": "Tauri backend unavailable - Running app in browser (localhost:1420) without Tauri desktop wrapper causes all invoke() calls to fail with transformCallback errors. The app appears to require the full Tauri desktop environment to function properly.",
+      "affectedAssertions": ["VAL-CFG-007", "VAL-CFG-008"],
+      "quickFixAttempted": "Set localStorage with test proxies (10.0.0.201:8080, 10.0.0.202:8080). Proxies loaded successfully (2 Edit/Delete button pairs visible), but any interaction (enable toggle, click edit/delete) causes component unmount and state reset."
+    },
+    {
+      "description": "React component lifecycle issue - Proxy settings components mount with correct initial state (proxies visible, buttons present) but unmount immediately upon any user interaction attempt",
+      "affectedAssertions": ["VAL-CFG-007", "VAL-CFG-008"],
+      "quickFixAttempted": "Tried multiple interaction methods (click refs, find text click, semantic locators) - all result in component unmounting"
+    }
+  ],
+  "summary": "Tested 2 assertions: 0 passed, 0 failed, 2 blocked. Both VAL-CFG-007 (Edit proxy) and VAL-CFG-008 (Delete proxy) are blocked due to Tauri backend unavailability in browser context. The app requires the full Tauri desktop environment to function - running in browser causes invoke() calls to fail, which triggers React component unmounting when attempting any proxy settings interactions. localStorage fallback exists but the errors cause cascading failures before the fallback can work properly."
+}
