@@ -55,6 +55,38 @@ export function isProxyBad(stats: ProxyStats): boolean {
   return stats.consecutiveFailures >= 3;
 }
 
+/** Check if proxy is currently in cooldown */
+export function isProxyInCooldown(stats: ProxyStats): boolean {
+  if (stats.cooldownUntil === null) {
+    return false;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  return now < stats.cooldownUntil;
+}
+
+/** Get remaining cooldown time in seconds. Returns 0 if not in cooldown. */
+export function getRemainingCooldown(stats: ProxyStats): number {
+  if (stats.cooldownUntil === null) {
+    return 0;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const remaining = stats.cooldownUntil - now;
+  return remaining > 0 ? remaining : 0;
+}
+
+/** Format remaining cooldown as "Xs" or "Xm Ys" */
+export function formatCooldown(remainingSecs: number): string {
+  if (remainingSecs <= 0) {
+    return '';
+  }
+  const minutes = Math.floor(remainingSecs / 60);
+  const seconds = remainingSecs % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
 /** Rotation mode for proxy selection */
 export type RotationMode = 'manual' | 'automatic' | 'perDomain';
 
@@ -71,6 +103,8 @@ export interface ProxyStats {
   failures: number;
   /** Number of consecutive failures */
   consecutiveFailures: number;
+  /** Timestamp (Unix epoch seconds) when cooldown ends. null if not in cooldown. */
+  cooldownUntil: number | null;
 }
 
 /** Configuration for a single SOCKS5 proxy */
@@ -97,6 +131,8 @@ export interface ProxySettings {
   domainAssignments: Record<string, string>;
   /** Statistics per proxy (proxy ID -> stats) */
   proxyStats: Record<string, ProxyStats>;
+  /** Cooldown duration in seconds when proxy fails (default: 60, range: 30-300) */
+  cooldownDurationSecs: number;
 }
 
 export interface AppSettings {
@@ -117,6 +153,7 @@ export const defaultProxySettings: ProxySettings = {
   rotationMode: 'manual',
   domainAssignments: {},
   proxyStats: {},
+  cooldownDurationSecs: 60,
 };
 
 interface BackendSettings {
@@ -134,6 +171,7 @@ interface BackendProxyPool {
   rotation_mode: RotationMode;
   domain_assignments: Record<string, string>;
   proxy_stats?: Record<string, ProxyStats>;
+  cooldown_duration_secs?: number;
 }
 
 export const defaultSettings: AppSettings = {
@@ -177,6 +215,7 @@ function backendProxyPoolToFrontend(backend: BackendProxyPool): ProxySettings {
     rotationMode: backend.rotation_mode,
     domainAssignments: backend.domain_assignments,
     proxyStats: backend.proxy_stats || {},
+    cooldownDurationSecs: backend.cooldown_duration_secs ?? 60,
   };
 }
 
@@ -422,6 +461,7 @@ export function useSettings() {
       successes: 0,
       failures: 0,
       consecutiveFailures: 0,
+      cooldownUntil: null,
     };
   }, [settings.proxy.proxyStats]);
 
@@ -518,8 +558,66 @@ export function useSettings() {
             successes: 0,
             failures: 0,
             consecutiveFailures: 0,
+            cooldownUntil: null,
           },
         },
+      };
+      saveProxyToStorage(updated);
+      setSettings(prev => ({ ...prev, proxy: updated }));
+    }
+  }, []);
+
+  // Bypass cooldown for a proxy (Retry Now button)
+  const bypassProxyCooldown = useCallback(async (proxyId: string): Promise<void> => {
+    try {
+      await invoke('bypass_proxy_cooldown', { proxyId });
+      // Refresh proxy pool to get updated stats
+      const pool = await invoke<BackendProxyPool>('get_proxy_pool');
+      const proxySettings = backendProxyPoolToFrontend(pool);
+      setSettings(prev => ({ ...prev, proxy: proxySettings }));
+    } catch (err) {
+      // Fallback to localStorage when Tauri IPC is not available
+      console.warn('Failed to bypass cooldown via Tauri, using localStorage fallback:', err);
+      const currentProxy = getProxyFromStorage();
+      const currentStats = currentProxy.proxyStats[proxyId] || {
+        attempts: 0,
+        successes: 0,
+        failures: 0,
+        consecutiveFailures: 0,
+        cooldownUntil: null,
+      };
+      const updated: ProxySettings = {
+        ...currentProxy,
+        proxyStats: {
+          ...currentProxy.proxyStats,
+          [proxyId]: {
+            ...currentStats,
+            cooldownUntil: null,
+            consecutiveFailures: 0,  // Reset consecutive failures too
+          },
+        },
+      };
+      saveProxyToStorage(updated);
+      setSettings(prev => ({ ...prev, proxy: updated }));
+    }
+  }, []);
+
+  // Set cooldown duration (30-300 seconds)
+  const setCooldownDuration = useCallback(async (durationSecs: number): Promise<void> => {
+    const clampedDuration = Math.max(30, Math.min(300, durationSecs));
+    try {
+      await invoke('set_cooldown_duration', { durationSecs: clampedDuration });
+      setSettings(prev => ({
+        ...prev,
+        proxy: { ...prev.proxy, cooldownDurationSecs: clampedDuration }
+      }));
+    } catch (err) {
+      // Fallback to localStorage when Tauri IPC is not available
+      console.warn('Failed to set cooldown duration via Tauri, using localStorage fallback:', err);
+      const currentProxy = getProxyFromStorage();
+      const updated: ProxySettings = {
+        ...currentProxy,
+        cooldownDurationSecs: clampedDuration,
       };
       saveProxyToStorage(updated);
       setSettings(prev => ({ ...prev, proxy: updated }));
@@ -540,5 +638,7 @@ export function useSettings() {
     recordProxySuccess,
     recordProxyFailure,
     resetProxyStats,
+    bypassProxyCooldown,
+    setCooldownDuration,
   };
 }

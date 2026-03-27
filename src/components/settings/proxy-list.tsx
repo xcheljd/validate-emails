@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,8 +11,8 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { Trash2, Edit2, Plus, ListPlus, Shield, AlertCircle } from 'lucide-react';
-import { ProxyConfig, ProxyStats, getProxyId } from '@/hooks/use-settings';
+import { Trash2, Edit2, Plus, ListPlus, Shield, AlertCircle, Timer, RefreshCw } from 'lucide-react';
+import { ProxyConfig, ProxyStats, getProxyId, isProxyInCooldown, getRemainingCooldown, formatCooldown } from '@/hooks/use-settings';
 import { HealthIndicator } from './health-indicator';
 import { cn } from '@/lib/utils';
 
@@ -22,6 +22,7 @@ interface ProxyListProps {
   onAdd: (proxy: ProxyConfig) => void;
   onUpdate: (index: number, proxy: ProxyConfig) => void;
   onDelete: (index: number) => void;
+  onBypassCooldown?: (proxyId: string) => void;
   disabled?: boolean;
 }
 
@@ -82,6 +83,7 @@ const defaultStats: ProxyStats = {
   successes: 0,
   failures: 0,
   consecutiveFailures: 0,
+  cooldownUntil: null,
 };
 
 export function ProxyList({ 
@@ -89,7 +91,8 @@ export function ProxyList({
   proxyStats = {}, 
   onAdd, 
   onUpdate, 
-  onDelete, 
+  onDelete,
+  onBypassCooldown,
   disabled = false 
 }: ProxyListProps) {
   const [inputValue, setInputValue] = useState('');
@@ -107,6 +110,17 @@ export function ProxyList({
   
   // Delete confirmation dialog state
   const [deleteIndex, setDeleteIndex] = useState<number | null>(null);
+  
+  // Cooldown timer update state
+  const [, setTick] = useState(0);
+  
+  // Update cooldown timers every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTick(t => t + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleAddProxy = useCallback(() => {
     const proxy = parseProxyString(inputValue);
@@ -301,14 +315,19 @@ export function ProxyList({
             {proxies.map((proxy, index) => {
               const proxyId = getProxyId(proxy);
               const stats = proxyStats[proxyId] || defaultStats;
+              const inCooldown = isProxyInCooldown(stats);
+              const remainingCooldown = getRemainingCooldown(stats);
               
               return (
                 <div
                   key={proxyKey(proxy, index)}
-                  className="flex items-center justify-between px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
+                  className={cn(
+                    "flex items-center justify-between px-3 py-2 text-sm transition-colors",
+                    inCooldown ? "bg-orange-50 dark:bg-orange-950/20" : "hover:bg-muted/50"
+                  )}
                 >
                   <div className="flex items-center gap-3">
-                    <span className="font-mono">
+                    <span className={cn("font-mono", inCooldown && "text-muted-foreground")}>
                       {proxy.host}:{proxy.port}
                     </span>
                     {proxy.username && (
@@ -318,8 +337,30 @@ export function ProxyList({
                     )}
                     {/* Health indicator */}
                     <HealthIndicator stats={stats} showBadIndicator compact />
+                    {/* Cooldown timer */}
+                    {inCooldown && (
+                      <Badge variant="outline" className="text-xs text-orange-600 dark:text-orange-400 border-orange-300 dark:border-orange-700">
+                        <Timer className="h-3 w-3 mr-1" />
+                        {formatCooldown(remainingCooldown)}
+                      </Badge>
+                    )}
                   </div>
                   <div className="flex items-center gap-1">
+                    {/* Retry Now button for proxies in cooldown */}
+                    {inCooldown && onBypassCooldown && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-orange-600 hover:text-orange-700 hover:bg-orange-100 dark:hover:bg-orange-900/30"
+                        onClick={() => onBypassCooldown(proxyId)}
+                        disabled={disabled}
+                        aria-label="Retry now - bypass cooldown"
+                        title="Retry Now"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                        Retry
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"

@@ -228,6 +228,9 @@ pub struct ProxyStats {
     pub failures: u32,
     /// Number of consecutive failures (resets on success)
     pub consecutive_failures: u32,
+    /// Timestamp (Unix epoch seconds) when cooldown ends. None if not in cooldown.
+    #[serde(default)]
+    pub cooldown_until: Option<i64>,
 }
 
 impl ProxyStats {
@@ -279,6 +282,47 @@ impl ProxyStats {
         self.consecutive_failures >= 3
     }
 
+    /// Enter cooldown mode for the specified duration (in seconds)
+    pub fn enter_cooldown(&mut self, duration_secs: u64) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        self.cooldown_until = Some(now + duration_secs as i64);
+    }
+
+    /// Check if proxy is currently in cooldown
+    pub fn is_in_cooldown(&self) -> bool {
+        if let Some(cooldown_until) = self.cooldown_until {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            return now < cooldown_until;
+        }
+        false
+    }
+
+    /// Get remaining cooldown time in seconds. Returns 0 if not in cooldown.
+    pub fn remaining_cooldown_secs(&self) -> u64 {
+        if let Some(cooldown_until) = self.cooldown_until {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            let remaining = cooldown_until - now;
+            if remaining > 0 {
+                return remaining as u64;
+            }
+        }
+        0
+    }
+
+    /// Clear cooldown (manual bypass)
+    pub fn clear_cooldown(&mut self) {
+        self.cooldown_until = None;
+    }
+
     /// Reset all stats
     pub fn reset(&mut self) {
         *self = Self::default();
@@ -286,7 +330,7 @@ impl ProxyStats {
 }
 
 /// Pool of proxies with configuration for rotation and management
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct ProxyPool {
@@ -302,6 +346,27 @@ pub struct ProxyPool {
     /// Statistics per proxy (proxy ID -> stats)
     #[serde(default)]
     pub proxy_stats: std::collections::HashMap<String, ProxyStats>,
+    /// Cooldown duration in seconds when proxy fails (default: 60, range: 30-300)
+    #[serde(default = "default_cooldown_duration")]
+    pub cooldown_duration_secs: u64,
+}
+
+impl Default for ProxyPool {
+    fn default() -> Self {
+        Self {
+            proxies: Vec::new(),
+            enabled: false,
+            rotation_mode: RotationMode::default(),
+            domain_assignments: std::collections::HashMap::new(),
+            proxy_stats: std::collections::HashMap::new(),
+            cooldown_duration_secs: default_cooldown_duration(),
+        }
+    }
+}
+
+/// Default cooldown duration (60 seconds)
+fn default_cooldown_duration() -> u64 {
+    60
 }
 
 impl ProxyPool {
@@ -410,13 +475,24 @@ impl ProxyPool {
     }
 
     /// Record a successful validation for a proxy
+    /// Also clears cooldown if proxy was in cooldown
     pub fn record_success(&mut self, proxy_id: &str) {
-        self.get_stats_mut(proxy_id).record_success();
+        let stats = self.get_stats_mut(proxy_id);
+        stats.record_success();
+        stats.clear_cooldown();  // Clear cooldown on success
     }
 
     /// Record a failed validation for a proxy
+    /// Automatically enters cooldown if proxy becomes "bad" (3 consecutive failures)
     pub fn record_failure(&mut self, proxy_id: &str) {
-        self.get_stats_mut(proxy_id).record_failure();
+        // Get cooldown duration first to avoid borrow issues
+        let cooldown_duration = self.cooldown_duration_secs;
+        let stats = self.get_stats_mut(proxy_id);
+        stats.record_failure();
+        // Enter cooldown if this failure made the proxy "bad"
+        if stats.is_bad() {
+            stats.enter_cooldown(cooldown_duration);
+        }
     }
 
     /// Get all proxy stats
@@ -465,19 +541,54 @@ impl ProxyPool {
             .unwrap_or(false)
     }
 
-    /// Get list of available (non-bad) proxies
-    /// Bad proxies (3+ consecutive failures) are excluded from this list
+    /// Check if a proxy is currently in cooldown
+    pub fn is_proxy_in_cooldown(&self, proxy_id: &str) -> bool {
+        self.proxy_stats
+            .get(proxy_id)
+            .map(|stats| stats.is_in_cooldown())
+            .unwrap_or(false)
+    }
+
+    /// Check if a proxy is available (not bad AND not in cooldown)
+    pub fn is_proxy_available(&self, proxy_id: &str) -> bool {
+        !self.is_proxy_bad(proxy_id) && !self.is_proxy_in_cooldown(proxy_id)
+    }
+
+    /// Get remaining cooldown time for a proxy in seconds
+    pub fn get_remaining_cooldown(&self, proxy_id: &str) -> u64 {
+        self.proxy_stats
+            .get(proxy_id)
+            .map(|stats| stats.remaining_cooldown_secs())
+            .unwrap_or(0)
+    }
+
+    /// Manually bypass cooldown for a proxy (Retry Now button)
+    pub fn bypass_cooldown(&mut self, proxy_id: &str) {
+        if let Some(stats) = self.proxy_stats.get_mut(proxy_id) {
+            stats.clear_cooldown();
+            // Also reset consecutive failures to give the proxy a fresh start
+            stats.consecutive_failures = 0;
+        }
+    }
+
+    /// Set the cooldown duration (clamped to 30-300 seconds)
+    pub fn set_cooldown_duration(&mut self, duration_secs: u64) {
+        self.cooldown_duration_secs = duration_secs.clamp(30, 300);
+    }
+
+    /// Get list of available (non-bad, not in cooldown) proxies
+    /// Bad proxies (3+ consecutive failures) and proxies in cooldown are excluded from this list
     pub fn get_available_proxies(&self) -> Vec<ProxyConfig> {
         self.proxies
             .iter()
-            .filter(|p| !self.is_proxy_bad(&p.id()))
+            .filter(|p| self.is_proxy_available(&p.id()))
             .cloned()
             .collect()
     }
 
-    /// Check if there are any available (non-bad) proxies
+    /// Check if there are any available (non-bad, not in cooldown) proxies
     pub fn has_available_proxies(&self) -> bool {
-        self.proxies.iter().any(|p| !self.is_proxy_bad(&p.id()))
+        self.proxies.iter().any(|p| self.is_proxy_available(&p.id()))
     }
 
     /// Get the next available proxy for automatic rotation (round-robin)
@@ -495,11 +606,11 @@ impl ProxyPool {
     }
 
     /// Get the proxy to use for a specific email based on rotation mode
-    /// - Manual: returns the first available (non-bad) proxy
-    /// - Automatic: rotates through available (non-bad) proxies using the rotation_index
-    /// - PerDomain: uses domain assignment if available and proxy is not bad, falls back to first available proxy
+    /// - Manual: returns the first available (non-bad, not in cooldown) proxy
+    /// - Automatic: rotates through available proxies using the rotation_index
+    /// - PerDomain: uses domain assignment if available and proxy is available, falls back to first available proxy
     ///
-    /// Bad proxies (3+ consecutive failures) are excluded from rotation
+    /// Bad proxies (3+ consecutive failures) and proxies in cooldown are excluded from rotation
     /// Returns None if no proxies are available
     pub fn get_proxy_for_email(
         &mut self,
@@ -512,23 +623,23 @@ impl ProxyPool {
 
         match self.rotation_mode {
             RotationMode::Manual => {
-                // In manual mode, use the first available proxy (skip bad ones)
+                // In manual mode, use the first available proxy (skip bad/cooldown ones)
                 self.proxies
                     .iter()
-                    .find(|p| !self.is_proxy_bad(&p.id()))
+                    .find(|p| self.is_proxy_available(&p.id()))
                     .cloned()
             }
             RotationMode::Automatic => {
-                // In automatic mode, rotate through available proxies (skip bad ones)
+                // In automatic mode, rotate through available proxies (skip bad/cooldown ones)
                 self.get_next_proxy(rotation_index)
             }
             RotationMode::PerDomain => {
                 // Extract domain from email
                 let domain = email.split('@').next_back().unwrap_or("");
                 
-                // Check for domain assignment (only if proxy is not bad)
+                // Check for domain assignment (only if proxy is available)
                 if let Some(proxy) = self.get_domain_proxy(domain) {
-                    if !self.is_proxy_bad(&proxy.id()) {
+                    if self.is_proxy_available(&proxy.id()) {
                         return Some(proxy.clone());
                     }
                 }
@@ -536,21 +647,21 @@ impl ProxyPool {
                 // Fall back to first available proxy for unassigned domains
                 self.proxies
                     .iter()
-                    .find(|p| !self.is_proxy_bad(&p.id()))
+                    .find(|p| self.is_proxy_available(&p.id()))
                     .cloned()
             }
         }
     }
 
     /// Get the proxy for a specific domain in PerDomain mode
-    /// Returns None if not in PerDomain mode, domain not assigned, proxy is bad, or no proxies
+    /// Returns None if not in PerDomain mode, domain not assigned, proxy is bad/in cooldown, or no proxies
     pub fn get_proxy_by_domain(&self, domain: &str) -> Option<ProxyConfig> {
         if self.rotation_mode != RotationMode::PerDomain {
             return None;
         }
         let proxy = self.get_domain_proxy(domain)?;
-        // Don't return bad proxies
-        if self.is_proxy_bad(&proxy.id()) {
+        // Don't return bad or cooling down proxies
+        if !self.is_proxy_available(&proxy.id()) {
             return None;
         }
         Some(proxy.clone())
@@ -854,6 +965,61 @@ pub async fn reset_all_proxy_stats(
 ) -> Result<(), String> {
     let mut settings = state.settings.write().await;
     settings.proxy_pool.reset_all_stats();
+    Ok(())
+}
+
+// =====================
+// Cooldown Commands
+// =====================
+
+/// Check if a proxy is currently in cooldown
+#[tauri::command]
+pub async fn is_proxy_in_cooldown(
+    state: tauri::State<'_, SettingsState>,
+    proxy_id: String,
+) -> Result<bool, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.proxy_pool.is_proxy_in_cooldown(&proxy_id))
+}
+
+/// Get remaining cooldown time for a proxy in seconds
+#[tauri::command]
+pub async fn get_remaining_cooldown(
+    state: tauri::State<'_, SettingsState>,
+    proxy_id: String,
+) -> Result<u64, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.proxy_pool.get_remaining_cooldown(&proxy_id))
+}
+
+/// Manually bypass cooldown for a proxy (Retry Now button)
+#[tauri::command]
+pub async fn bypass_proxy_cooldown(
+    state: tauri::State<'_, SettingsState>,
+    proxy_id: String,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.bypass_cooldown(&proxy_id);
+    Ok(())
+}
+
+/// Get the current cooldown duration setting
+#[tauri::command]
+pub async fn get_cooldown_duration(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<u64, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.proxy_pool.cooldown_duration_secs)
+}
+
+/// Set the cooldown duration (clamped to 30-300 seconds)
+#[tauri::command]
+pub async fn set_cooldown_duration(
+    state: tauri::State<'_, SettingsState>,
+    duration_secs: u64,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.set_cooldown_duration(duration_secs);
     Ok(())
 }
 
@@ -2224,6 +2390,216 @@ mod tests {
         assert_eq!(serde_json::from_str::<HealthStatus>("\"healthy\"").unwrap(), HealthStatus::Healthy);
         assert_eq!(serde_json::from_str::<HealthStatus>("\"degraded\"").unwrap(), HealthStatus::Degraded);
         assert_eq!(serde_json::from_str::<HealthStatus>("\"failed\"").unwrap(), HealthStatus::Failed);
+    }
+
+    // =====================
+    // Cooldown Tests
+    // =====================
+
+    #[test]
+    fn test_proxy_stats_enter_cooldown() {
+        let mut stats = ProxyStats::new();
+        assert!(!stats.is_in_cooldown());
+        
+        stats.enter_cooldown(60);
+        assert!(stats.is_in_cooldown());
+        assert!(stats.remaining_cooldown_secs() > 0);
+        assert!(stats.remaining_cooldown_secs() <= 60);
+    }
+
+    #[test]
+    fn test_proxy_stats_cooldown_expiry() {
+        let mut stats = ProxyStats::new();
+        
+        // Enter cooldown for 1 second
+        stats.enter_cooldown(1);
+        assert!(stats.is_in_cooldown());
+        
+        // Wait for cooldown to expire
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        
+        assert!(!stats.is_in_cooldown());
+        assert_eq!(stats.remaining_cooldown_secs(), 0);
+    }
+
+    #[test]
+    fn test_proxy_stats_clear_cooldown() {
+        let mut stats = ProxyStats::new();
+        stats.enter_cooldown(60);
+        assert!(stats.is_in_cooldown());
+        
+        stats.clear_cooldown();
+        assert!(!stats.is_in_cooldown());
+        assert_eq!(stats.remaining_cooldown_secs(), 0);
+    }
+
+    #[test]
+    fn test_proxy_stats_cooldown_persists_in_json() {
+        let mut stats = ProxyStats::new();
+        stats.enter_cooldown(60);
+        
+        let json = serde_json::to_string(&stats).unwrap();
+        assert!(json.contains("\"cooldownUntil\""));
+        
+        let deserialized: ProxyStats = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.is_in_cooldown());
+    }
+
+    #[test]
+    fn test_proxy_pool_default_cooldown_duration() {
+        let pool = ProxyPool::new();
+        assert_eq!(pool.cooldown_duration_secs, 60);
+    }
+
+    #[test]
+    fn test_proxy_pool_set_cooldown_duration() {
+        let mut pool = ProxyPool::new();
+        
+        // Test clamping to minimum
+        pool.set_cooldown_duration(10);
+        assert_eq!(pool.cooldown_duration_secs, 30);
+        
+        // Test clamping to maximum
+        pool.set_cooldown_duration(500);
+        assert_eq!(pool.cooldown_duration_secs, 300);
+        
+        // Test valid value
+        pool.set_cooldown_duration(120);
+        assert_eq!(pool.cooldown_duration_secs, 120);
+    }
+
+    #[test]
+    fn test_proxy_pool_is_proxy_in_cooldown() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // Not in cooldown initially
+        assert!(!pool.is_proxy_in_cooldown("192.168.1.1:8080"));
+        
+        // Make it bad (3 failures)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        // Should now be in cooldown
+        assert!(pool.is_proxy_in_cooldown("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_proxy_pool_bypass_cooldown() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // Make it bad (3 failures) - enters cooldown
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        assert!(pool.is_proxy_in_cooldown("192.168.1.1:8080"));
+        assert!(pool.is_proxy_bad("192.168.1.1:8080"));
+        
+        // Bypass cooldown
+        pool.bypass_cooldown("192.168.1.1:8080");
+        
+        // Should no longer be in cooldown or bad
+        assert!(!pool.is_proxy_in_cooldown("192.168.1.1:8080"));
+        assert!(!pool.is_proxy_bad("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_proxy_pool_record_success_clears_cooldown() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // Make it bad (3 failures) - enters cooldown
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        assert!(pool.is_proxy_in_cooldown("192.168.1.1:8080"));
+        
+        // Record success - should clear cooldown
+        pool.record_success("192.168.1.1:8080");
+        assert!(!pool.is_proxy_in_cooldown("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_proxy_pool_get_available_proxies_excludes_cooldown() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Make first proxy bad (enters cooldown)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        let available = pool.get_available_proxies();
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].host, "192.168.1.2");
+    }
+
+    #[test]
+    fn test_proxy_pool_is_proxy_available() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // Available initially
+        assert!(pool.is_proxy_available("192.168.1.1:8080"));
+        
+        // 2 failures - still available
+        pool.record_failure("192.168.1.1:8080");
+        pool.record_failure("192.168.1.1:8080");
+        assert!(pool.is_proxy_available("192.168.1.1:8080"));
+        
+        // 3 failures - now bad and in cooldown
+        pool.record_failure("192.168.1.1:8080");
+        assert!(!pool.is_proxy_available("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_proxy_pool_get_remaining_cooldown() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // No cooldown initially
+        assert_eq!(pool.get_remaining_cooldown("192.168.1.1:8080"), 0);
+        
+        // Make it bad (enters cooldown with default 60s)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        let remaining = pool.get_remaining_cooldown("192.168.1.1:8080");
+        assert!(remaining > 0);
+        assert!(remaining <= 60);
+    }
+
+    #[test]
+    fn test_proxy_pool_cooldown_persists_in_json() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // Make it bad (enters cooldown)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        let json = serde_json::to_string(&pool).unwrap();
+        let deserialized: ProxyPool = serde_json::from_str(&json).unwrap();
+        
+        // Should still be in cooldown after deserialization
+        assert!(deserialized.is_proxy_in_cooldown("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_proxy_pool_cooldown_duration_in_json() {
+        let mut pool = ProxyPool::new();
+        pool.set_cooldown_duration(120);
+        
+        let json = serde_json::to_string(&pool).unwrap();
+        assert!(json.contains("\"cooldownDurationSecs\":120"));
+        
+        let deserialized: ProxyPool = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.cooldown_duration_secs, 120);
     }
 
     // =====================

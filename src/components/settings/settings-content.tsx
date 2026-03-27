@@ -23,6 +23,8 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
     updateProxyPoolConfig,
     assignDomainProxy,
     unassignDomainProxy,
+    bypassProxyCooldown,
+    setCooldownDuration,
   } = useSettings();
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings);
   const [activeTab, setActiveTab] = useState('validation');
@@ -178,6 +180,31 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
       }));
     }
   }, [assignDomainProxy, unassignDomainProxy]);
+
+  // Bypass cooldown for a proxy
+  const handleBypassCooldown = useCallback(async (proxyId: string) => {
+    try {
+      await bypassProxyCooldown(proxyId);
+      toast.success("Cooldown bypassed - proxy is now available");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to bypass cooldown";
+      toast.error(message);
+    }
+  }, [bypassProxyCooldown]);
+
+  // Handle cooldown duration change
+  const handleCooldownDurationChange = useCallback(async (value: number[]) => {
+    const duration = value[0];
+    setLocalSettings(prev => ({
+      ...prev,
+      proxy: { ...prev.proxy, cooldownDurationSecs: duration },
+    }));
+    try {
+      await setCooldownDuration(duration);
+    } catch (error) {
+      toast.error("Failed to update cooldown duration");
+    }
+  }, [setCooldownDuration]);
 
   return (
     <div className="space-y-6">
@@ -369,8 +396,37 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                   onAdd={handleAddProxy}
                   onUpdate={handleUpdateProxy}
                   onDelete={handleDeleteProxy}
+                  onBypassCooldown={handleBypassCooldown}
                   disabled={!localSettings.proxy.enabled}
                 />
+              </div>
+
+              {/* Cooldown duration setting */}
+              <div className="pt-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="cooldown-duration">Cooldown Duration</Label>
+                  <span className="text-sm text-muted-foreground">
+                    {localSettings.proxy.cooldownDurationSecs} seconds
+                  </span>
+                </div>
+                <input
+                  id="cooldown-duration"
+                  type="range"
+                  min={30}
+                  max={300}
+                  step={10}
+                  value={localSettings.proxy.cooldownDurationSecs}
+                  onChange={(e) => handleCooldownDurationChange([parseInt(e.target.value, 10)])}
+                  disabled={!localSettings.proxy.enabled}
+                  className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>30s</span>
+                  <span>300s</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Time before a failed proxy automatically rejoins rotation (30s - 300s)
+                </p>
               </div>
 
               {localSettings.proxy.rotationMode === 'perDomain' && (
