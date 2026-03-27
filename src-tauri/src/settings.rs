@@ -457,23 +457,49 @@ impl ProxyPool {
         self.domain_assignments.remove(&domain.to_lowercase()).is_some()
     }
 
-    /// Get the next proxy for automatic rotation (round-robin)
+    /// Check if a proxy is "bad" (3 consecutive failures)
+    pub fn is_proxy_bad(&self, proxy_id: &str) -> bool {
+        self.proxy_stats
+            .get(proxy_id)
+            .map(|stats| stats.is_bad())
+            .unwrap_or(false)
+    }
+
+    /// Get list of available (non-bad) proxies
+    /// Bad proxies (3+ consecutive failures) are excluded from this list
+    pub fn get_available_proxies(&self) -> Vec<ProxyConfig> {
+        self.proxies
+            .iter()
+            .filter(|p| !self.is_proxy_bad(&p.id()))
+            .cloned()
+            .collect()
+    }
+
+    /// Check if there are any available (non-bad) proxies
+    pub fn has_available_proxies(&self) -> bool {
+        self.proxies.iter().any(|p| !self.is_proxy_bad(&p.id()))
+    }
+
+    /// Get the next available proxy for automatic rotation (round-robin)
+    /// Bad proxies (3+ consecutive failures) are excluded from rotation
     /// Returns None if no proxies are available
     pub fn get_next_proxy(&mut self, rotation_index: &mut usize) -> Option<ProxyConfig> {
-        if self.proxies.is_empty() {
+        let available = self.get_available_proxies();
+        if available.is_empty() {
             return None;
         }
 
-        let proxy = self.proxies[*rotation_index % self.proxies.len()].clone();
-        *rotation_index = (*rotation_index + 1) % self.proxies.len();
+        let proxy = available[*rotation_index % available.len()].clone();
+        *rotation_index = (*rotation_index + 1) % available.len();
         Some(proxy)
     }
 
     /// Get the proxy to use for a specific email based on rotation mode
-    /// - Manual: returns the first proxy (user should select via UI)
-    /// - Automatic: rotates through proxies using the rotation_index
-    /// - PerDomain: uses domain assignment if available, falls back to first proxy
+    /// - Manual: returns the first available (non-bad) proxy
+    /// - Automatic: rotates through available (non-bad) proxies using the rotation_index
+    /// - PerDomain: uses domain assignment if available and proxy is not bad, falls back to first available proxy
     ///
+    /// Bad proxies (3+ consecutive failures) are excluded from rotation
     /// Returns None if no proxies are available
     pub fn get_proxy_for_email(
         &mut self,
@@ -486,35 +512,48 @@ impl ProxyPool {
 
         match self.rotation_mode {
             RotationMode::Manual => {
-                // In manual mode, use the first proxy
-                self.proxies.first().cloned()
+                // In manual mode, use the first available proxy (skip bad ones)
+                self.proxies
+                    .iter()
+                    .find(|p| !self.is_proxy_bad(&p.id()))
+                    .cloned()
             }
             RotationMode::Automatic => {
-                // In automatic mode, rotate through proxies
+                // In automatic mode, rotate through available proxies (skip bad ones)
                 self.get_next_proxy(rotation_index)
             }
             RotationMode::PerDomain => {
                 // Extract domain from email
                 let domain = email.split('@').next_back().unwrap_or("");
                 
-                // Check for domain assignment
+                // Check for domain assignment (only if proxy is not bad)
                 if let Some(proxy) = self.get_domain_proxy(domain) {
-                    return Some(proxy.clone());
+                    if !self.is_proxy_bad(&proxy.id()) {
+                        return Some(proxy.clone());
+                    }
                 }
 
-                // Fall back to first proxy for unassigned domains
-                self.proxies.first().cloned()
+                // Fall back to first available proxy for unassigned domains
+                self.proxies
+                    .iter()
+                    .find(|p| !self.is_proxy_bad(&p.id()))
+                    .cloned()
             }
         }
     }
 
     /// Get the proxy for a specific domain in PerDomain mode
-    /// Returns None if not in PerDomain mode, domain not assigned, or no proxies
+    /// Returns None if not in PerDomain mode, domain not assigned, proxy is bad, or no proxies
     pub fn get_proxy_by_domain(&self, domain: &str) -> Option<ProxyConfig> {
         if self.rotation_mode != RotationMode::PerDomain {
             return None;
         }
-        self.get_domain_proxy(domain).cloned()
+        let proxy = self.get_domain_proxy(domain)?;
+        // Don't return bad proxies
+        if self.is_proxy_bad(&proxy.id()) {
+            return None;
+        }
+        Some(proxy.clone())
     }
 }
 
@@ -1495,6 +1534,262 @@ mod tests {
         // Just verify it doesn't panic and returns valid proxies
         assert!(proxy1.host.starts_with("192.168.1"));
         assert!(proxy2.host.starts_with("192.168.1"));
+    }
+
+    // =====================
+    // Bad Proxy Detection Tests
+    // =====================
+
+    #[test]
+    fn test_is_proxy_bad_no_stats() {
+        let pool = ProxyPool::new();
+        // Proxy with no stats should not be considered bad
+        assert!(!pool.is_proxy_bad("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_is_proxy_bad_below_threshold() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // 2 consecutive failures - not bad yet
+        pool.record_failure("192.168.1.1:8080");
+        pool.record_failure("192.168.1.1:8080");
+        
+        assert!(!pool.is_proxy_bad("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_is_proxy_bad_at_threshold() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // 3 consecutive failures - now bad
+        pool.record_failure("192.168.1.1:8080");
+        pool.record_failure("192.168.1.1:8080");
+        pool.record_failure("192.168.1.1:8080");
+        
+        assert!(pool.is_proxy_bad("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_is_proxy_bad_resets_on_success() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // 3 consecutive failures - now bad
+        pool.record_failure("192.168.1.1:8080");
+        pool.record_failure("192.168.1.1:8080");
+        pool.record_failure("192.168.1.1:8080");
+        assert!(pool.is_proxy_bad("192.168.1.1:8080"));
+        
+        // Success resets consecutive failures
+        pool.record_success("192.168.1.1:8080");
+        assert!(!pool.is_proxy_bad("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_get_available_proxies_empty_pool() {
+        let pool = ProxyPool::new();
+        assert!(pool.get_available_proxies().is_empty());
+    }
+
+    #[test]
+    fn test_get_available_proxies_all_healthy() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        let available = pool.get_available_proxies();
+        assert_eq!(available.len(), 2);
+    }
+
+    #[test]
+    fn test_get_available_proxies_excludes_bad() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.3".to_string(), 8080)).unwrap();
+        
+        // Mark second proxy as bad (3 failures)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.2:8080");
+        }
+        
+        let available = pool.get_available_proxies();
+        assert_eq!(available.len(), 2);
+        assert!(available.iter().all(|p| p.host != "192.168.1.2"));
+    }
+
+    #[test]
+    fn test_get_available_proxies_all_bad() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Mark all proxies as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+            pool.record_failure("192.168.1.2:8080");
+        }
+        
+        let available = pool.get_available_proxies();
+        assert!(available.is_empty());
+    }
+
+    #[test]
+    fn test_has_available_proxies_with_healthy() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        assert!(pool.has_available_proxies());
+    }
+
+    #[test]
+    fn test_has_available_proxies_all_bad() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // Mark as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        assert!(!pool.has_available_proxies());
+    }
+
+    #[test]
+    fn test_get_next_proxy_excludes_bad() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.3".to_string(), 8080)).unwrap();
+        
+        // Mark second proxy as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.2:8080");
+        }
+        
+        let mut index = 0;
+        
+        // Get multiple proxies and verify we never get the bad one
+        for _ in 0..10 {
+            let proxy = pool.get_next_proxy(&mut index).unwrap();
+            assert_ne!(proxy.host, "192.168.1.2");
+        }
+    }
+
+    #[test]
+    fn test_get_next_proxy_all_bad_returns_none() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Mark all as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+            pool.record_failure("192.168.1.2:8080");
+        }
+        
+        let mut index = 0;
+        let proxy = pool.get_next_proxy(&mut index);
+        assert!(proxy.is_none());
+    }
+
+    #[test]
+    fn test_get_proxy_for_email_manual_mode_excludes_bad() {
+        let mut pool = ProxyPool::new();
+        pool.rotation_mode = RotationMode::Manual;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Mark first proxy as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        let mut index = 0;
+        let proxy = pool.get_proxy_for_email("test@example.com", &mut index).unwrap();
+        
+        // Should return second proxy (first available non-bad)
+        assert_eq!(proxy.host, "192.168.1.2");
+    }
+
+    #[test]
+    fn test_get_proxy_for_email_automatic_mode_excludes_bad() {
+        let mut pool = ProxyPool::new();
+        pool.rotation_mode = RotationMode::Automatic;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.3".to_string(), 8080)).unwrap();
+        
+        // Mark second proxy as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.2:8080");
+        }
+        
+        let mut index = 0;
+        
+        // All returned proxies should skip the bad one
+        for _ in 0..10 {
+            let proxy = pool.get_proxy_for_email("test@example.com", &mut index).unwrap();
+            assert_ne!(proxy.host, "192.168.1.2");
+        }
+    }
+
+    #[test]
+    fn test_get_proxy_for_email_per_domain_excludes_bad_assigned() {
+        let mut pool = ProxyPool::new();
+        pool.rotation_mode = RotationMode::PerDomain;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.assign_domain("gmail.com".to_string(), "192.168.1.1:8080".to_string()).unwrap();
+        
+        // Mark assigned proxy as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        let mut index = 0;
+        let proxy = pool.get_proxy_for_email("user@gmail.com", &mut index).unwrap();
+        
+        // Should fall back to second proxy since assigned one is bad
+        assert_eq!(proxy.host, "192.168.1.2");
+    }
+
+    #[test]
+    fn test_get_proxy_for_email_all_bad_returns_none() {
+        let mut pool = ProxyPool::new();
+        pool.rotation_mode = RotationMode::Automatic;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Mark all as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+            pool.record_failure("192.168.1.2:8080");
+        }
+        
+        let mut index = 0;
+        let proxy = pool.get_proxy_for_email("test@example.com", &mut index);
+        assert!(proxy.is_none());
+    }
+
+    #[test]
+    fn test_get_proxy_by_domain_excludes_bad() {
+        let mut pool = ProxyPool::new();
+        pool.rotation_mode = RotationMode::PerDomain;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.assign_domain("gmail.com".to_string(), "192.168.1.1:8080".to_string()).unwrap();
+        
+        // Mark assigned proxy as bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        let proxy = pool.get_proxy_by_domain("gmail.com");
+        assert!(proxy.is_none());
     }
 
     // =====================
