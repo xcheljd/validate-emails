@@ -5,6 +5,20 @@ use std::path::PathBuf;
 use std::fs;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+/// Generate a pseudo-random number in range [0, max) using system time.
+/// This is a simple deterministic "random" function for weighted selection
+/// that doesn't require the rand crate.
+fn pseudo_random(max: u32) -> u32 {
+    if max == 0 {
+        return 0;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    nanos % max
+}
+
 /// Rotation mode for proxy selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -327,6 +341,20 @@ impl ProxyStats {
     pub fn reset(&mut self) {
         *self = Self::default();
     }
+
+    /// Get the weight for weighted rotation selection.
+    /// - Returns 0 if in cooldown (proxy should not be selected)
+    /// - Returns 50 for new proxies (no attempts) - neutral weight
+    /// - Returns success_rate (0-100) for proxies with data
+    pub fn get_weight(&self) -> u32 {
+        if self.is_in_cooldown() {
+            return 0;
+        }
+        if self.attempts == 0 {
+            return 50; // Neutral weight for new proxies
+        }
+        self.success_rate()
+    }
 }
 
 /// Pool of proxies with configuration for rotation and management
@@ -591,18 +619,81 @@ impl ProxyPool {
         self.proxies.iter().any(|p| self.is_proxy_available(&p.id()))
     }
 
-    /// Get the next available proxy for automatic rotation (round-robin)
-    /// Bad proxies (3+ consecutive failures) are excluded from rotation
-    /// Returns None if no proxies are available
+    /// Get the weight for a specific proxy (used for weighted rotation)
+    /// - Returns 0 if proxy is in cooldown
+    /// - Returns 50 for new proxies (no attempts)
+    /// - Returns success_rate (0-100) for proxies with data
+    pub fn get_proxy_weight(&self, proxy_id: &str) -> u32 {
+        self.proxy_stats
+            .get(proxy_id)
+            .map(|stats| stats.get_weight())
+            .unwrap_or(50) // New proxy - neutral weight
+    }
+
+    /// Check if all available proxies have equal weights
+    fn all_weights_equal(&self, available: &[ProxyConfig]) -> bool {
+        if available.len() <= 1 {
+            return true;
+        }
+        let first_weight = self.get_proxy_weight(&available[0].id());
+        available.iter().all(|p| self.get_proxy_weight(&p.id()) == first_weight)
+    }
+
+    /// Get the next available proxy for automatic rotation
+    /// Uses weighted selection based on success rates when weights differ.
+    /// Falls back to round-robin when all weights are equal.
+    /// Bad proxies (3+ consecutive failures) and proxies in cooldown are excluded.
+    /// Returns None if no proxies are available.
     pub fn get_next_proxy(&mut self, rotation_index: &mut usize) -> Option<ProxyConfig> {
         let available = self.get_available_proxies();
         if available.is_empty() {
             return None;
         }
 
-        let proxy = available[*rotation_index % available.len()].clone();
-        *rotation_index = (*rotation_index + 1) % available.len();
-        Some(proxy)
+        // Check if all weights are equal - if so, use round-robin
+        if self.all_weights_equal(&available) {
+            let proxy = available[*rotation_index % available.len()].clone();
+            *rotation_index = (*rotation_index + 1) % available.len();
+            return Some(proxy);
+        }
+
+        // Use weighted selection
+        self.select_weighted_proxy(&available)
+    }
+
+    /// Select a proxy using weighted random selection.
+    /// Proxies with higher success rates are selected more frequently.
+    /// Selection probability is proportional to weight.
+    fn select_weighted_proxy(&self, available: &[ProxyConfig]) -> Option<ProxyConfig> {
+        if available.is_empty() {
+            return None;
+        }
+
+        // Calculate total weight
+        let weights: Vec<u32> = available.iter()
+            .map(|p| self.get_proxy_weight(&p.id()))
+            .collect();
+        let total_weight: u32 = weights.iter().sum();
+
+        // If total weight is 0, fall back to first proxy
+        if total_weight == 0 {
+            return Some(available[0].clone());
+        }
+
+        // Generate a pseudo-random number using system time nanos
+        let random_value = pseudo_random(total_weight);
+
+        // Find the selected proxy based on cumulative weight
+        let mut cumulative = 0u32;
+        for (i, weight) in weights.iter().enumerate() {
+            cumulative += weight;
+            if random_value < cumulative {
+                return Some(available[i].clone());
+            }
+        }
+
+        // Fallback to last proxy (shouldn't happen if logic is correct)
+        Some(available.last().unwrap().clone())
     }
 
     /// Get the proxy to use for a specific email based on rotation mode
@@ -2700,5 +2791,393 @@ mod tests {
         let stats = deserialized.get_stats("192.168.1.1:8080");
         assert_eq!(stats.successes, 1);
         assert_eq!(stats.failures, 1);
+    }
+
+    // =====================
+    // Weighted Rotation Tests
+    // =====================
+
+    #[test]
+    fn test_proxy_stats_get_weight_new_proxy() {
+        // New proxies (no attempts) get neutral weight of 50
+        let stats = ProxyStats::new();
+        assert_eq!(stats.get_weight(), 50);
+    }
+
+    #[test]
+    fn test_proxy_stats_get_weight_full_success() {
+        let mut stats = ProxyStats::new();
+        // 100% success rate
+        stats.record_success();
+        stats.record_success();
+        stats.record_success();
+        
+        assert_eq!(stats.get_weight(), 100);
+    }
+
+    #[test]
+    fn test_proxy_stats_get_weight_full_failure() {
+        let mut stats = ProxyStats::new();
+        // 0% success rate
+        stats.record_failure();
+        stats.record_failure();
+        stats.record_failure();
+        
+        assert_eq!(stats.get_weight(), 0);
+    }
+
+    #[test]
+    fn test_proxy_stats_get_weight_mixed() {
+        let mut stats = ProxyStats::new();
+        // 70% success rate
+        for _ in 0..7 {
+            stats.record_success();
+        }
+        for _ in 0..3 {
+            stats.record_failure();
+        }
+        
+        assert_eq!(stats.get_weight(), 70);
+    }
+
+    #[test]
+    fn test_proxy_stats_get_weight_cooldown() {
+        let mut stats = ProxyStats::new();
+        // 100% success rate
+        stats.record_success();
+        stats.record_success();
+        stats.record_success();
+        assert_eq!(stats.get_weight(), 100);
+        
+        // Enter cooldown - weight should be 0
+        stats.enter_cooldown(60);
+        assert_eq!(stats.get_weight(), 0);
+        
+        // Clear cooldown - weight should be back
+        stats.clear_cooldown();
+        assert_eq!(stats.get_weight(), 100);
+    }
+
+    #[test]
+    fn test_proxy_pool_get_proxy_weight_new_proxy() {
+        let pool = ProxyPool::new();
+        // New proxy (not in stats) gets neutral weight of 50
+        assert_eq!(pool.get_proxy_weight("192.168.1.1:8080"), 50);
+    }
+
+    #[test]
+    fn test_proxy_pool_get_proxy_weight_with_stats() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // Record 80% success rate
+        for _ in 0..8 {
+            pool.record_success("192.168.1.1:8080");
+        }
+        for _ in 0..2 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        assert_eq!(pool.get_proxy_weight("192.168.1.1:8080"), 80);
+    }
+
+    #[test]
+    fn test_proxy_pool_get_proxy_weight_cooldown() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        // Record some successes
+        pool.record_success("192.168.1.1:8080");
+        pool.record_success("192.168.1.1:8080");
+        assert_eq!(pool.get_proxy_weight("192.168.1.1:8080"), 100);
+        
+        // Make it bad (enters cooldown)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        
+        // Weight should be 0 when in cooldown
+        assert_eq!(pool.get_proxy_weight("192.168.1.1:8080"), 0);
+    }
+
+    #[test]
+    fn test_proxy_pool_all_weights_equal_single_proxy() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        let available = pool.get_available_proxies();
+        assert!(pool.all_weights_equal(&available));
+    }
+
+    #[test]
+    fn test_proxy_pool_all_weights_equal_new_proxies() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.3".to_string(), 8080)).unwrap();
+        
+        // All new proxies have weight 50
+        let available = pool.get_available_proxies();
+        assert!(pool.all_weights_equal(&available));
+    }
+
+    #[test]
+    fn test_proxy_pool_all_weights_equal_same_success_rate() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Both get 100% success rate
+        pool.record_success("192.168.1.1:8080");
+        pool.record_success("192.168.1.2:8080");
+        
+        let available = pool.get_available_proxies();
+        assert!(pool.all_weights_equal(&available));
+    }
+
+    #[test]
+    fn test_proxy_pool_all_weights_not_equal() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Different success rates
+        pool.record_success("192.168.1.1:8080"); // 100%
+        pool.record_failure("192.168.1.2:8080"); // 0%
+        
+        let available = pool.get_available_proxies();
+        assert!(!pool.all_weights_equal(&available));
+    }
+
+    #[test]
+    fn test_proxy_pool_weighted_selection_returns_proxy() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Set different weights
+        pool.record_success("192.168.1.1:8080"); // 100%
+        pool.record_failure("192.168.1.2:8080"); // 0%
+        
+        let available = pool.get_available_proxies();
+        
+        // Select many times - should always return a valid proxy
+        for _ in 0..100 {
+            let proxy = pool.select_weighted_proxy(&available);
+            assert!(proxy.is_some());
+            let host = proxy.unwrap().host;
+            assert!(host == "192.168.1.1" || host == "192.168.1.2");
+        }
+    }
+
+    #[test]
+    fn test_proxy_pool_weighted_selection_favors_higher_weight() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Proxy 1: 100% success, Proxy 2: 10% success
+        for _ in 0..10 {
+            pool.record_success("192.168.1.1:8080");
+        }
+        for _ in 0..9 {
+            pool.record_failure("192.168.1.2:8080");
+        }
+        pool.record_success("192.168.1.2:8080");
+        
+        let available = pool.get_available_proxies();
+        
+        // Count selections over many iterations
+        let mut proxy1_count = 0;
+        let mut proxy2_count = 0;
+        
+        for _ in 0..1000 {
+            let proxy = pool.select_weighted_proxy(&available).unwrap();
+            if proxy.host == "192.168.1.1" {
+                proxy1_count += 1;
+            } else {
+                proxy2_count += 1;
+            }
+        }
+        
+        // Proxy 1 should be selected much more often (weight 100 vs weight 10)
+        // Expected ratio is roughly 100:10 = 10:1
+        // So proxy1_count should be much higher than proxy2_count
+        assert!(proxy1_count > proxy2_count * 5, 
+            "Expected proxy1 to be selected much more often. Got proxy1: {}, proxy2: {}", 
+            proxy1_count, proxy2_count);
+    }
+
+    #[test]
+    fn test_proxy_pool_weighted_selection_empty() {
+        let pool = ProxyPool::new();
+        let available: Vec<ProxyConfig> = vec![];
+        
+        let proxy = pool.select_weighted_proxy(&available);
+        assert!(proxy.is_none());
+    }
+
+    #[test]
+    fn test_proxy_pool_weighted_selection_zero_total_weight() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Both proxies have 0% success rate
+        pool.record_failure("192.168.1.1:8080");
+        pool.record_failure("192.168.1.2:8080");
+        
+        let available = pool.get_available_proxies();
+        
+        // Should still return a proxy (fallback to first)
+        let proxy = pool.select_weighted_proxy(&available);
+        assert!(proxy.is_some());
+    }
+
+    #[test]
+    fn test_proxy_pool_get_next_proxy_uses_round_robin_when_equal() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.3".to_string(), 8080)).unwrap();
+        
+        // All proxies have equal weight (50 - new proxies)
+        let mut index = 0;
+        
+        // Should rotate in order (round-robin)
+        let p1 = pool.get_next_proxy(&mut index).unwrap();
+        assert_eq!(p1.host, "192.168.1.1");
+        
+        let p2 = pool.get_next_proxy(&mut index).unwrap();
+        assert_eq!(p2.host, "192.168.1.2");
+        
+        let p3 = pool.get_next_proxy(&mut index).unwrap();
+        assert_eq!(p3.host, "192.168.1.3");
+        
+        let p4 = pool.get_next_proxy(&mut index).unwrap();
+        assert_eq!(p4.host, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_proxy_pool_get_next_proxy_uses_weighted_when_different() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Proxy 1: 100% success, Proxy 2: 20% success
+        for _ in 0..10 {
+            pool.record_success("192.168.1.1:8080");
+        }
+        for _ in 0..8 {
+            pool.record_failure("192.168.1.2:8080");
+        }
+        for _ in 0..2 {
+            pool.record_success("192.168.1.2:8080");
+        }
+        
+        let mut index = 0;
+        
+        // Count how often each proxy is selected
+        let mut proxy1_count = 0;
+        let mut proxy2_count = 0;
+        
+        for _ in 0..100 {
+            let proxy = pool.get_next_proxy(&mut index).unwrap();
+            if proxy.host == "192.168.1.1" {
+                proxy1_count += 1;
+            } else {
+                proxy2_count += 1;
+            }
+        }
+        
+        // Proxy 1 should be selected more often due to higher weight
+        assert!(proxy1_count > proxy2_count, 
+            "Expected proxy1 to be selected more often. Got proxy1: {}, proxy2: {}", 
+            proxy1_count, proxy2_count);
+    }
+
+    #[test]
+    fn test_proxy_pool_weighted_excludes_cooldown() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        
+        // Proxy 1 in cooldown (3 failures)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        // Proxy 2 healthy
+        pool.record_success("192.168.1.2:8080");
+        
+        let available = pool.get_available_proxies();
+        
+        // Only proxy 2 should be available
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].host, "192.168.1.2");
+    }
+
+    #[test]
+    fn test_proxy_pool_weighted_distribution() {
+        // Test that weights are correctly calculated and used
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap(); // Will have 80%
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap(); // Will have 50%
+        pool.add_proxy(ProxyConfig::new("192.168.1.3".to_string(), 8080)).unwrap(); // Will have 30%
+        
+        // Proxy 1: 80% success rate (8 success, 2 failure - alternating to avoid consecutive failures)
+        pool.record_success("192.168.1.1:8080");
+        pool.record_success("192.168.1.1:8080");
+        pool.record_success("192.168.1.1:8080");
+        pool.record_success("192.168.1.1:8080");
+        pool.record_failure("192.168.1.1:8080");
+        pool.record_success("192.168.1.1:8080");
+        pool.record_success("192.168.1.1:8080");
+        pool.record_success("192.168.1.1:8080");
+        pool.record_success("192.168.1.1:8080");
+        pool.record_failure("192.168.1.1:8080");
+        
+        // Proxy 2: 50% success rate (5 success, 5 failure - alternating)
+        pool.record_success("192.168.1.2:8080");
+        pool.record_failure("192.168.1.2:8080");
+        pool.record_success("192.168.1.2:8080");
+        pool.record_failure("192.168.1.2:8080");
+        pool.record_success("192.168.1.2:8080");
+        pool.record_failure("192.168.1.2:8080");
+        pool.record_success("192.168.1.2:8080");
+        pool.record_failure("192.168.1.2:8080");
+        pool.record_success("192.168.1.2:8080");
+        pool.record_failure("192.168.1.2:8080");
+        
+        // Proxy 3: 30% success rate (3 success, 7 failure - but ensure no 3 consecutive failures)
+        pool.record_failure("192.168.1.3:8080");
+        pool.record_success("192.168.1.3:8080");
+        pool.record_failure("192.168.1.3:8080");
+        pool.record_failure("192.168.1.3:8080");
+        pool.record_success("192.168.1.3:8080"); // Reset consecutive failures
+        pool.record_failure("192.168.1.3:8080");
+        pool.record_failure("192.168.1.3:8080");
+        pool.record_success("192.168.1.3:8080"); // Reset consecutive failures
+        pool.record_failure("192.168.1.3:8080");
+        pool.record_failure("192.168.1.3:8080");
+        
+        // Verify weights
+        assert_eq!(pool.get_proxy_weight("192.168.1.1:8080"), 80);
+        assert_eq!(pool.get_proxy_weight("192.168.1.2:8080"), 50);
+        assert_eq!(pool.get_proxy_weight("192.168.1.3:8080"), 30);
+        
+        // Verify all proxies are available (not in cooldown, not bad)
+        let available = pool.get_available_proxies();
+        assert_eq!(available.len(), 3);
+        
+        // Verify that proxies with different weights use weighted selection
+        assert!(!pool.all_weights_equal(&available));
+        
+        // Verify that select_weighted_proxy returns a valid proxy
+        for _ in 0..100 {
+            let proxy = pool.select_weighted_proxy(&available);
+            assert!(proxy.is_some());
+            let host = proxy.unwrap().host.clone();
+            assert!(host == "192.168.1.1" || host == "192.168.1.2" || host == "192.168.1.3");
+        }
     }
 }
