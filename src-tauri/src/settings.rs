@@ -202,6 +202,89 @@ impl ProxyConfig {
     }
 }
 
+/// Health status of a proxy based on success rate
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum HealthStatus {
+    /// Proxy is healthy with >90% success rate
+    #[default]
+    Healthy,
+    /// Proxy is degraded with 50-90% success rate
+    Degraded,
+    /// Proxy has failed with <50% success rate
+    Failed,
+}
+
+/// Statistics tracking for a single proxy
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct ProxyStats {
+    /// Total number of validation attempts through this proxy
+    pub attempts: u32,
+    /// Number of successful validations
+    pub successes: u32,
+    /// Number of failed validations
+    pub failures: u32,
+    /// Number of consecutive failures (resets on success)
+    pub consecutive_failures: u32,
+}
+
+impl ProxyStats {
+    /// Create new empty stats
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record a successful validation
+    pub fn record_success(&mut self) {
+        self.attempts += 1;
+        self.successes += 1;
+        self.consecutive_failures = 0;
+    }
+
+    /// Record a failed validation
+    pub fn record_failure(&mut self) {
+        self.attempts += 1;
+        self.failures += 1;
+        self.consecutive_failures += 1;
+    }
+
+    /// Calculate success rate as a percentage (0-100)
+    /// Returns 100 if no attempts have been made (neutral for new proxies)
+    pub fn success_rate(&self) -> u32 {
+        if self.attempts == 0 {
+            return 100; // New proxies start with neutral/healthy status
+        }
+        (self.successes * 100) / self.attempts
+    }
+
+    /// Get the health status based on success rate
+    /// - Healthy: >90%
+    /// - Degraded: 50-90%
+    /// - Failed: <50%
+    pub fn health_status(&self) -> HealthStatus {
+        let rate = self.success_rate();
+        if rate >= 90 {
+            HealthStatus::Healthy
+        } else if rate >= 50 {
+            HealthStatus::Degraded
+        } else {
+            HealthStatus::Failed
+        }
+    }
+
+    /// Check if proxy is "bad" (3 consecutive failures)
+    pub fn is_bad(&self) -> bool {
+        self.consecutive_failures >= 3
+    }
+
+    /// Reset all stats
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Pool of proxies with configuration for rotation and management
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -216,6 +299,9 @@ pub struct ProxyPool {
     /// Per-domain proxy assignments (domain -> proxy host:port)
     #[serde(default)]
     pub domain_assignments: std::collections::HashMap<String, String>,
+    /// Statistics per proxy (proxy ID -> stats)
+    #[serde(default)]
+    pub proxy_stats: std::collections::HashMap<String, ProxyStats>,
 }
 
 impl ProxyPool {
@@ -243,6 +329,8 @@ impl ProxyPool {
         self.proxies.retain(|p| p.id() != id);
         // Also remove from domain assignments
         self.domain_assignments.retain(|_, v| v != id);
+        // Also remove stats
+        self.proxy_stats.remove(id);
         self.proxies.len() != initial_len
     }
 
@@ -308,6 +396,44 @@ impl ProxyPool {
     pub fn clear(&mut self) {
         self.proxies.clear();
         self.domain_assignments.clear();
+        self.proxy_stats.clear();
+    }
+
+    /// Get stats for a specific proxy (returns owned value)
+    pub fn get_stats(&self, proxy_id: &str) -> ProxyStats {
+        self.proxy_stats.get(proxy_id).cloned().unwrap_or_default()
+    }
+
+    /// Get mutable stats for a specific proxy
+    pub fn get_stats_mut(&mut self, proxy_id: &str) -> &mut ProxyStats {
+        self.proxy_stats.entry(proxy_id.to_string()).or_default()
+    }
+
+    /// Record a successful validation for a proxy
+    pub fn record_success(&mut self, proxy_id: &str) {
+        self.get_stats_mut(proxy_id).record_success();
+    }
+
+    /// Record a failed validation for a proxy
+    pub fn record_failure(&mut self, proxy_id: &str) {
+        self.get_stats_mut(proxy_id).record_failure();
+    }
+
+    /// Get all proxy stats
+    pub fn get_all_stats(&self) -> &std::collections::HashMap<String, ProxyStats> {
+        &self.proxy_stats
+    }
+
+    /// Reset stats for a specific proxy
+    pub fn reset_stats(&mut self, proxy_id: &str) {
+        if let Some(stats) = self.proxy_stats.get_mut(proxy_id) {
+            stats.reset();
+        }
+    }
+
+    /// Reset all proxy stats
+    pub fn reset_all_stats(&mut self) {
+        self.proxy_stats.clear();
     }
 
     /// Assign a proxy to a specific domain
@@ -624,6 +750,72 @@ pub async fn unassign_domain_proxy(
 ) -> Result<bool, String> {
     let mut settings = state.settings.write().await;
     Ok(settings.proxy_pool.unassign_domain(&domain))
+}
+
+// =====================
+// Proxy Stats Commands
+// =====================
+
+/// Get stats for a specific proxy
+#[tauri::command]
+pub async fn get_proxy_stats(
+    state: tauri::State<'_, SettingsState>,
+    proxy_id: String,
+) -> Result<ProxyStats, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.proxy_pool.get_stats(&proxy_id))
+}
+
+/// Get all proxy stats
+#[tauri::command]
+pub async fn get_all_proxy_stats(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<std::collections::HashMap<String, ProxyStats>, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.proxy_pool.proxy_stats.clone())
+}
+
+/// Record a successful validation for a proxy
+#[tauri::command]
+pub async fn record_proxy_success(
+    state: tauri::State<'_, SettingsState>,
+    proxy_id: String,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.record_success(&proxy_id);
+    Ok(())
+}
+
+/// Record a failed validation for a proxy
+#[tauri::command]
+pub async fn record_proxy_failure(
+    state: tauri::State<'_, SettingsState>,
+    proxy_id: String,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.record_failure(&proxy_id);
+    Ok(())
+}
+
+/// Reset stats for a specific proxy
+#[tauri::command]
+pub async fn reset_proxy_stats(
+    state: tauri::State<'_, SettingsState>,
+    proxy_id: String,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.reset_stats(&proxy_id);
+    Ok(())
+}
+
+/// Reset all proxy stats
+#[tauri::command]
+pub async fn reset_all_proxy_stats(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.reset_all_stats();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1524,5 +1716,318 @@ mod tests {
 
         let assigned = settings.proxy_pool.get_domain_proxy("gmail.com");
         assert!(assigned.is_none());
+    }
+
+    // =====================
+    // ProxyStats Tests
+    // =====================
+
+    #[test]
+    fn test_proxy_stats_new() {
+        let stats = ProxyStats::new();
+        assert_eq!(stats.attempts, 0);
+        assert_eq!(stats.successes, 0);
+        assert_eq!(stats.failures, 0);
+        assert_eq!(stats.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn test_proxy_stats_record_success() {
+        let mut stats = ProxyStats::new();
+        stats.record_success();
+        
+        assert_eq!(stats.attempts, 1);
+        assert_eq!(stats.successes, 1);
+        assert_eq!(stats.failures, 0);
+        assert_eq!(stats.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn test_proxy_stats_record_failure() {
+        let mut stats = ProxyStats::new();
+        stats.record_failure();
+        
+        assert_eq!(stats.attempts, 1);
+        assert_eq!(stats.successes, 0);
+        assert_eq!(stats.failures, 1);
+        assert_eq!(stats.consecutive_failures, 1);
+    }
+
+    #[test]
+    fn test_proxy_stats_consecutive_failures_reset_on_success() {
+        let mut stats = ProxyStats::new();
+        stats.record_failure();
+        stats.record_failure();
+        stats.record_failure();
+        
+        assert_eq!(stats.consecutive_failures, 3);
+        
+        stats.record_success();
+        assert_eq!(stats.consecutive_failures, 0);
+        assert_eq!(stats.successes, 1);
+        assert_eq!(stats.failures, 3);
+    }
+
+    #[test]
+    fn test_proxy_stats_success_rate_no_attempts() {
+        let stats = ProxyStats::new();
+        // No attempts should return 100 (neutral/healthy)
+        assert_eq!(stats.success_rate(), 100);
+    }
+
+    #[test]
+    fn test_proxy_stats_success_rate_all_success() {
+        let mut stats = ProxyStats::new();
+        stats.record_success();
+        stats.record_success();
+        stats.record_success();
+        
+        assert_eq!(stats.success_rate(), 100);
+    }
+
+    #[test]
+    fn test_proxy_stats_success_rate_all_failures() {
+        let mut stats = ProxyStats::new();
+        stats.record_failure();
+        stats.record_failure();
+        stats.record_failure();
+        
+        assert_eq!(stats.success_rate(), 0);
+    }
+
+    #[test]
+    fn test_proxy_stats_success_rate_mixed() {
+        let mut stats = ProxyStats::new();
+        // 3 successes, 2 failures = 60%
+        stats.record_success();
+        stats.record_success();
+        stats.record_success();
+        stats.record_failure();
+        stats.record_failure();
+        
+        assert_eq!(stats.success_rate(), 60);
+    }
+
+    #[test]
+    fn test_proxy_stats_health_status_healthy() {
+        let mut stats = ProxyStats::new();
+        // 95% success rate
+        for _ in 0..95 {
+            stats.record_success();
+        }
+        for _ in 0..5 {
+            stats.record_failure();
+        }
+        
+        assert_eq!(stats.health_status(), HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_proxy_stats_health_status_degraded() {
+        let mut stats = ProxyStats::new();
+        // 70% success rate
+        for _ in 0..70 {
+            stats.record_success();
+        }
+        for _ in 0..30 {
+            stats.record_failure();
+        }
+        
+        assert_eq!(stats.health_status(), HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn test_proxy_stats_health_status_failed() {
+        let mut stats = ProxyStats::new();
+        // 40% success rate
+        for _ in 0..40 {
+            stats.record_success();
+        }
+        for _ in 0..60 {
+            stats.record_failure();
+        }
+        
+        assert_eq!(stats.health_status(), HealthStatus::Failed);
+    }
+
+    #[test]
+    fn test_proxy_stats_health_status_new_proxy() {
+        let stats = ProxyStats::new();
+        // No attempts = 100% = Healthy
+        assert_eq!(stats.health_status(), HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_proxy_stats_is_bad() {
+        let mut stats = ProxyStats::new();
+        
+        // 2 failures - not bad yet
+        stats.record_failure();
+        stats.record_failure();
+        assert!(!stats.is_bad());
+        
+        // 3 failures - now bad
+        stats.record_failure();
+        assert!(stats.is_bad());
+        
+        // Success resets consecutive failures
+        stats.record_success();
+        assert!(!stats.is_bad());
+    }
+
+    #[test]
+    fn test_proxy_stats_reset() {
+        let mut stats = ProxyStats::new();
+        stats.record_success();
+        stats.record_failure();
+        stats.record_failure();
+        
+        stats.reset();
+        
+        assert_eq!(stats.attempts, 0);
+        assert_eq!(stats.successes, 0);
+        assert_eq!(stats.failures, 0);
+        assert_eq!(stats.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn test_proxy_stats_serialize_deserialize() {
+        let mut stats = ProxyStats::new();
+        stats.record_success();
+        stats.record_failure();
+        
+        let json = serde_json::to_string(&stats).unwrap();
+        let deserialized: ProxyStats = serde_json::from_str(&json).unwrap();
+        
+        assert_eq!(stats, deserialized);
+    }
+
+    #[test]
+    fn test_proxy_stats_serialize_camel_case() {
+        let mut stats = ProxyStats::new();
+        stats.record_success();
+        stats.record_failure();
+        
+        let json = serde_json::to_string(&stats).unwrap();
+        
+        // Verify camelCase field names
+        assert!(json.contains("\"attempts\""));
+        assert!(json.contains("\"successes\""));
+        assert!(json.contains("\"failures\""));
+        assert!(json.contains("\"consecutiveFailures\""));
+    }
+
+    #[test]
+    fn test_health_status_serialize() {
+        assert_eq!(serde_json::to_string(&HealthStatus::Healthy).unwrap(), "\"healthy\"");
+        assert_eq!(serde_json::to_string(&HealthStatus::Degraded).unwrap(), "\"degraded\"");
+        assert_eq!(serde_json::to_string(&HealthStatus::Failed).unwrap(), "\"failed\"");
+    }
+
+    #[test]
+    fn test_health_status_deserialize() {
+        assert_eq!(serde_json::from_str::<HealthStatus>("\"healthy\"").unwrap(), HealthStatus::Healthy);
+        assert_eq!(serde_json::from_str::<HealthStatus>("\"degraded\"").unwrap(), HealthStatus::Degraded);
+        assert_eq!(serde_json::from_str::<HealthStatus>("\"failed\"").unwrap(), HealthStatus::Failed);
+    }
+
+    // =====================
+    // ProxyPool Stats Tests
+    // =====================
+
+    #[test]
+    fn test_proxy_pool_get_stats_new_proxy() {
+        let pool = ProxyPool::new();
+        let stats = pool.get_stats("192.168.1.1:8080");
+        
+        // Should return default stats for non-existent proxy
+        assert_eq!(stats.attempts, 0);
+    }
+
+    #[test]
+    fn test_proxy_pool_record_success() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        pool.record_success("192.168.1.1:8080");
+        
+        let stats = pool.get_stats("192.168.1.1:8080");
+        assert_eq!(stats.successes, 1);
+        assert_eq!(stats.attempts, 1);
+    }
+
+    #[test]
+    fn test_proxy_pool_record_failure() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        
+        pool.record_failure("192.168.1.1:8080");
+        
+        let stats = pool.get_stats("192.168.1.1:8080");
+        assert_eq!(stats.failures, 1);
+        assert_eq!(stats.attempts, 1);
+    }
+
+    #[test]
+    fn test_proxy_pool_remove_proxy_clears_stats() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.record_success("192.168.1.1:8080");
+        
+        pool.remove_proxy("192.168.1.1:8080");
+        
+        // Stats should be removed
+        assert!(!pool.proxy_stats.contains_key("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_proxy_pool_clear_clears_stats() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.record_success("192.168.1.1:8080");
+        
+        pool.clear();
+        
+        assert!(pool.proxy_stats.is_empty());
+    }
+
+    #[test]
+    fn test_proxy_pool_reset_stats() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.record_success("192.168.1.1:8080");
+        
+        pool.reset_stats("192.168.1.1:8080");
+        
+        let stats = pool.get_stats("192.168.1.1:8080");
+        assert_eq!(stats.attempts, 0);
+    }
+
+    #[test]
+    fn test_proxy_pool_reset_all_stats() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.record_success("192.168.1.1:8080");
+        pool.record_failure("192.168.1.2:8080");
+        
+        pool.reset_all_stats();
+        
+        assert!(pool.proxy_stats.is_empty());
+    }
+
+    #[test]
+    fn test_proxy_pool_stats_persist_in_json() {
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.record_success("192.168.1.1:8080");
+        pool.record_failure("192.168.1.1:8080");
+        
+        let json = serde_json::to_string(&pool).unwrap();
+        let deserialized: ProxyPool = serde_json::from_str(&json).unwrap();
+        
+        let stats = deserialized.get_stats("192.168.1.1:8080");
+        assert_eq!(stats.successes, 1);
+        assert_eq!(stats.failures, 1);
     }
 }

@@ -37,6 +37,19 @@ async fn validate_emails_bulk(
         },
     ).await;
 
+    // Update proxy stats based on results
+    let mut settings = settings_state.settings.write().await;
+    for result in &results {
+        if let Some(ref proxy_id) = result.proxy_id {
+            // Consider "Safe" and "Risky" as success, "Invalid" and "Unknown" as failure
+            if result.result == "Safe" || result.result == "Risky" {
+                settings.proxy_pool.record_success(proxy_id);
+            } else {
+                settings.proxy_pool.record_failure(proxy_id);
+            }
+        }
+    }
+
     Ok(results)
 }
 
@@ -71,6 +84,19 @@ async fn revalidate_emails_bulk(
             let _ = window.emit("validation-progress", res);
         },
     ).await;
+
+    // Update proxy stats based on results
+    let mut settings = settings_state.settings.write().await;
+    for result in &results {
+        if let Some(ref proxy_id) = result.proxy_id {
+            // Consider "Safe" and "Risky" as success, "Invalid" and "Unknown" as failure
+            if result.result == "Safe" || result.result == "Risky" {
+                settings.proxy_pool.record_success(proxy_id);
+            } else {
+                settings.proxy_pool.record_failure(proxy_id);
+            }
+        }
+    }
 
     Ok(results)
 }
@@ -119,6 +145,12 @@ pub fn run() {
             settings::update_proxy_pool_config,
             settings::assign_domain_proxy,
             settings::unassign_domain_proxy,
+            settings::get_proxy_stats,
+            settings::get_all_proxy_stats,
+            settings::record_proxy_success,
+            settings::record_proxy_failure,
+            settings::reset_proxy_stats,
+            settings::reset_all_proxy_stats,
             session::create_validation_session,
             session::update_validation_session,
             session::load_validation_session,

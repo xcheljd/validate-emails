@@ -365,6 +365,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
               <div className="pt-2">
                 <ProxyList
                   proxies={localSettings.proxy.proxies}
+                  proxyStats={localSettings.proxy.proxyStats}
                   onAdd={handleAddProxy}
                   onUpdate={handleUpdateProxy}
                   onDelete={handleDeleteProxy}

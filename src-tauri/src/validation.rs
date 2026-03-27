@@ -43,6 +43,8 @@ pub struct ValidationResult {
     pub timestamp: String,
     pub validation_mode: String,
     pub risk_score: u32,
+    /// The proxy ID used for this validation (if any)
+    pub proxy_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -80,6 +82,9 @@ impl ValidationState {
 
 pub async fn validate_email(email: String, mode: String, proxy: Option<ProxyConfig>) -> ValidationResult {
     let start_time = Instant::now();
+    
+    // Track proxy ID for stats
+    let proxy_id = proxy.as_ref().map(|p| p.id());
 
     // Build VerifMethod with optional proxy
     // The library requires proxies to be registered in VerifMethod.proxies HashMap
@@ -154,6 +159,7 @@ pub async fn validate_email(email: String, mode: String, proxy: Option<ProxyConf
                 timestamp: Utc::now().to_rfc3339(),
                 validation_mode: mode,
                 risk_score: 50,
+                proxy_id,
             };
         }
     };
@@ -233,6 +239,7 @@ pub async fn validate_email(email: String, mode: String, proxy: Option<ProxyConf
         timestamp: Utc::now().to_rfc3339(),
         validation_mode: mode,
         risk_score,
+        proxy_id,
     }
 }
 

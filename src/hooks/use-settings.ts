@@ -27,12 +27,51 @@ function saveProxyToStorage(settings: ProxySettings): void {
 }
 
 /** Generate unique ID for a proxy */
-function getProxyId(proxy: ProxyConfig): string {
+export function getProxyId(proxy: ProxyConfig): string {
   return `${proxy.host}:${proxy.port}`;
+}
+
+/** Calculate success rate percentage (0-100) */
+export function calculateSuccessRate(stats: ProxyStats): number {
+  if (stats.attempts === 0) {
+    return 100; // New proxies start with neutral/healthy status
+  }
+  return Math.round((stats.successes / stats.attempts) * 100);
+}
+
+/** Get health status based on success rate */
+export function getHealthStatus(stats: ProxyStats): HealthStatus {
+  const rate = calculateSuccessRate(stats);
+  if (rate >= 90) {
+    return 'healthy';
+  } else if (rate >= 50) {
+    return 'degraded';
+  }
+  return 'failed';
+}
+
+/** Check if proxy is "bad" (3 consecutive failures) */
+export function isProxyBad(stats: ProxyStats): boolean {
+  return stats.consecutiveFailures >= 3;
 }
 
 /** Rotation mode for proxy selection */
 export type RotationMode = 'manual' | 'automatic' | 'perDomain';
+
+/** Health status of a proxy */
+export type HealthStatus = 'healthy' | 'degraded' | 'failed';
+
+/** Statistics for a single proxy */
+export interface ProxyStats {
+  /** Total number of validation attempts */
+  attempts: number;
+  /** Number of successful validations */
+  successes: number;
+  /** Number of failed validations */
+  failures: number;
+  /** Number of consecutive failures */
+  consecutiveFailures: number;
+}
 
 /** Configuration for a single SOCKS5 proxy */
 export interface ProxyConfig {
@@ -56,6 +95,8 @@ export interface ProxySettings {
   rotationMode: RotationMode;
   /** Per-domain proxy assignments (domain -> proxy host:port) */
   domainAssignments: Record<string, string>;
+  /** Statistics per proxy (proxy ID -> stats) */
+  proxyStats: Record<string, ProxyStats>;
 }
 
 export interface AppSettings {
@@ -75,6 +116,7 @@ export const defaultProxySettings: ProxySettings = {
   enabled: false,
   rotationMode: 'manual',
   domainAssignments: {},
+  proxyStats: {},
 };
 
 interface BackendSettings {
@@ -91,6 +133,7 @@ interface BackendProxyPool {
   enabled: boolean;
   rotation_mode: RotationMode;
   domain_assignments: Record<string, string>;
+  proxy_stats?: Record<string, ProxyStats>;
 }
 
 export const defaultSettings: AppSettings = {
@@ -133,6 +176,7 @@ function backendProxyPoolToFrontend(backend: BackendProxyPool): ProxySettings {
     enabled: backend.enabled,
     rotationMode: backend.rotation_mode,
     domainAssignments: backend.domain_assignments,
+    proxyStats: backend.proxy_stats || {},
   };
 }
 
@@ -371,6 +415,117 @@ export function useSettings() {
     }
   }, [settings]);
 
+  // Get stats for a specific proxy
+  const getProxyStats = useCallback((proxyId: string): ProxyStats => {
+    return settings.proxy.proxyStats[proxyId] || {
+      attempts: 0,
+      successes: 0,
+      failures: 0,
+      consecutiveFailures: 0,
+    };
+  }, [settings.proxy.proxyStats]);
+
+  // Record a successful validation for a proxy
+  const recordProxySuccess = useCallback(async (proxyId: string): Promise<void> => {
+    try {
+      await invoke('record_proxy_success', { proxyId });
+      // Refresh proxy pool to get updated stats
+      const pool = await invoke<BackendProxyPool>('get_proxy_pool');
+      const proxySettings = backendProxyPoolToFrontend(pool);
+      setSettings(prev => ({ ...prev, proxy: proxySettings }));
+    } catch (err) {
+      // Fallback to localStorage when Tauri IPC is not available
+      console.warn('Failed to record proxy success via Tauri, using localStorage fallback:', err);
+      const currentProxy = getProxyFromStorage();
+      const currentStats = currentProxy.proxyStats[proxyId] || {
+        attempts: 0,
+        successes: 0,
+        failures: 0,
+        consecutiveFailures: 0,
+      };
+      const updatedStats: ProxyStats = {
+        ...currentStats,
+        attempts: currentStats.attempts + 1,
+        successes: currentStats.successes + 1,
+        consecutiveFailures: 0,
+      };
+      const updated: ProxySettings = {
+        ...currentProxy,
+        proxyStats: {
+          ...currentProxy.proxyStats,
+          [proxyId]: updatedStats,
+        },
+      };
+      saveProxyToStorage(updated);
+      setSettings(prev => ({ ...prev, proxy: updated }));
+    }
+  }, []);
+
+  // Record a failed validation for a proxy
+  const recordProxyFailure = useCallback(async (proxyId: string): Promise<void> => {
+    try {
+      await invoke('record_proxy_failure', { proxyId });
+      // Refresh proxy pool to get updated stats
+      const pool = await invoke<BackendProxyPool>('get_proxy_pool');
+      const proxySettings = backendProxyPoolToFrontend(pool);
+      setSettings(prev => ({ ...prev, proxy: proxySettings }));
+    } catch (err) {
+      // Fallback to localStorage when Tauri IPC is not available
+      console.warn('Failed to record proxy failure via Tauri, using localStorage fallback:', err);
+      const currentProxy = getProxyFromStorage();
+      const currentStats = currentProxy.proxyStats[proxyId] || {
+        attempts: 0,
+        successes: 0,
+        failures: 0,
+        consecutiveFailures: 0,
+      };
+      const updatedStats: ProxyStats = {
+        ...currentStats,
+        attempts: currentStats.attempts + 1,
+        failures: currentStats.failures + 1,
+        consecutiveFailures: currentStats.consecutiveFailures + 1,
+      };
+      const updated: ProxySettings = {
+        ...currentProxy,
+        proxyStats: {
+          ...currentProxy.proxyStats,
+          [proxyId]: updatedStats,
+        },
+      };
+      saveProxyToStorage(updated);
+      setSettings(prev => ({ ...prev, proxy: updated }));
+    }
+  }, []);
+
+  // Reset stats for a specific proxy
+  const resetProxyStats = useCallback(async (proxyId: string): Promise<void> => {
+    try {
+      await invoke('reset_proxy_stats', { proxyId });
+      // Refresh proxy pool to get updated stats
+      const pool = await invoke<BackendProxyPool>('get_proxy_pool');
+      const proxySettings = backendProxyPoolToFrontend(pool);
+      setSettings(prev => ({ ...prev, proxy: proxySettings }));
+    } catch (err) {
+      // Fallback to localStorage when Tauri IPC is not available
+      console.warn('Failed to reset proxy stats via Tauri, using localStorage fallback:', err);
+      const currentProxy = getProxyFromStorage();
+      const updated: ProxySettings = {
+        ...currentProxy,
+        proxyStats: {
+          ...currentProxy.proxyStats,
+          [proxyId]: {
+            attempts: 0,
+            successes: 0,
+            failures: 0,
+            consecutiveFailures: 0,
+          },
+        },
+      };
+      saveProxyToStorage(updated);
+      setSettings(prev => ({ ...prev, proxy: updated }));
+    }
+  }, []);
+
   return {
     settings,
     updateSettings,
@@ -381,5 +536,9 @@ export function useSettings() {
     updateProxyPoolConfig,
     assignDomainProxy,
     unassignDomainProxy,
+    getProxyStats,
+    recordProxySuccess,
+    recordProxyFailure,
+    resetProxyStats,
   };
 }

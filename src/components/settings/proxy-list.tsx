@@ -12,11 +12,13 @@ import {
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Trash2, Edit2, Plus, ListPlus, Shield, AlertCircle } from 'lucide-react';
-import { ProxyConfig } from '@/hooks/use-settings';
+import { ProxyConfig, ProxyStats, getProxyId } from '@/hooks/use-settings';
+import { HealthIndicator } from './health-indicator';
 import { cn } from '@/lib/utils';
 
 interface ProxyListProps {
   proxies: ProxyConfig[];
+  proxyStats?: Record<string, ProxyStats>;
   onAdd: (proxy: ProxyConfig) => void;
   onUpdate: (index: number, proxy: ProxyConfig) => void;
   onDelete: (index: number) => void;
@@ -74,7 +76,22 @@ function proxyKey(proxy: ProxyConfig, index: number): string {
   return `${proxy.host}:${proxy.port}:${index}`;
 }
 
-export function ProxyList({ proxies, onAdd, onUpdate, onDelete, disabled = false }: ProxyListProps) {
+/** Default proxy stats */
+const defaultStats: ProxyStats = {
+  attempts: 0,
+  successes: 0,
+  failures: 0,
+  consecutiveFailures: 0,
+};
+
+export function ProxyList({ 
+  proxies, 
+  proxyStats = {}, 
+  onAdd, 
+  onUpdate, 
+  onDelete, 
+  disabled = false 
+}: ProxyListProps) {
   const [inputValue, setInputValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [showBulkAdd, setShowBulkAdd] = useState(false);
@@ -281,45 +298,52 @@ export function ProxyList({ proxies, onAdd, onUpdate, onDelete, disabled = false
           </div>
         ) : (
           <div className="divide-y">
-            {proxies.map((proxy, index) => (
-              <div
-                key={proxyKey(proxy, index)}
-                className="flex items-center justify-between px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-mono">
-                    {proxy.host}:{proxy.port}
-                  </span>
-                  {proxy.username && (
-                    <Badge variant="secondary" className="text-xs">
-                      authenticated
-                    </Badge>
-                  )}
+            {proxies.map((proxy, index) => {
+              const proxyId = getProxyId(proxy);
+              const stats = proxyStats[proxyId] || defaultStats;
+              
+              return (
+                <div
+                  key={proxyKey(proxy, index)}
+                  className="flex items-center justify-between px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono">
+                      {proxy.host}:{proxy.port}
+                    </span>
+                    {proxy.username && (
+                      <Badge variant="secondary" className="text-xs">
+                        authenticated
+                      </Badge>
+                    )}
+                    {/* Health indicator */}
+                    <HealthIndicator stats={stats} showBadIndicator compact />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                      onClick={() => handleEditClick(index)}
+                      disabled={disabled}
+                      aria-label="Edit proxy"
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => setDeleteIndex(index)}
+                      disabled={disabled}
+                      aria-label="Delete proxy"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-                    onClick={() => handleEditClick(index)}
-                    disabled={disabled}
-                    aria-label="Edit proxy"
-                  >
-                    <Edit2 className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                    onClick={() => setDeleteIndex(index)}
-                    disabled={disabled}
-                    aria-label="Delete proxy"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
