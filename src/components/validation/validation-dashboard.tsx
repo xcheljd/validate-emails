@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent } from "@/components/ui/card";
-import { CheckCircle2, AlertCircle, XCircle, Info, Timer, Zap } from "lucide-react";
+import { CheckCircle2, AlertCircle, XCircle, Info, Timer, Zap, Globe } from "lucide-react";
 import { ValidationResult, ValidationStatus, AllProxiesFailedPayload } from "@/hooks/use-email-validation";
 import { ValidationControls } from "./validation-controls";
 import { RetryModal } from "./retry-modal";
@@ -38,6 +38,8 @@ interface ValidationDashboardProps {
   allProxiesFailedState?: AllProxiesFailedPayload | null;
   onContinueWithoutProxy?: () => void;
   onRetryWithCooldown?: () => void;
+  // Direct connection indicator
+  usingDirectConnection?: boolean;
 }
 
 export function ValidationDashboard({
@@ -58,6 +60,7 @@ export function ValidationDashboard({
    allProxiesFailedState,
    onContinueWithoutProxy,
    onRetryWithCooldown,
+   usingDirectConnection = false,
 }: ValidationDashboardProps) {
    const [showStopDialog, setShowStopDialog] = useState(false);
    const [showRetryModal, setShowRetryModal] = useState(false);
@@ -141,11 +144,25 @@ export function ValidationDashboard({
    return (
      <div className="space-y-4 md:space-y-6 w-full max-w-6xl mx-auto animate-in fade-in duration-500">
        
+       {/* Direct Connection Indicator */}
+       {usingDirectConnection && (status === 'processing' || status === 'paused') && (
+         <div className="flex items-center gap-2 p-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg">
+           <Globe className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+           <span className="text-sm font-medium text-blue-700 dark:text-blue-300">Using direct connection (proxy bypassed)</span>
+         </div>
+       )}
+       
        {/* Status Summary Banner */}
        {status === 'idle' && progress > 0 && (
          <div className="flex items-center gap-2 mb-2">
             <span className="text-xs font-bold uppercase text-muted-foreground tracking-widest">Selected Mode:</span>
             <Badge variant="outline" className="capitalize">{validationMode}</Badge>
+            {usingDirectConnection && (
+              <Badge variant="outline" className="text-blue-600 border-blue-300 dark:text-blue-400 dark:border-blue-700">
+                <Globe className="h-3 w-3 mr-1" />
+                Direct Connection
+              </Badge>
+            )}
          </div>
        )}
 

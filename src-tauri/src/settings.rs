@@ -893,6 +893,9 @@ impl Default for Settings {
 pub struct SettingsState {
     pub settings: Arc<RwLock<Settings>>,
     pub settings_path: PathBuf,
+    /// Temporary bypass flag for the current session - allows continuing without proxy
+    /// without permanently disabling proxy in settings
+    pub proxy_bypass_for_session: Arc<RwLock<bool>>,
 }
 
 impl Default for SettingsState {
@@ -921,6 +924,7 @@ impl Default for SettingsState {
         Self {
             settings: Arc::new(RwLock::new(settings)),
             settings_path,
+            proxy_bypass_for_session: Arc::new(RwLock::new(false)),
         }
     }
 }
@@ -1262,6 +1266,42 @@ pub async fn check_proxy_availability(
     }
     
     Ok(Ok(()))
+}
+
+// =====================
+// Session-Level Proxy Bypass Commands
+// =====================
+
+/// Set or clear the session-level proxy bypass flag
+/// When bypass is true, validation will use direct connection even if proxy is enabled
+/// This does NOT modify the permanent proxy settings
+#[tauri::command]
+pub async fn set_proxy_bypass_for_session(
+    state: tauri::State<'_, SettingsState>,
+    bypass: bool,
+) -> Result<(), String> {
+    let mut proxy_bypass = state.proxy_bypass_for_session.write().await;
+    *proxy_bypass = bypass;
+    Ok(())
+}
+
+/// Get the current session-level proxy bypass flag
+#[tauri::command]
+pub async fn get_proxy_bypass_for_session(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<bool, String> {
+    let proxy_bypass = state.proxy_bypass_for_session.read().await;
+    Ok(*proxy_bypass)
+}
+
+/// Clear the session-level proxy bypass flag (equivalent to set_proxy_bypass_for_session(false))
+#[tauri::command]
+pub async fn clear_proxy_bypass_for_session(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<(), String> {
+    let mut proxy_bypass = state.proxy_bypass_for_session.write().await;
+    *proxy_bypass = false;
+    Ok(())
 }
 
 #[cfg(test)]

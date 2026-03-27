@@ -33,21 +33,23 @@ async fn validate_emails_bulk(
     concurrency: usize,
     mode: String,
 ) -> Result<Vec<validation::ValidationResult>, String> {
-    // Get the current proxy pool configuration
+    // Get the current proxy pool configuration and bypass flag
     let settings = settings_state.settings.read().await;
     let proxy_pool = settings.proxy_pool.clone();
     drop(settings);
+    
+    let proxy_bypass = *settings_state.proxy_bypass_for_session.read().await;
 
-    // Check for no proxies configured (if proxy is enabled)
-    if proxy_pool.no_proxies_configured() {
+    // Check for no proxies configured (if proxy is enabled and not bypassed)
+    if !proxy_bypass && proxy_pool.no_proxies_configured() {
         let _ = window.emit("no-proxies-configured", NoProxiesConfiguredPayload {
             message: "No proxies configured. Please add at least one proxy or disable proxy support.".to_string(),
         });
         return Err("No proxies configured".to_string());
     }
 
-    // Check for all proxies failed
-    if proxy_pool.all_proxies_failed() {
+    // Check for all proxies failed (if proxy is enabled and not bypassed)
+    if !proxy_bypass && proxy_pool.all_proxies_failed() {
         if let Some(failed_state) = proxy_pool.get_all_proxies_failed_state() {
             let payload = AllProxiesFailedPayload {
                 failed_proxies: failed_state.failed_proxies.clone(),
@@ -62,8 +64,8 @@ async fn validate_emails_bulk(
         }
     }
 
-    // Create proxy rotation state if proxy is enabled and has proxies
-    let proxy_state = if proxy_pool.enabled && !proxy_pool.proxies.is_empty() {
+    // Create proxy rotation state if proxy is enabled, has proxies, and is not bypassed
+    let proxy_state = if !proxy_bypass && proxy_pool.enabled && !proxy_pool.proxies.is_empty() {
         Some(Arc::new(validation::ProxyRotationState::new(proxy_pool)))
     } else {
         None
@@ -84,31 +86,33 @@ async fn validate_emails_bulk(
         },
     ).await;
 
-    // Update proxy stats based on results
-    let mut settings = settings_state.settings.write().await;
-    for result in &results {
-        if let Some(ref proxy_id) = result.proxy_id {
-            // Consider "Safe" and "Risky" as success, "Invalid" and "Unknown" as failure
-            if result.result == "Safe" || result.result == "Risky" {
-                settings.proxy_pool.record_success(proxy_id);
-            } else {
-                settings.proxy_pool.record_failure(proxy_id);
+    // Update proxy stats based on results (only if proxy was used)
+    if !proxy_bypass {
+        let mut settings = settings_state.settings.write().await;
+        for result in &results {
+            if let Some(ref proxy_id) = result.proxy_id {
+                // Consider "Safe" and "Risky" as success, "Invalid" and "Unknown" as failure
+                if result.result == "Safe" || result.result == "Risky" {
+                    settings.proxy_pool.record_success(proxy_id);
+                } else {
+                    settings.proxy_pool.record_failure(proxy_id);
+                }
             }
         }
-    }
 
-    // Check if all proxies have become unavailable during validation
-    if settings.proxy_pool.all_proxies_failed() {
-        if let Some(failed_state) = settings.proxy_pool.get_all_proxies_failed_state() {
-            let payload = AllProxiesFailedPayload {
-                failed_proxies: failed_state.failed_proxies.clone(),
-                proxy_enabled: failed_state.proxy_enabled,
-                total_proxies: failed_state.total_proxies,
-                bad_count: failed_state.bad_count,
-                cooldown_count: failed_state.cooldown_count,
-                nearest_cooldown_secs: failed_state.nearest_cooldown_secs,
-            };
-            let _ = window_for_completion.emit("all-proxies-failed", payload);
+        // Check if all proxies have become unavailable during validation
+        if settings.proxy_pool.all_proxies_failed() {
+            if let Some(failed_state) = settings.proxy_pool.get_all_proxies_failed_state() {
+                let payload = AllProxiesFailedPayload {
+                    failed_proxies: failed_state.failed_proxies.clone(),
+                    proxy_enabled: failed_state.proxy_enabled,
+                    total_proxies: failed_state.total_proxies,
+                    bad_count: failed_state.bad_count,
+                    cooldown_count: failed_state.cooldown_count,
+                    nearest_cooldown_secs: failed_state.nearest_cooldown_secs,
+                };
+                let _ = window_for_completion.emit("all-proxies-failed", payload);
+            }
         }
     }
 
@@ -124,21 +128,23 @@ async fn revalidate_emails_bulk(
     concurrency: usize,
     mode: String,
 ) -> Result<Vec<validation::ValidationResult>, String> {
-    // Get the current proxy pool configuration
+    // Get the current proxy pool configuration and bypass flag
     let settings = settings_state.settings.read().await;
     let proxy_pool = settings.proxy_pool.clone();
     drop(settings);
+    
+    let proxy_bypass = *settings_state.proxy_bypass_for_session.read().await;
 
-    // Check for no proxies configured (if proxy is enabled)
-    if proxy_pool.no_proxies_configured() {
+    // Check for no proxies configured (if proxy is enabled and not bypassed)
+    if !proxy_bypass && proxy_pool.no_proxies_configured() {
         let _ = window.emit("no-proxies-configured", NoProxiesConfiguredPayload {
             message: "No proxies configured. Please add at least one proxy or disable proxy support.".to_string(),
         });
         return Err("No proxies configured".to_string());
     }
 
-    // Check for all proxies failed
-    if proxy_pool.all_proxies_failed() {
+    // Check for all proxies failed (if proxy is enabled and not bypassed)
+    if !proxy_bypass && proxy_pool.all_proxies_failed() {
         if let Some(failed_state) = proxy_pool.get_all_proxies_failed_state() {
             let payload = AllProxiesFailedPayload {
                 failed_proxies: failed_state.failed_proxies.clone(),
@@ -153,8 +159,8 @@ async fn revalidate_emails_bulk(
         }
     }
 
-    // Create proxy rotation state if proxy is enabled and has proxies
-    let proxy_state = if proxy_pool.enabled && !proxy_pool.proxies.is_empty() {
+    // Create proxy rotation state if proxy is enabled, has proxies, and is not bypassed
+    let proxy_state = if !proxy_bypass && proxy_pool.enabled && !proxy_pool.proxies.is_empty() {
         Some(Arc::new(validation::ProxyRotationState::new(proxy_pool)))
     } else {
         None
@@ -175,31 +181,33 @@ async fn revalidate_emails_bulk(
         },
     ).await;
 
-    // Update proxy stats based on results
-    let mut settings = settings_state.settings.write().await;
-    for result in &results {
-        if let Some(ref proxy_id) = result.proxy_id {
-            // Consider "Safe" and "Risky" as success, "Invalid" and "Unknown" as failure
-            if result.result == "Safe" || result.result == "Risky" {
-                settings.proxy_pool.record_success(proxy_id);
-            } else {
-                settings.proxy_pool.record_failure(proxy_id);
+    // Update proxy stats based on results (only if proxy was used)
+    if !proxy_bypass {
+        let mut settings = settings_state.settings.write().await;
+        for result in &results {
+            if let Some(ref proxy_id) = result.proxy_id {
+                // Consider "Safe" and "Risky" as success, "Invalid" and "Unknown" as failure
+                if result.result == "Safe" || result.result == "Risky" {
+                    settings.proxy_pool.record_success(proxy_id);
+                } else {
+                    settings.proxy_pool.record_failure(proxy_id);
+                }
             }
         }
-    }
 
-    // Check if all proxies have become unavailable during validation
-    if settings.proxy_pool.all_proxies_failed() {
-        if let Some(failed_state) = settings.proxy_pool.get_all_proxies_failed_state() {
-            let payload = AllProxiesFailedPayload {
-                failed_proxies: failed_state.failed_proxies.clone(),
-                proxy_enabled: failed_state.proxy_enabled,
-                total_proxies: failed_state.total_proxies,
-                bad_count: failed_state.bad_count,
-                cooldown_count: failed_state.cooldown_count,
-                nearest_cooldown_secs: failed_state.nearest_cooldown_secs,
-            };
-            let _ = window_for_completion.emit("all-proxies-failed", payload);
+        // Check if all proxies have become unavailable during validation
+        if settings.proxy_pool.all_proxies_failed() {
+            if let Some(failed_state) = settings.proxy_pool.get_all_proxies_failed_state() {
+                let payload = AllProxiesFailedPayload {
+                    failed_proxies: failed_state.failed_proxies.clone(),
+                    proxy_enabled: failed_state.proxy_enabled,
+                    total_proxies: failed_state.total_proxies,
+                    bad_count: failed_state.bad_count,
+                    cooldown_count: failed_state.cooldown_count,
+                    nearest_cooldown_secs: failed_state.nearest_cooldown_secs,
+                };
+                let _ = window_for_completion.emit("all-proxies-failed", payload);
+            }
         }
     }
 
@@ -265,6 +273,9 @@ pub fn run() {
             settings::get_all_proxies_failed_state,
             settings::check_no_proxies_configured,
             settings::check_proxy_availability,
+            settings::set_proxy_bypass_for_session,
+            settings::get_proxy_bypass_for_session,
+            settings::clear_proxy_bypass_for_session,
             session::create_validation_session,
             session::update_validation_session,
             session::load_validation_session,

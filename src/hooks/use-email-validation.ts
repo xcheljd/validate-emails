@@ -63,6 +63,7 @@ export function useEmailValidation() {
   const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<number>(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [allProxiesFailedState, setAllProxiesFailedState] = useState<AllProxiesFailedPayload | null>(null);
+  const [usingDirectConnection, setUsingDirectConnection] = useState<boolean>(false);
 
   const pendingEmailsRef = useRef<string[]>([]);
   const currentConcurrencyRef = useRef<number>(5);
@@ -166,8 +167,13 @@ export function useEmailValidation() {
     setStatus('processing');
     statusRef.current = 'processing';
     setValidationMode(mode);
+    setUsingDirectConnection(false);
     pendingEmailsRef.current = [...emails];
     currentConcurrencyRef.current = concurrency;
+    // Clear any previous proxy bypass when starting a new validation
+    invoke("clear_proxy_bypass_for_session").catch(() => {
+      // Ignore errors - this is a cleanup call
+    });
     mutation.mutate({ emails, concurrency, mode });
   }, [mutation]);
 
@@ -280,11 +286,12 @@ export function useEmailValidation() {
   // Continue without proxy - temporarily disable proxy and resume
   const continueWithoutProxy = useCallback(async () => {
     try {
-      // Temporarily disable proxy for this session
-      await invoke("update_proxy_pool_config", { enabled: false });
+      // Set session-level proxy bypass (does NOT modify permanent settings)
+      await invoke("set_proxy_bypass_for_session", { bypass: true });
       setAllProxiesFailedState(null);
+      setUsingDirectConnection(true);
       
-      // Resume validation with remaining emails
+      // Resume validation with remaining emails using direct connection
       setStatus('processing');
       statusRef.current = 'processing';
       mutation.mutate({
@@ -350,5 +357,9 @@ export function useEmailValidation() {
     clearAllProxiesFailedState,
     continueWithoutProxy,
     retryWithCooldown,
+    // Direct connection indicator
+    usingDirectConnection,
+    // Test helper - allows tests to set the all proxies failed state directly
+    setAllProxiesFailedStateForTest: setAllProxiesFailedState,
   };
 }

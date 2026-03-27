@@ -50,6 +50,7 @@ function App() {
     allProxiesFailedState,
     continueWithoutProxy,
     retryWithCooldown,
+    usingDirectConnection,
   } = useEmailValidation();
 
   const handleNavigate = (view: SidebarView) => {
@@ -265,6 +266,7 @@ function App() {
                     allProxiesFailedState={allProxiesFailedState}
                     onContinueWithoutProxy={continueWithoutProxy}
                     onRetryWithCooldown={retryWithCooldown}
+                    usingDirectConnection={usingDirectConnection}
                   />
                   <ResultsTable
                     results={results}
