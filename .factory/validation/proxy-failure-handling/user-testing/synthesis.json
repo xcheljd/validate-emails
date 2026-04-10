@@ -1,0 +1,49 @@
+{
+  "milestone": "proxy-failure-handling",
+  "round": 2,
+  "status": "fail",
+  "assertionsSummary": {
+    "total": 8,
+    "passed": 7,
+    "failed": 1,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-FLR-001",
+    "VAL-FLR-002",
+    "VAL-FLR-003",
+    "VAL-FLR-004",
+    "VAL-FLR-005",
+    "VAL-FLR-006",
+    "VAL-CRS-003"
+  ],
+  "failedAssertions": [
+    {
+      "id": "VAL-FLR-007",
+      "round": 2,
+      "reason": "No warning is shown when the user starts validation with proxy enabled but no proxies configured. Browser automation confirmed: enabled proxy toggle in Settings > Proxy tab (localStorage: enabled:true, proxies:[]), navigated to validation view, entered test email, clicked Start Validation — validation proceeded to dashboard without any toast, dialog, or banner. Code in handleStartValidation (App.tsx:62) and startValidation (use-email-validation.ts:167) has no guard for this condition.",
+      "suggestedFix": "Add a check in handleStartValidation (App.tsx) that reads proxy settings from localStorage (or useSettings hook), checks if proxy.enabled === true && proxy.proxies.length === 0, and if so, calls showWarning('No proxies configured. Add proxies in Settings or disable proxy to continue.') from lib/toast.ts and returns early without starting validation."
+    }
+  ],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": ".factory/validation/proxy-failure-handling/user-testing/synthesis.json (round 1)",
+  "testingMethodology": {
+    "approach": "Re-run targeting failed assertion VAL-FLR-007 only. Browser automation via agent-browser to verify behavior in running app.",
+    "limitations": [
+      "Tauri IPC calls fail in browser context (expected, documented in user-testing.md)",
+      "Validation does not actually run SMTP checks in browser context — but the assertion is about a pre-validation UI warning, which IS testable in browser"
+    ]
+  },
+  "testEvidence": {
+    "flowReport": ".factory/validation/proxy-failure-handling/user-testing/flows/val-flr-007-r2.json",
+    "screenshots": [
+      "proxy-failure-handling/val-flr-007-r2/01-initial-state.png",
+      "proxy-failure-handling/val-flr-007-r2/02-proxy-settings-before-enable.png",
+      "proxy-failure-handling/val-flr-007-r2/03-proxy-enabled-no-proxies.png",
+      "proxy-failure-handling/val-flr-007-r2/04-proxy-enabled-full-page.png",
+      "proxy-failure-handling/val-flr-007-r2/05-validation-started-no-warning.png",
+      "proxy-failure-handling/val-flr-007-r2/06-final-state-no-warning.png"
+    ]
+  }
+}

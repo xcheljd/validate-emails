@@ -1,0 +1,55 @@
+{
+  "assertionId": "VAL-FLR-007",
+  "title": "No proxies configured warning",
+  "status": "fail",
+  "testedAt": "2026-04-10T09:00:00Z",
+  "isolation": {
+    "url": "http://localhost:1420",
+    "session": "01dee27fb569__u1"
+  },
+  "toolsUsed": ["agent-browser"],
+  "steps": [
+    {
+      "action": "Navigate to http://localhost:1420",
+      "expected": "App loads successfully",
+      "observed": "App loaded, validation view displayed with email input"
+    },
+    {
+      "action": "Navigate to Settings > Proxy tab",
+      "expected": "Proxy settings UI visible with enable/disable toggle",
+      "observed": "Proxy tab shown with Enable Proxy toggle (OFF), rotation mode selector, proxy input, and 'No proxies configured' placeholder in list"
+    },
+    {
+      "action": "Toggle proxy ON (Enable Proxy switch)",
+      "expected": "Proxy enabled, settings controls become active",
+      "observed": "Proxy toggle set to ON (checked), rotation mode and other controls enabled. localStorage confirms enabled:true, proxies:[]"
+    },
+    {
+      "action": "Navigate back to Validation view, enter test email, click Start Validation",
+      "expected": "Warning shown: 'No proxies configured' before or during validation start",
+      "observed": "NO WARNING displayed. Validation proceeded directly to the dashboard view. No toast, dialog, or banner appeared. Checked DOM for toasts, dialogs, alerts — all empty."
+    },
+    {
+      "action": "Wait 5 seconds for any delayed warning",
+      "expected": "Any delayed warning might appear",
+      "observed": "No delayed warnings appeared. Toast and dialog containers remained empty."
+    }
+  ],
+  "evidence": {
+    "screenshots": [
+      "proxy-failure-handling/val-flr-007-r2/01-initial-state.png",
+      "proxy-failure-handling/val-flr-007-r2/02-proxy-settings-before-enable.png",
+      "proxy-failure-handling/val-flr-007-r2/03-proxy-enabled-no-proxies.png",
+      "proxy-failure-handling/val-flr-007-r2/04-proxy-enabled-full-page.png",
+      "proxy-failure-handling/val-flr-007-r2/05-validation-started-no-warning.png",
+      "proxy-failure-handling/val-flr-007-r2/06-final-state-no-warning.png"
+    ],
+    "consoleErrors": [
+      "Cannot read properties of undefined (reading 'transformCallback') — pre-existing Tauri IPC error, unrelated to proxy feature"
+    ],
+    "observations": "When proxy is enabled in Settings but no proxies are configured (empty proxy list), clicking 'Start Validation' proceeds without any warning. The validation starts directly and transitions to the dashboard view. There is no check in handleStartValidation (App.tsx line 62) or startValidation (use-email-validation.ts line 167) that validates whether proxy is enabled AND the proxy list is empty. localStorage confirms: {\"proxies\":[],\"enabled\":true,\"rotationMode\":\"manual\",\"domainAssignments\":{},\"proxyStats\":{},\"cooldownDurationSecs\":60}. No toast, dialog, or inline warning was displayed at any point during the flow."
+  },
+  "frictions": [],
+  "blockers": [],
+  "summary": "VAL-FLR-007 FAILED: No warning is shown when the user starts validation with proxy enabled but no proxies configured. The validation proceeds silently without alerting the user. A check needs to be added in handleStartValidation (App.tsx) or startValidation (use-email-validation.ts) to detect this condition and display a warning toast/dialog before proceeding."
+}
