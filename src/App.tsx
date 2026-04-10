@@ -8,6 +8,8 @@ import { ResultDetails } from "@/components/validation/result-details";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft } from "lucide-react";
 import { useEmailValidation, ValidationResult } from "@/hooks/use-email-validation";
+import { useSettings } from "@/hooks/use-settings";
+import { showWarning } from "@/lib/toast";
 import { formatAsCSV } from "@/lib/export-utils";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
@@ -51,7 +53,11 @@ function App() {
     continueWithoutProxy,
     retryWithCooldown,
     usingDirectConnection,
+    waitingForProxy,
+    waitingCooldownSecs,
   } = useEmailValidation();
+
+  const { settings } = useSettings();
 
   const handleNavigate = (view: SidebarView) => {
     setCurrentView(view);
@@ -59,6 +65,13 @@ function App() {
 
   const handleStartValidation = () => {
     if (emails.length === 0 || isProcessing) return;
+
+    // VAL-FLR-007: Guard against proxy enabled with no proxies configured
+    if (settings.proxy.enabled && settings.proxy.proxies.length === 0) {
+      showWarning('No proxies configured. Please add proxies in Settings or disable proxy.');
+      return;
+    }
+
     setShowDashboard(true);
     setStatusFilter("all"); // Reset filter on start
     startValidation(emails, 5, validationMode);
@@ -184,6 +197,8 @@ function App() {
         return <Badge variant="default" className="animate-pulse bg-blue-500 hover:bg-blue-600">Validating</Badge>;
       case 'paused':
         return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 border-yellow-200">Paused</Badge>;
+      case 'waiting':
+        return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 border-yellow-200 animate-pulse">Waiting for Proxy</Badge>;
       case 'stopping':
         return <Badge variant="destructive">Stopping...</Badge>;
       default:
@@ -267,6 +282,8 @@ function App() {
                     onContinueWithoutProxy={continueWithoutProxy}
                     onRetryWithCooldown={retryWithCooldown}
                     usingDirectConnection={usingDirectConnection}
+                    waitingForProxy={waitingForProxy}
+                    waitingCooldownSecs={waitingCooldownSecs}
                   />
                   <ResultsTable
                     results={results}
