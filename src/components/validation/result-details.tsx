@@ -10,7 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ValidationResult } from "@/hooks/use-email-validation";
-import { Mail, ShieldCheck, AlertCircle, XCircle, Info, Clock, Server, Globe, Activity, Check, AlertTriangle } from "lucide-react";
+import { Mail, ShieldCheck, AlertCircle, XCircle, Info, Clock, Globe, Activity, Check, AlertTriangle, ShieldAlert, Inbox, Plug, MailCheck, ShieldOff, Building2 } from "lucide-react";
 import { calculateRiskScore, getRiskLevel, getRiskColor, getRiskReasons } from "@/lib/risk-scorer";
 import * as typoDatabase from "@/lib/typo-database";
 
@@ -118,6 +118,51 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <MailCheck className="h-4 w-4" />
+                Deliverability Details
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex items-center gap-2">
+                  {result.isDeliverable ? (
+                    <Check className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <XCircle className="h-4 w-4 text-red-500" />
+                  )}
+                  <span className="text-sm">Deliverable</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {result.canConnectSmtp ? (
+                    <Plug className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <Plug className="h-4 w-4 text-red-500" />
+                  )}
+                  <span className="text-sm">SMTP Connected</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {result.acceptsMail ? (
+                    <Mail className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <Mail className="h-4 w-4 text-red-500" />
+                  )}
+                  <span className="text-sm">Accepts Mail</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {result.isValidSyntax ? (
+                    <Check className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <XCircle className="h-4 w-4 text-red-500" />
+                  )}
+                  <span className="text-sm">Valid Syntax</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <Activity className="h-4 w-4" />
                 Validation Information
               </CardTitle>
@@ -138,15 +183,6 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
                     {formatDuration(result.validationDuration)}
                   </div>
                 </div>
-                {result.proxyUsed && (
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Proxy Used</div>
-                    <div className="font-medium text-sm flex items-center gap-1">
-                      <Server className="h-3 w-3" />
-                      {result.proxyUsed}
-                    </div>
-                  </div>
-                )}
                 <div>
                   <div className="text-xs text-muted-foreground mb-1">MX Records</div>
                   <div className="font-medium text-sm">{result.mxRecordCount} found</div>
@@ -168,6 +204,18 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
               <CardTitle className="text-sm font-medium">Risk Factors</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              {result.isDisabled && (
+                <div className="flex items-start gap-2">
+                  <ShieldOff className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />
+                  <span className="text-sm">Account is disabled</span>
+                </div>
+              )}
+              {result.hasFullInbox && (
+                <div className="flex items-start gap-2">
+                  <Inbox className="h-4 w-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                  <span className="text-sm">Inbox is full</span>
+                </div>
+              )}
               {riskReasons.length > 0 ? (
                 riskReasons.map((reason, idx) => (
                   <div key={idx} className="flex items-start gap-2">
@@ -180,7 +228,9 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
                   </div>
                 ))
               ) : (
-                <div className="text-sm text-muted-foreground italic">No risk factors detected</div>
+                !result.isDisabled && !result.hasFullInbox && (
+                  <div className="text-sm text-muted-foreground italic">No risk factors detected</div>
+                )
               )}
             </CardContent>
           </Card>
@@ -206,12 +256,40 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
                     Catch-All
                   </Badge>
                 )}
-                {!result.isDisposable && !result.isRoleAccount && !result.isCatchAll && (
+                {result.isB2c && (
+                  <Badge variant="outline" className="border-purple-500 text-purple-500">
+                    <Building2 className="h-3 w-3 mr-1" />
+                    B2C Provider
+                  </Badge>
+                )}
+                {result.haveibeenpwned && (
+                  <Badge variant="outline" className="border-red-500 text-red-500">
+                    <ShieldAlert className="h-3 w-3 mr-1" />
+                    Breached
+                  </Badge>
+                )}
+                {!result.isDisposable && !result.isRoleAccount && !result.isCatchAll && !result.isB2c && !result.haveibeenpwned && (
                   <Badge variant="outline">None</Badge>
                 )}
               </div>
             </CardContent>
           </Card>
+
+          {result.suggestion && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                  Suggestion
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm">
+                  Did you mean <span className="font-semibold text-green-600">{result.suggestion}</span>?
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader className="pb-3">

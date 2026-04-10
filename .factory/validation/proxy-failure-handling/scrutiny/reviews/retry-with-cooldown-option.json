@@ -1,0 +1,53 @@
+{
+  "featureId": "retry-with-cooldown-option",
+  "reviewedAt": "2026-04-10T15:33:00.000Z",
+  "commitId": "e216e33",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The retry-with-cooldown feature was implemented across three worker sessions. The final session (db4d1f11) fixed a critical backend bug in is_proxy_available() that prevented proxies from rejoining rotation after cooldown expiry. The frontend implementation (retryWithCooldown hook, countdown timer, auto-resume, waiting indicator in ValidationDashboard, ProxyFailureModal integration) was completed by earlier workers and is solid. The backend fix is minimal, well-targeted, and correctly addresses the root cause: after cooldown expires, proxies were still blocked because consecutive_failures >= 3 kept them 'bad'. Now is_proxy_available() only gates on cooldown status, giving proxies another chance after cooldown. The re-cooldown on failure and bad-status clearing on success flows are correct.",
+    "issues": [
+      {
+        "file": "src-tauri/src/settings.rs",
+        "line": 645,
+        "severity": "non_blocking",
+        "description": "Stale doc comment on get_available_proxies() says '(non-bad, not in cooldown)' but after the fix, bad proxies that have exited cooldown ARE available. Should say 'not in cooldown' only. Same issue on has_available_proxies() at line 656.",
+        "suggestedFix": "Update doc comments: 'Get list of available proxies (not in cooldown)' and 'Check if there are any available proxies (not in cooldown)'"
+      },
+      {
+        "file": "src-tauri/src/settings.rs",
+        "line": 659,
+        "severity": "non_blocking",
+        "description": "Stale doc comment on all_proxies_failed() says '(all are either bad or in cooldown)' — after the fix, a proxy can be bad but not in cooldown and still be available. Should say '(all are in cooldown)' since that's the only gate now.",
+        "suggestedFix": "Update comment to: 'Check if all proxies have failed (all are in cooldown)'"
+      },
+      {
+        "file": "src-tauri/src/settings.rs",
+        "line": 2839,
+        "severity": "non_blocking",
+        "description": "Comment in test_proxy_pool_is_proxy_available says 'now bad and in cooldown' — the test still passes because the proxy enters cooldown at 3 failures, but the comment is misleading after the behavioral change. The proxy is unavailable due to cooldown, not due to being bad.",
+        "suggestedFix": "Update comment to: '// 3 failures - enters cooldown (proxy is unavailable while cooldown is active)'"
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The is_proxy_available() behavioral change (cooldown-only gate vs bad+cooldown gate) is a subtle semantic shift that could confuse future workers. The doc comments on get_available_proxies(), has_available_proxies(), and all_proxies_failed() were not updated to match. Future workers relying on these doc comments would get incorrect information about availability semantics.",
+      "evidence": "src-tauri/src/settings.rs lines 645-664 — doc comments say 'non-bad, not in cooldown' but is_proxy_available() now only checks cooldown"
+    },
+    {
+      "area": "skills",
+      "observation": "The fullstack-worker skill could benefit from explicitly mentioning cooldown-to-availability edge cases. The worker's own skillFeedback suggests this: 'The fullstack-worker skill could benefit from explicitly mentioning checking for cooldown/expiry edge cases in the backend logic.' The first two sessions (9a73ecbc, 6813942e) apparently missed this bug, and it took a third session to find and fix it.",
+      "evidence": "Handoff for db4d1f11 shows skillFeedback.suggestedChanges recommending cooldown edge case checking. Feature required 3 sessions to complete."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The retry-with-cooldown flow has a subtle dependency chain: is_proxy_available → get_available_proxies → has_available_proxies → all_proxies_failed → get_all_proxies_failed_state → frontend event → retryWithCooldown. A change to is_proxy_available ripples through the entire chain. This dependency chain is not documented in .factory/library/.",
+      "evidence": "Tracing from is_proxy_available (line 619) through get_available_proxies (647), has_available_proxies (656), all_proxies_failed (662), get_all_proxies_failed_state (668), to the frontend event emission and retryWithCooldown hook in use-email-validation.ts (line 322)."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "The retry-with-cooldown feature is complete and functional. The core backend fix (changing is_proxy_available to only gate on cooldown) correctly resolves the infinite all-proxies-failed loop that occurred when proxies remained blocked after cooldown expiry. Frontend implementation is thorough: waiting state, countdown timer, auto-resume on expiry, proper cleanup on stop. Test coverage is strong with 5 new Rust tests and 6 existing frontend tests specifically for retry-with-cooldown (34 total tests across both test files). Three non-blocking issues found: stale doc comments that don't reflect the behavioral change. No bugs or correctness issues detected."
+}

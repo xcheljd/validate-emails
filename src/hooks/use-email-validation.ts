@@ -23,9 +23,9 @@ export interface ValidationResult {
   acceptsMail: boolean;
   isValidSyntax: boolean;
   isB2c: boolean;
-  suggestion?: string;
-  gravatarUrl?: string;
-  haveibeenpwned?: boolean;
+  suggestion?: string | null;
+  gravatarUrl?: string | null;
+  haveibeenpwned?: boolean | null;
   errorType?: string;
   timestamp: string;
   validationMode: "quick" | "standard" | "thorough";

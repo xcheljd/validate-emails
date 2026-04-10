@@ -1,0 +1,53 @@
+{
+  "featureId": "continue-without-proxy-option",
+  "reviewedAt": "2026-04-10T12:00:00.000Z",
+  "commitId": "09b17e0",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation correctly fulfills all expected behaviors from the feature spec: it sets a session-level proxy bypass flag via new Tauri commands (set/get/clear_proxy_bypass_for_session), uses an in-memory Arc<RwLock<bool>> in SettingsState so permanent proxy settings are preserved, and resumes validation with direct connection. The UI shows a 'Direct connection' indicator during processing/paused states. Tests cover the three key behaviors: state flag update, backend command invocation, and proxy settings preservation. The code is clean, well-documented, and follows existing patterns.",
+    "issues": [
+      {
+        "file": "src/hooks/use-email-validation.ts",
+        "line": 287,
+        "severity": "non_blocking",
+        "description": "stopValidation() does not reset usingDirectConnection state or clear the backend proxy_bypass_for_session flag. After stopping, if the user starts a new validation, startValidation() does clear it, so this is not a functional bug. However, the 'Direct Connection' badge remains visible in the idle status bar (line 181-184 of validation-dashboard.tsx) since it only checks usingDirectConnection without a status guard for that second indicator instance. The first indicator (line 169) correctly gates on processing/paused status.",
+        "suggestedFix": "Consider resetting setUsingDirectConnection(false) in stopValidation() and/or adding a status guard to the idle-state badge at validation-dashboard.tsx:181."
+      },
+      {
+        "file": "src/hooks/use-email-validation.ts",
+        "line": 303,
+        "severity": "non_blocking",
+        "description": "The continueWithoutProxy callback captures mutation and validationMode in its dependency array but does NOT capture statusRef. Since it directly sets statusRef.current = 'processing', this is fine (refs don't need capturing). However, if mutation is recreated (e.g., QueryClient reset), the stale closure could reference an old mutation. This is a pre-existing pattern in the codebase, not introduced by this feature.",
+        "suggestedFix": "No action needed for this feature. The pattern is consistent with resumeValidation and other callbacks."
+      },
+      {
+        "file": "src-tauri/src/settings.rs",
+        "line": 1301,
+        "severity": "non_blocking",
+        "description": "clear_proxy_bypass_for_session is functionally identical to set_proxy_bypass_for_session(false) and could be considered redundant. However, having an explicit clear command improves API clarity and the frontend uses it as a cleanup call in startValidation(). This is a minor style observation, not a bug.",
+        "suggestedFix": "No action needed. The explicit clear command is a reasonable API design choice."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The worker correctly used the session-level bypass pattern (in-memory Arc<RwLock<bool>> on SettingsState) rather than persisting the bypass flag to disk. This is the right approach for a temporary session flag. Future workers implementing similar 'temporary session state' features should follow this pattern of adding a field to SettingsState rather than to the persisted Settings struct.",
+      "evidence": "src-tauri/src/settings.rs:902 — proxy_bypass_for_session: Arc<RwLock<bool>> on SettingsState (not persisted), vs Settings struct fields which are persisted to disk."
+    },
+    {
+      "area": "conventions",
+      "observation": "The feature introduces a test helper setAllProxiesFailedStateForTest exposed from the hook to allow tests to set the all-proxies-failed state directly, bypassing the Tauri event listener. This is a pragmatic testing pattern for event-driven state. The naming convention with 'ForTest' suffix makes it clear this is test-only infrastructure.",
+      "evidence": "src/hooks/use-email-validation.ts:360 — setAllProxiesFailedStateForTest: setAllProxiesFailedState exposed in the return object."
+    },
+    {
+      "area": "conventions",
+      "observation": "The worker upgraded the test setup from a shared QueryClient instance to a factory function (createWrapper()) that creates fresh QueryClient per test, and added beforeEach cleanup. This is a testing best practice that prevents state leakage between tests. Future test writers should follow this pattern.",
+      "evidence": "src/hooks/use-email-validation.test.tsx:24-32 — createWrapper() factory replacing the old shared queryClient/wrapper pattern."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "The 'continue-without-proxy' feature is correctly implemented. The session-level bypass flag approach properly preserves permanent proxy settings while allowing direct connection for the current validation. All three expected behaviors from the feature spec are met: proxy is disabled for the session, validation resumes immediately, and proxy settings are preserved. Three non-blocking observations noted around state cleanup on stop, but none affect correctness. Tests are adequate and cover the key flows. The implementation follows existing codebase patterns and conventions."
+}

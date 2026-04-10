@@ -1,0 +1,58 @@
+{
+  "featureId": "all-proxies-failed-detection",
+  "reviewedAt": "2026-04-10T15:45:00.000Z",
+  "commitId": "4e348961979cfd09bfe0ae95ea102855ee7a962d",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation correctly detects when all proxies are in failed/cooldown state and emits events to the frontend. The backend logic in settings.rs is clean and well-tested (17 unit tests). The integration in lib.rs adds pre-validation and post-validation checks to both validate_emails_bulk and revalidate_emails_bulk commands. Event payloads include detailed failure info (failed proxy list, cooldown ETAs, bad/cooldown counts). A later feature (continue-without-proxy-option) correctly extended this with proxy_bypass_for_session support.",
+    "issues": [
+      {
+        "file": "src-tauri/src/lib.rs",
+        "line": 50,
+        "severity": "non_blocking",
+        "description": "AllProxiesFailedPayload construction is duplicated 4 times across validate_emails_bulk and revalidate_emails_bulk (pre-check and post-check in each). This could be extracted to a helper method or a From/Into implementation to reduce duplication.",
+        "suggestedFix": "Implement From<AllProxiesFailedState> for AllProxiesFailedPayload, or create a helper function like fn emit_all_proxies_failed(window: &Window, state: &AllProxiesFailedState). Alternatively, AllProxiesFailedPayload could be replaced by AllProxiesFailedState directly since they have identical fields."
+      },
+      {
+        "file": "src-tauri/src/lib.rs",
+        "line": 8,
+        "severity": "non_blocking",
+        "description": "AllProxiesFailedPayload duplicates AllProxiesFailedState from settings.rs with identical fields. AllProxiesFailedState already derives Serialize and could be used directly as the event payload.",
+        "suggestedFix": "Use AllProxiesFailedState directly as the event payload instead of maintaining a separate AllProxiesFailedPayload struct."
+      },
+      {
+        "file": "src-tauri/src/lib.rs",
+        "line": 92,
+        "severity": "non_blocking",
+        "description": "Post-validation all-proxies-failed check only runs after the entire batch completes. If a large batch is being validated and all proxies fail mid-stream, the event won't fire until the batch finishes. The pre-check prevents starting new validations, but mid-batch detection is deferred.",
+        "suggestedFix": "This is a reasonable design given Tauri's request/response model. Document this behavior so future workers understand the tradeoff. Real-time mid-batch detection would require periodic checks within validate_emails_bulk_core."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The proxy-settings-conventions.md library doc documents ProxyStats with `cooldown_until: Option<u64>` and includes a `last_failure: Option<u64>` field, but the actual code uses `cooldown_until: Option<i64>` and has no `last_failure` field at all. The library doc is stale/inaccurate.",
+      "evidence": "Compare .factory/library/proxy-settings-conventions.md (documents Option<u64> and last_failure field) with src-tauri/src/settings.rs:247 (actual: Option<i64>, no last_failure field)"
+    },
+    {
+      "area": "conventions",
+      "observation": "is_proxy_available() only checks cooldown status, not 'bad' status. After cooldown expires, a bad proxy (3+ consecutive failures) becomes available again and gets another chance. If it fails again, it re-enters cooldown via record_failure(). This is a deliberate design decision but should be documented for future workers who might assume 'bad' means permanently excluded.",
+      "evidence": "src-tauri/src/settings.rs:614-621 — is_proxy_available checks only !is_proxy_in_cooldown(). Comment on line 615-618 explains the rationale."
+    },
+    {
+      "area": "conventions",
+      "observation": "The 'all-proxies-failed' and 'no-proxies-configured' events are emitted as Tauri window events (window.emit). These are the first proxy-related events emitted to the frontend. Future features that need to emit events from the backend should follow this pattern using window.emit() with serde-serializable payloads.",
+      "evidence": "src-tauri/src/lib.rs:52-53 (window.emit('all-proxies-failed', ...)) and lib.rs:43-44 (window.emit('no-proxies-configured', ...))"
+    },
+    {
+      "area": "skills",
+      "observation": "The backend-worker skill does not mention the event emission pattern or how to integrate checks into validate_emails_bulk/revalidate_emails_bulk. The worker correctly followed the existing patterns but had to discover the integration points on their own. The skill could benefit from documenting the validation flow entry points.",
+      "evidence": "Worker transcript shows exploration of lib.rs and validation.rs to understand integration points. The SKILL.md only mentions 'Integration with check-if-email-exists library' but not the event emission pattern."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "The all-proxies-failed-detection feature is well-implemented and passes review. The backend correctly detects when all proxies are unavailable (bad or in cooldown) using the existing is_proxy_available/cooldown mechanism. Events are properly emitted before and after validation. 17 unit tests cover all key scenarios including edge cases (mixed bad/cooldown, empty pool, disabled pool, serialization). Three non-blocking issues noted: payload construction duplication in lib.rs, redundant AllProxiesFailedPayload struct, and deferred mid-batch detection. Four shared state observations logged regarding stale library docs, is_proxy_available design rationale, event emission conventions, and skill documentation gaps."
+}
