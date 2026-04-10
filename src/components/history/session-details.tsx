@@ -6,6 +6,7 @@ import { loadSession, ValidationSession } from '@/lib/session-manager';
 export function SessionDetails({ sessionId }: { sessionId: string }) {
   const [session, setSession] = useState<ValidationSession | null>(null);
   const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState('all');
 
   useEffect(() => {
     loadSession(sessionId).then(setSession).finally(() => setLoading(false));
@@ -74,7 +75,12 @@ export function SessionDetails({ sessionId }: { sessionId: string }) {
 
       <div className="space-y-4">
         <h3 className="text-lg font-semibold">Validation Results</h3>
-        <ResultsTable results={session.results} onViewDetails={() => {}} />
+        <ResultsTable
+          results={session.results}
+          onViewDetails={() => {}}
+          statusFilter={statusFilter}
+          onStatusFilterChange={setStatusFilter}
+        />
         <div className="flex justify-end mt-4">
           <button
             type="button"
