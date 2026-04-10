@@ -611,9 +611,13 @@ impl ProxyPool {
             .unwrap_or(false)
     }
 
-    /// Check if a proxy is available (not bad AND not in cooldown)
+    /// Check if a proxy is available for use.
+    /// A proxy is unavailable only while in cooldown.
+    /// After cooldown expires, the proxy is given another chance to succeed,
+    /// even if its consecutive failure count is still high. If it fails again,
+    /// it will re-enter cooldown automatically via record_failure.
     pub fn is_proxy_available(&self, proxy_id: &str) -> bool {
-        !self.is_proxy_bad(proxy_id) && !self.is_proxy_in_cooldown(proxy_id)
+        !self.is_proxy_in_cooldown(proxy_id)
     }
 
     /// Get remaining cooldown time for a proxy in seconds
@@ -3639,5 +3643,123 @@ mod tests {
         // Both should have similar cooldown times, nearest should be > 0
         assert!(state.nearest_cooldown_secs > 0);
         assert!(state.nearest_cooldown_secs <= 60);
+    }
+
+    // =====================
+    // Retry with Cooldown Tests (VAL-FLR-004, VAL-FLR-006)
+    // =====================
+
+    #[test]
+    fn test_proxy_becomes_available_after_cooldown_expires() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // Make proxy bad (3 failures → enters cooldown)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+
+        // Proxy should be unavailable while in cooldown
+        assert!(pool.is_proxy_in_cooldown("192.168.1.1:8080"));
+        assert!(!pool.is_proxy_available("192.168.1.1:8080"));
+        assert!(pool.all_proxies_failed());
+
+        // Simulate cooldown expiry by clearing cooldown
+        pool.proxy_stats.entry("192.168.1.1:8080".to_string()).or_default().clear_cooldown();
+
+        // Proxy should now be available even though consecutive_failures >= 3
+        assert!(!pool.is_proxy_in_cooldown("192.168.1.1:8080"));
+        assert!(pool.is_proxy_available("192.168.1.1:8080"));
+        assert!(!pool.all_proxies_failed());
+    }
+
+    #[test]
+    fn test_proxy_reenters_cooldown_after_failed_retry() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // Make proxy bad (3 failures → enters cooldown)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        assert!(pool.is_proxy_in_cooldown("192.168.1.1:8080"));
+
+        // Simulate cooldown expiry
+        pool.proxy_stats.entry("192.168.1.1:8080".to_string()).or_default().clear_cooldown();
+        assert!(pool.is_proxy_available("192.168.1.1:8080"));
+
+        // Proxy fails again → should re-enter cooldown (consecutive_failures now 4)
+        pool.record_failure("192.168.1.1:8080");
+        assert!(pool.is_proxy_in_cooldown("192.168.1.1:8080"));
+        assert!(!pool.is_proxy_available("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_proxy_success_after_cooldown_clears_bad_status() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+
+        // Make proxy bad (3 failures → enters cooldown)
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        assert!(pool.is_proxy_bad("192.168.1.1:8080"));
+
+        // Simulate cooldown expiry
+        pool.proxy_stats.entry("192.168.1.1:8080".to_string()).or_default().clear_cooldown();
+
+        // Proxy succeeds → consecutive_failures resets to 0
+        pool.record_success("192.168.1.1:8080");
+        assert!(!pool.is_proxy_bad("192.168.1.1:8080"));
+        assert!(pool.is_proxy_available("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_partial_proxy_recovery_after_cooldown() {
+        // VAL-FLR-006: Some proxies recover from cooldown while others remain failed
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.3".to_string(), 8080)).unwrap();
+
+        // Make all proxies bad
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+            pool.record_failure("192.168.1.2:8080");
+            pool.record_failure("192.168.1.3:8080");
+        }
+        assert!(pool.all_proxies_failed());
+
+        // Simulate first proxy's cooldown expiring
+        pool.proxy_stats.entry("192.168.1.1:8080".to_string()).or_default().clear_cooldown();
+
+        // Now only proxy 1 should be available (2 and 3 still in cooldown)
+        assert!(!pool.all_proxies_failed());
+        let available = pool.get_available_proxies();
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].host, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_nearest_cooldown_secs_after_partial_recovery() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+
+        // Make all proxies bad with different cooldowns
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        // Second proxy: manually set shorter cooldown
+        pool.proxy_stats.entry("192.168.1.2:8080".to_string()).or_default().enter_cooldown(30);
+
+        let state = pool.get_all_proxies_failed_state().unwrap();
+        // Nearest cooldown should be from proxy 2 (30s)
+        assert!(state.nearest_cooldown_secs <= 30);
     }
 }
