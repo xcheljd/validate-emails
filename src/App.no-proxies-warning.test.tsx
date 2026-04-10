@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -146,12 +146,30 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
     vi.clearAllMocks();
     mockStartValidation.mockReset();
     mockShowWarning.mockReset();
+    // Clear localStorage before each test
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it('should show warning toast and NOT start validation when proxy enabled but no proxies configured', () => {
-    // Reset settings: proxy enabled, empty proxy list
+    // Set localStorage directly — this simulates the user enabling proxy
+    // in Settings without a page reload (the React state in App.tsx is stale)
+    localStorage.setItem('proxy-settings', JSON.stringify({
+      enabled: true,
+      proxies: [],
+      rotationMode: 'manual',
+      domainAssignments: {},
+      proxyStats: {},
+      cooldownDurationSecs: 60,
+    }));
+
+    // Even though the mock useSettings returns stale state (proxy disabled),
+    // the guard should read from localStorage and detect enabled + empty
     const settings = getMockSettings();
-    settings.proxy.enabled = true;
+    settings.proxy.enabled = false; // Stale React state — doesn't matter anymore
     settings.proxy.proxies = [];
 
     render(<App />, { wrapper });
@@ -162,13 +180,23 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
 
     fireEvent.click(startButton);
 
-    // Warning toast should be shown
+    // Warning toast should be shown (reads from localStorage, not stale React state)
     expect(mockShowWarning).toHaveBeenCalledWith('No proxies configured. Please add proxies in Settings or disable proxy.');
     // Validation should NOT start
     expect(mockStartValidation).not.toHaveBeenCalled();
   });
 
   it('should NOT show warning and should start validation when proxy is disabled', () => {
+    // localStorage has proxy disabled
+    localStorage.setItem('proxy-settings', JSON.stringify({
+      enabled: false,
+      proxies: [],
+      rotationMode: 'manual',
+      domainAssignments: {},
+      proxyStats: {},
+      cooldownDurationSecs: 60,
+    }));
+
     const settings = getMockSettings();
     settings.proxy.enabled = false;
     settings.proxy.proxies = [];
@@ -185,6 +213,16 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
   });
 
   it('should NOT show warning and should start validation when proxy is enabled and proxies are configured', () => {
+    // localStorage has proxy enabled with proxies configured
+    localStorage.setItem('proxy-settings', JSON.stringify({
+      enabled: true,
+      proxies: [{ host: '192.168.1.1', port: 8080 }],
+      rotationMode: 'manual',
+      domainAssignments: {},
+      proxyStats: {},
+      cooldownDurationSecs: 60,
+    }));
+
     const settings = getMockSettings();
     settings.proxy.enabled = true;
     settings.proxy.proxies = [{ host: '192.168.1.1', port: 8080 }];
@@ -198,5 +236,55 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
     expect(mockShowWarning).not.toHaveBeenCalled();
     // Validation should start
     expect(mockStartValidation).toHaveBeenCalled();
+  });
+
+  it('should detect proxy enabled from app-settings localStorage key', () => {
+    // When Tauri IPC succeeds, proxy data is stored under 'app-settings' key
+    localStorage.setItem('app-settings', JSON.stringify({
+      validationMode: 'standard',
+      concurrency: 5,
+      proxy: {
+        enabled: true,
+        proxies: [], // No proxies configured
+        rotationMode: 'manual',
+      },
+    }));
+
+    const settings = getMockSettings();
+    settings.proxy.enabled = false; // Stale React state
+    settings.proxy.proxies = [];
+
+    render(<App />, { wrapper });
+
+    const startButton = screen.getByRole('button', { name: /start validation/i });
+    fireEvent.click(startButton);
+
+    // Warning should be shown (reads from app-settings localStorage)
+    expect(mockShowWarning).toHaveBeenCalledWith('No proxies configured. Please add proxies in Settings or disable proxy.');
+    expect(mockStartValidation).not.toHaveBeenCalled();
+  });
+
+  it('should show warning even when React state is stale (proxy disabled in React but enabled in localStorage)', () => {
+    // This is the core bug scenario: user enables proxy in Settings,
+    // but App.tsx useSettings() state is stale (still shows disabled)
+    localStorage.setItem('proxy-settings', JSON.stringify({
+      enabled: true,
+      proxies: [],
+      rotationMode: 'manual',
+    }));
+
+    // React state is stale — proxy appears disabled
+    const settings = getMockSettings();
+    settings.proxy.enabled = false;
+    settings.proxy.proxies = [];
+
+    render(<App />, { wrapper });
+
+    const startButton = screen.getByRole('button', { name: /start validation/i });
+    fireEvent.click(startButton);
+
+    // Warning IS shown because we read from localStorage, not stale React state
+    expect(mockShowWarning).toHaveBeenCalledWith('No proxies configured. Please add proxies in Settings or disable proxy.');
+    expect(mockStartValidation).not.toHaveBeenCalled();
   });
 });
