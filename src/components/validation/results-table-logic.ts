@@ -1,4 +1,4 @@
-import { ValidationResult } from '@/hooks/use-email-validation';
+import { ValidationResult } from '@/lib/types';
 
 export function filterResults(results: ValidationResult[], query: string): ValidationResult[] {
   const lowQuery = query.toLowerCase();

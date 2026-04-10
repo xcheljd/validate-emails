@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Search, ArrowUpDown, ChevronRight, Filter, Download, Trash2, Columns, Smartphone, X } from "lucide-react";
-import { ValidationResult } from "@/hooks/use-email-validation";
+import { ValidationResult } from "@/lib/types";
 import { RiskScoreBadge } from "./risk-score-badge";
 import { TypoWarning } from "./typo-warning";
 import * as typoDatabase from "@/lib/typo-database";

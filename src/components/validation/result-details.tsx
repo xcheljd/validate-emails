@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ValidationResult } from "@/hooks/use-email-validation";
+import { ValidationResult } from "@/lib/types";
 import { Mail, ShieldCheck, AlertCircle, XCircle, Info, Clock, Globe, Activity, Check, AlertTriangle, ShieldAlert, Inbox, Plug, MailCheck, ShieldOff, Building2 } from "lucide-react";
 import { calculateRiskScore, getRiskLevel, getRiskColor, getRiskReasons } from "@/lib/risk-scorer";
 import * as typoDatabase from "@/lib/typo-database";

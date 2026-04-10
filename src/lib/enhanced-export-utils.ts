@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { ValidationResult } from '@/hooks/use-email-validation';
+import { ValidationResult } from '@/lib/types';
 
 export interface ExportColumn {
   key: keyof ValidationResult;
@@ -12,15 +12,24 @@ export const exportColumns: ExportColumn[] = [
   { key: 'result', label: 'Status', enabled: true },
   { key: 'reason', label: 'Verdict Reason', enabled: true },
   { key: 'domain', label: 'Domain', enabled: true },
-  { key: 'validationDuration', label: 'Duration (ms)', enabled: true },
-  { key: 'proxyUsed', label: 'Proxy', enabled: true },
-  { key: 'mxRecordCount', label: 'MX Records', enabled: true },
+  { key: 'riskScore', label: 'Risk Score', enabled: true },
+  { key: 'isValidSyntax', label: 'Valid Syntax', enabled: true },
+  { key: 'isDeliverable', label: 'Deliverable', enabled: true },
+  { key: 'isDisabled', label: 'Disabled', enabled: true },
+  { key: 'hasFullInbox', label: 'Full Inbox', enabled: true },
+  { key: 'isCatchAll', label: 'Catch-All', enabled: true },
   { key: 'isDisposable', label: 'Disposable', enabled: true },
   { key: 'isRoleAccount', label: 'Role Account', enabled: true },
-  { key: 'isCatchAll', label: 'Catch-All', enabled: true },
-  { key: 'errorType', label: 'Error Type', enabled: true },
+  { key: 'isB2c', label: 'B2C Provider', enabled: true },
+  { key: 'canConnectSmtp', label: 'SMTP Connected', enabled: true },
+  { key: 'acceptsMail', label: 'Accepts Mail', enabled: true },
+  { key: 'mxRecordCount', label: 'MX Records', enabled: true },
+  { key: 'haveibeenpwned', label: 'Breached', enabled: true },
+  { key: 'suggestion', label: 'Suggestion', enabled: true },
+  { key: 'validationDuration', label: 'Duration (ms)', enabled: true },
   { key: 'timestamp', label: 'Validated At', enabled: true },
-  { key: 'validationMode', label: 'Validation Mode', enabled: true },
+  { key: 'validationMode', label: 'Mode', enabled: true },
+  { key: 'errorType', label: 'Error Type', enabled: true },
 ];
 
 export function exportToExcel(

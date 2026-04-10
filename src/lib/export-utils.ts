@@ -1,4 +1,4 @@
-import { ValidationResult } from '@/hooks/use-email-validation';
+import { ValidationResult } from '@/lib/types';
 
 export function formatAsCSV(results: ValidationResult[]): string {
   const header = "Email,Status,Reason";

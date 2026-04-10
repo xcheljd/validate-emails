@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent } from "@/components/ui/card";
-import { CheckCircle2, AlertCircle, XCircle, Info, Timer, Zap, Globe } from "lucide-react";
-import { ValidationResult, ValidationStatus, AllProxiesFailedPayload } from "@/hooks/use-email-validation";
+import { CheckCircle2, AlertCircle, XCircle, Info, Timer, Zap, Globe, Loader2 } from "lucide-react";
+import { ValidationResult } from "@/lib/types";
+import { ValidationStatus, AllProxiesFailedPayload } from "@/hooks/use-email-validation";
 import { ValidationControls } from "./validation-controls";
 import { RetryModal } from "./retry-modal";
 import { ProxyFailureModal } from "./proxy-failure-modal";
@@ -40,6 +41,9 @@ interface ValidationDashboardProps {
   onRetryWithCooldown?: () => void;
   // Direct connection indicator
   usingDirectConnection?: boolean;
+  // Waiting for proxy cooldown
+  waitingForProxy?: boolean;
+  waitingCooldownSecs?: number;
 }
 
 export function ValidationDashboard({
@@ -61,6 +65,8 @@ export function ValidationDashboard({
    onContinueWithoutProxy,
    onRetryWithCooldown,
    usingDirectConnection = false,
+   waitingForProxy = false,
+   waitingCooldownSecs = 0,
 }: ValidationDashboardProps) {
    const [showStopDialog, setShowStopDialog] = useState(false);
    const [showRetryModal, setShowRetryModal] = useState(false);
@@ -140,9 +146,25 @@ export function ValidationDashboard({
    };
 
    const isPaused = status === 'paused';
+   const isWaiting = status === 'waiting';
 
    return (
      <div className="space-y-4 md:space-y-6 w-full max-w-6xl mx-auto animate-in fade-in duration-500">
+       
+       {/* Waiting for Proxy Cooldown Indicator */}
+       {waitingForProxy && isWaiting && (
+         <div className="flex items-center gap-3 p-3 bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-900 rounded-lg animate-pulse">
+           <Loader2 className="h-5 w-5 text-yellow-600 dark:text-yellow-400 animate-spin" />
+           <div className="flex flex-col">
+             <span className="text-sm font-medium text-yellow-700 dark:text-yellow-300">
+               Waiting for proxy to become available...
+             </span>
+             <span className="text-xs text-yellow-600 dark:text-yellow-400">
+               Resuming in {waitingCooldownSecs}s
+             </span>
+           </div>
+         </div>
+       )}
        
        {/* Direct Connection Indicator */}
        {usingDirectConnection && (status === 'processing' || status === 'paused') && (
@@ -174,27 +196,32 @@ export function ValidationDashboard({
                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-4">
                  <div className="space-y-1">
                    <h3 className="text-sm font-bold flex items-center gap-2 text-muted-foreground">
-                     {isPaused ? 'Validation Paused' : 'Overall Progress'}
+                     {isWaiting ? 'Waiting for Proxy' : isPaused ? 'Validation Paused' : 'Overall Progress'}
                      <span className="text-primary font-black text-lg">{percentage}%</span>
                    </h3>
                    <p className="text-[10px] md:text-xs text-muted-foreground font-medium">
                      {progress} of {total} emails verified
+                     {isWaiting && waitingCooldownSecs > 0 && (
+                       <span className="ml-2 text-yellow-600 dark:text-yellow-400">
+                         • Resuming in {waitingCooldownSecs}s
+                       </span>
+                     )}
                    </p>
                  </div>
 
                  <div className="flex items-center gap-2 bg-background/50 p-1.5 rounded-xl border shadow-sm w-full sm:w-auto justify-between sm:justify-start">
                    {/* Metrics (Timer/Speed) */}
-                   {(estimatedTimeRemaining !== undefined || validationSpeed !== undefined) && (status === 'processing' || status === 'paused') && (
+                   {(estimatedTimeRemaining !== undefined || validationSpeed !== undefined) && (status === 'processing' || status === 'paused' || status === 'waiting') && (
                      <div className={cn(
                        "flex items-center gap-3 md:gap-4 text-[10px] md:text-xs font-bold border-r pr-3 mr-1 tabular-nums transition-colors duration-300",
-                       isPaused ? "text-muted-foreground" : "text-blue-600"
+                       (isPaused || isWaiting) ? "text-muted-foreground" : "text-blue-600"
                      )}>
                        <div className="flex items-center gap-1.5 min-w-[65px] md:min-w-[80px]">
-                         <Zap className={cn("h-3.5 w-3.5 fill-current shrink-0", isPaused ? "text-muted-foreground" : "text-blue-600")} />
+                         <Zap className={cn("h-3.5 w-3.5 fill-current shrink-0", (isPaused || isWaiting) ? "text-muted-foreground" : "text-blue-600")} />
                          <span className="truncate">{validationSpeed || 0}<span className="opacity-70">/m</span></span>
                        </div>
-                       <div className={cn("flex items-center gap-1.5 border-l pl-3 min-w-[65px] md:min-w-[80px]", isPaused ? "border-muted-foreground/30" : "border-blue-200")}>
-                         <Timer className={cn("h-3.5 w-3.5 shrink-0", isPaused ? "text-muted-foreground" : "text-blue-600")} />
+                       <div className={cn("flex items-center gap-1.5 border-l pl-3 min-w-[65px] md:min-w-[80px]", (isPaused || isWaiting) ? "border-muted-foreground/30" : "border-blue-200")}>
+                         <Timer className={cn("h-3.5 w-3.5 shrink-0", (isPaused || isWaiting) ? "text-muted-foreground" : "text-blue-600")} />
                          <span>~{formatTime(estimatedTimeRemaining || 0)}</span>
                        </div>
                      </div>
@@ -214,7 +241,7 @@ export function ValidationDashboard({
                  value={percentage}
                  className={cn(
                    "h-2 md:h-3 transition-all duration-500 bg-muted",
-                   isPaused && "opacity-60"
+                   (isPaused || isWaiting) && "opacity-60"
                  )}
                />
              </div>

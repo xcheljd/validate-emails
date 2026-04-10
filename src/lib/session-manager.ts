@@ -1,24 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { validateSession, validateResultsBatch } from './data-validation';
 import { showError } from './toast';
-
-export interface ValidationResult {
-  email: string;
-  result: 'Safe' | 'Risky' | 'Invalid' | 'Unknown';
-  reason: string;
-  logs: string[];
-  domain: string;
-  validationDuration: number;
-  proxyUsed?: string;
-  mxRecordCount: number;
-  isDisposable: boolean;
-  isRoleAccount: boolean;
-  isCatchAll: boolean;
-  errorType?: string;
-  timestamp: string;
-  validationMode: 'quick' | 'standard' | 'thorough';
-  riskScore: number;
-}
+import { ValidationResult } from './types';
 
 export interface ValidationSession {
   id: string;
@@ -35,9 +18,6 @@ export interface ValidationSession {
 
 export interface SessionSettings {
   validationMode: 'quick' | 'standard' | 'thorough';
-  proxyEnabled: boolean;
-  proxyRotationStrategy: string;
-  maxEmailsPerProxy: number;
 }
 
 export async function createSession(emails: string[], settings: SessionSettings): Promise<string> {
@@ -56,14 +36,8 @@ export async function updateSessionProgress(
     throw new Error(`Data validation failed: ${validation.errors[0]}`);
   }
 
-  const existingSession = await loadSession(sessionId).catch(() => null);
-
-  if (existingSession) {
-    const backupPath = `${sessionId}.backup.${Date.now()}.json`;
-    await invoke('backup_session', { sessionId, backupPath });
-  }
-
-  return invoke('update_validation_session', { id: sessionId, results, currentIndex });
+  // Backup is handled internally by the Rust update_validation_session command
+  return invoke('update_validation_session', { id: sessionId, results, currentIndex, backup: true });
 }
 
 export async function loadSession(sessionId: string): Promise<ValidationSession> {

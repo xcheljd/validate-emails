@@ -7,7 +7,8 @@ import { ResultsTable } from "@/components/validation/results-table";
 import { ResultDetails } from "@/components/validation/result-details";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft } from "lucide-react";
-import { useEmailValidation, ValidationResult } from "@/hooks/use-email-validation";
+import { useEmailValidation } from "@/hooks/use-email-validation";
+import { ValidationResult } from "@/lib/types";
 import { useSettings, ProxyConfig } from "@/hooks/use-settings";
 import { showWarning } from "@/lib/toast";
 

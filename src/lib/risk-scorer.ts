@@ -1,4 +1,4 @@
-import { ValidationResult } from '@/hooks/use-email-validation';
+import { ValidationResult } from '@/lib/types';
 
 export function calculateRiskScore(result: ValidationResult): number {
   let score = 0;
