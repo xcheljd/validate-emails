@@ -1,7 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { RetryModal } from './retry-modal';
 import { describe, it, expect, vi } from 'vitest';
-import React from 'react';
 
 describe('RetryModal', () => {
     it('should render when open', () => {

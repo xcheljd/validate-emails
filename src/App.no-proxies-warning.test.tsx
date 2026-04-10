@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Hoisted mock functions (needed because vi.mock factories are hoisted)
 const { mockShowWarning, mockStartValidation, getMockSettings } = vi.hoisted(() => {
-  let mockSettingsState: any = {
+  const mockSettingsState: any = {
     validationMode: 'standard',
     concurrency: 5,
     timeout: 30,

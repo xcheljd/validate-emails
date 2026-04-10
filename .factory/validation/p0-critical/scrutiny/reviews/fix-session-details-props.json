@@ -1,0 +1,34 @@
+{
+  "featureId": "fix-session-details-props",
+  "reviewedAt": "2026-04-10T17:50:00.000Z",
+  "commitId": "f81dd65",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean, minimal fix that adds missing statusFilter state and onStatusFilterChange callback to SessionDetails, wiring them as props to ResultsTable. The implementation follows the existing pattern in App.tsx exactly. TypeScript compilation for session-details.tsx now passes with no missing-prop errors. Tests are reasonable, though they verify behavior indirectly through DOM queries rather than asserting props directly.",
+    "issues": [
+      {
+        "file": "src/components/history/session-details.tsx",
+        "line": 78,
+        "severity": "non_blocking",
+        "description": "onViewDetails={() => {}} is a no-op that discards the clicked result. This is pre-existing and out of scope for this feature, but users clicking 'Details' on a result in session details view will get no feedback. Could be a future enhancement."
+      },
+      {
+        "file": "src/components/history/session-details.test.tsx",
+        "line": 142,
+        "severity": "non_blocking",
+        "description": "Tests verify prop wiring indirectly by checking for a <select> element in the DOM. While this is acceptable and the TypeScript compiler validates prop types, a more direct test would spy on the ResultsTable component and assert the received props. This is a minor test quality observation, not a blocker."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The pattern for passing statusFilter/onStatusFilterChange to ResultsTable is duplicated across App.tsx and session-details.tsx — both use useState('all') and pass statusFilter + setStatusFilter. This is a standard React pattern but could be documented in AGENTS.md or architecture.md as the canonical way to integrate ResultsTable.",
+      "evidence": "src/components/history/session-details.tsx:12 (useState('all')), src/App.tsx has the same pattern with statusFilter/setStatusFilter"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The fix correctly adds missing statusFilter state and onStatusFilterChange callback to SessionDetails and wires them to ResultsTable, resolving the TypeScript TS2739 error. The implementation is consistent with the same pattern used in App.tsx. Two new tests pass. All 204 tests pass, eslint is clean, and TypeScript compilation has no errors for the modified files. Two non-blocking observations: the pre-existing no-op onViewDetails handler, and indirect test assertions."
+}

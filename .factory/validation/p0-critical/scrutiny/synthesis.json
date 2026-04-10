@@ -1,0 +1,36 @@
+{
+  "milestone": "p0-critical",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "npx vitest run", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "npx tsc --noEmit", "exitCode": 0 },
+    "lint": { "passed": true, "command": "npx eslint src/", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Fixed unused React import in retry-modal.test.tsx and let→const in App.no-proxies-warning.test.tsx to unblock typecheck and lint validators",
+      "sourceFeature": "scrutiny-validator-p0-critical"
+    }
+  ],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [
+    {
+      "observation": "statusFilter/onStatusFilterChange pattern duplication across App.tsx and session-details.tsx could be documented",
+      "reason": "This is a standard React pattern (useState + prop passing). Not actionable enough to warrant AGENTS.md guidance. Documenting every useState pattern would bloat guidance docs."
+    },
+    {
+      "observation": "exportColumns in enhanced-export-utils.ts is not frozen with Object.freeze()",
+      "reason": "While valid, this is a p2-quality concern, not p0-critical. The mutation fix already addresses the immediate problem. Freezing could be suggested in a future quality milestone."
+    }
+  ],
+  "previousRound": null
+}

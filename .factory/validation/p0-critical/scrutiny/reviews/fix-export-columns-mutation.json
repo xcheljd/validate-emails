@@ -1,0 +1,28 @@
+{
+  "featureId": "fix-export-columns-mutation",
+  "reviewedAt": "2026-04-10T17:55:00.000Z",
+  "commitId": "bd9e6f4",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The fix correctly replaces direct mutation of the module-level exportColumns array with local React component state (localColumns). The implementation is minimal, focused, and follows React best practices for immutable state updates. All validation contract assertions for VAL-MUT-003 are satisfied.",
+    "issues": [
+      {
+        "file": "src/components/validation/results-table.test.tsx",
+        "line": 5,
+        "severity": "non_blocking",
+        "description": "Pre-existing: imports `filterResults` and `sortResults` from `./results-table-logic` which does not exist. These imports are unused and the test file does not test those functions. Should be cleaned up but does not affect the mutation fix."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The `exportColumns` constant in `enhanced-export-utils.ts` is declared as `export const` but is not frozen with `Object.freeze()`. While the fix correctly avoids mutating it, future code could accidentally mutate the array or its objects. Consider documenting the immutability expectation or using `Object.freeze()` / `as const` to enforce it at the type level.",
+      "evidence": "src/lib/enhanced-export-utils.ts:7 — `export const exportColumns: ExportColumn[] = [...]` has no freeze or deep-freeze protection"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS — The fix correctly addresses VAL-MUT-003. The module-level `exportColumns` constant is now treated as immutable: it is only used to initialize `localColumns` state via `useState(() => exportColumns.map(c => ({ ...c })))`. Column toggle uses immutable update pattern `setLocalColumns(prev => prev.map(c => c.key === key ? { ...c, enabled: !c.enabled } : c))`. The `visibleColumns` memo and column menu render both read from `localColumns`. No `.push()`, `.splice()`, index assignment, or `Object.assign` on the module-level constant. All 204 tests pass. The implementation is clean and minimal — only 2 files changed (implementation + test props fix)."
+}

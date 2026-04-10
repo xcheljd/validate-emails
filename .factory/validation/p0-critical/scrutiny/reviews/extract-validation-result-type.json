@@ -1,0 +1,34 @@
+{
+  "featureId": "extract-validation-result-type",
+  "reviewedAt": "2026-04-10T17:50:00.000Z",
+  "commitId": "dd98500",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The feature successfully extracts duplicate ValidationResult interfaces into a single canonical definition in src/lib/types.ts. All 17 consumer files (11 source + 6 test) import from the canonical location. No duplicate interface definitions remain. The canonical interface is a proper superset of both previous definitions, including all fields from use-email-validation.ts (the more complete version) plus the optional proxyId field. Test mocks were properly updated with the 7 new required boolean fields (isDeliverable, isDisabled, hasFullInbox, canConnectSmtp, acceptsMail, isValidSyntax, isB2c).",
+    "issues": [
+      {
+        "file": "src/components/validation/validation-dashboard.tsx",
+        "line": 44,
+        "severity": "non_blocking",
+        "description": "Commit 7bfb658 bundled unrelated changes beyond the ValidationResult extraction scope: adding waitingForProxy/waitingCooldownSecs props and a new Loader2 import with a 'waiting for proxy' UI indicator. These changes appear to belong to a different feature (proxy cooldown), not the type extraction refactor. While these changes don't break anything, they make the commit harder to review and muddy the git history."
+      },
+      {
+        "file": "src/lib/session-manager.ts",
+        "line": 18,
+        "severity": "non_blocking",
+        "description": "The SessionSettings interface was simplified to only contain validationMode (removing proxyEnabled, proxyRotationStrategy, maxEmailsPerProxy) and the updateSessionProgress function was rewritten to pass backup:true as an argument. These changes go beyond the scope of ValidationResult extraction. However, they appear to be related cleanup that is consistent with the proxy functionality having been removed from the codebase."
+      },
+      {
+        "file": "src/lib/enhanced-export-utils.ts",
+        "line": 14,
+        "severity": "non_blocking",
+        "description": "The exportColumns array was significantly reworked from 13 columns to 22 columns, adding many new fields. The old 'proxyUsed' column was correctly removed (replaced by proxyId which is not a column). This is a reasonable expansion but was bundled in the type extraction commit rather than a separate commit."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS — The feature correctly extracts ValidationResult into a single canonical interface at src/lib/types.ts. All validation contract assertions for VAL-TYP-001 are satisfied: (1) src/lib/types.ts exports the single canonical ValidationResult interface, (2) neither use-email-validation.ts nor session-manager.ts defines its own interface, (3) all 6 test files that reference ValidationResult import from src/lib/types.ts, and (4) all consumers use the canonical import path. The canonical interface is a proper superset of both prior definitions. No blocking issues found. Three non-blocking observations: the first commit (7bfb658) bundled unrelated UI changes for proxy-cooldown waiting indicators and SessionSettings simplification beyond the scope of this feature, which makes the commit harder to review but does not affect correctness."
+}
