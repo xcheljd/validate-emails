@@ -1,0 +1,93 @@
+{
+  "groupId": "val-flr-007-r3",
+  "testedAt": "2026-04-10T00:00:00Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "session": "aa796bbff428",
+    "context": "browser-only (no Tauri IPC, localStorage fallback)"
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-FLR-007",
+      "title": "No proxies configured warning",
+      "status": "fail",
+      "steps": [
+        {
+          "action": "Clear localStorage and reload page for clean state",
+          "expected": "Fresh app with default settings",
+          "observed": "App loaded with default settings, proxy disabled"
+        },
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy settings visible with Enable toggle OFF",
+          "observed": "Proxy tab visible, Enable Proxy switch unchecked, all controls disabled"
+        },
+        {
+          "action": "Click Enable Proxy toggle to ON",
+          "expected": "Proxy enabled, rotation mode and input controls become active",
+          "observed": "Proxy switch shows [checked], controls become active. localStorage 'proxy-settings' updated to {enabled:true, proxies:[]}"
+        },
+        {
+          "action": "Verify proxy list is empty (no proxies added)",
+          "expected": "Empty proxy list",
+          "observed": "No proxies in list, Add button disabled (no text entered)"
+        },
+        {
+          "action": "Navigate to Validation view",
+          "expected": "Main validation input view displayed",
+          "observed": "Email input view displayed"
+        },
+        {
+          "action": "Enter 'test@example.com' and click Load 1 Emails",
+          "expected": "Email loaded, validation config shown",
+          "observed": "ValidationConfig view shown with Quick/Standard/Thorough modes and Start Validation button"
+        },
+        {
+          "action": "Click 'Start Validation' button",
+          "expected": "Warning toast shown saying 'No proxies configured', validation does NOT start",
+          "observed": "NO warning toast appeared. Validation proceeded to dashboard view with Export/New buttons and Safe/Risky/Invalid/Unknown counts. MutationObserver on toast container captured 0 toast messages."
+        },
+        {
+          "action": "After page reload (with proxy-settings still {enabled:true, proxies:[]}), enter email and click Start Validation again",
+          "expected": "Warning toast shown, validation blocked",
+          "observed": "Warning toast 'No proxies configured. Please add proxies in Settings or disable proxy.' appeared (confirmed by MutationObserver). Validation did NOT proceed - stayed on ValidationConfig view."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-failure-handling/val-flr-007-r3/01-initial-page.png",
+          "proxy-failure-handling/val-flr-007-r3/02-proxy-enabled-empty-list.png",
+          "proxy-failure-handling/val-flr-007-r3/03-before-start-validation.png",
+          "proxy-failure-handling/val-flr-007-r3/04-after-start-validation.png",
+          "proxy-failure-handling/val-flr-007-r3/05-reloaded-before-start.png",
+          "proxy-failure-handling/val-flr-007-r3/06-reloaded-after-start.png",
+          "proxy-failure-handling/val-flr-007-r3/07-check-toast-area.png",
+          "proxy-failure-handling/val-flr-007-r3/08-warning-toast-captured.png",
+          "proxy-failure-handling/val-flr-007-r3/09-fresh-proxy-enabled-empty.png",
+          "proxy-failure-handling/val-flr-007-r3/10-before-start-no-reload.png",
+          "proxy-failure-handling/val-flr-007-r3/11-after-start-no-reload.png"
+        ],
+        "consoleErrors": "No errors related to the guard. Standard Tauri invoke failures (expected in browser context): 'Failed to load settings from backend, using localStorage', 'Failed to load proxy pool from backend, using localStorage fallback', 'Failed to update proxy pool config via Tauri, using localStorage fallback'. Bulk validation error after guard bypass: 'Bulk validation failed: TypeError: Cannot read properties of undefined (reading invoke)'",
+        "network": "n/a - browser context only, no Tauri IPC"
+      },
+      "issues": "Guard works only after page reload but NOT in the normal user flow. Root cause: useSettings() hook creates separate React state per component instance. When user enables proxy in SettingsContent component, only SettingsContent's React state and localStorage are updated. App component's React state (which contains handleStartValidation) is NOT updated because useSettings() is not a shared context/store. After page reload, App's useEffect reads the updated localStorage and the guard works correctly. Fix needed: either convert useSettings to a React Context, or have handleStartValidation read directly from localStorage."
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Sonner toast auto-dismisses quickly (~4s), making it difficult to capture in screenshots. Used MutationObserver to confirm toast appearance.",
+      "resolved": true,
+      "resolution": "Set up MutationObserver on the toast container element before clicking Start Validation to capture toast messages programmatically",
+      "affectedAssertions": ["VAL-FLR-007"]
+    },
+    {
+      "description": "Vite HMR causes multiple page reconnections during testing, shown in console as 'reconnectPassiveEffects' messages",
+      "resolved": true,
+      "resolution": "Accounted for in testing by using explicit waits and checking state before interactions",
+      "affectedAssertions": ["VAL-FLR-007"]
+    }
+  ],
+  "blockers": [],
+  "summary": "Tested VAL-FLR-007: FAIL. The guard code IS present in App.tsx (confirmed in running bundle) and works after page reload, but FAILS in the normal user flow due to a React state synchronization bug. When user enables proxy in Settings > Proxy tab and navigates to validation, the App component's useSettings() state still has proxy.enabled=false because useSettings() is not a shared context. The fix in handleStartValidation checks settings.proxy.enabled but reads from App's stale React state, not the updated localStorage. MutationObserver confirmed the warning toast 'No proxies configured. Please add proxies in Settings or disable proxy.' does appear when the guard triggers (after reload), but the guard does NOT trigger in the normal user flow."
+}

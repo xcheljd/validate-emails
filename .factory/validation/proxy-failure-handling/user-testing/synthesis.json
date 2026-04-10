@@ -1,49 +1,46 @@
 {
   "milestone": "proxy-failure-handling",
-  "round": 2,
+  "round": 3,
   "status": "fail",
   "assertionsSummary": {
-    "total": 8,
-    "passed": 7,
+    "total": 1,
+    "passed": 0,
     "failed": 1,
     "blocked": 0
   },
-  "passedAssertions": [
-    "VAL-FLR-001",
-    "VAL-FLR-002",
-    "VAL-FLR-003",
-    "VAL-FLR-004",
-    "VAL-FLR-005",
-    "VAL-FLR-006",
-    "VAL-CRS-003"
-  ],
+  "passedAssertions": [],
   "failedAssertions": [
     {
       "id": "VAL-FLR-007",
-      "round": 2,
-      "reason": "No warning is shown when the user starts validation with proxy enabled but no proxies configured. Browser automation confirmed: enabled proxy toggle in Settings > Proxy tab (localStorage: enabled:true, proxies:[]), navigated to validation view, entered test email, clicked Start Validation — validation proceeded to dashboard without any toast, dialog, or banner. Code in handleStartValidation (App.tsx:62) and startValidation (use-email-validation.ts:167) has no guard for this condition.",
-      "suggestedFix": "Add a check in handleStartValidation (App.tsx) that reads proxy settings from localStorage (or useSettings hook), checks if proxy.enabled === true && proxy.proxies.length === 0, and if so, calls showWarning('No proxies configured. Add proxies in Settings or disable proxy to continue.') from lib/toast.ts and returns early without starting validation."
+      "round": 3,
+      "reason": "Guard code IS present in App.tsx:69-73 and works after page reload, but FAILS in the normal user flow (Settings > enable proxy > navigate to validation > Start). Root cause: useSettings() is a custom hook with useState, not a shared React Context. Each component that calls useSettings() gets independent state. When user enables proxy in SettingsContent, only that component's React state and localStorage are updated. App component's React state (which contains handleStartValidation) still has proxy.enabled=false. After page reload, App's useEffect reads updated localStorage and the guard works. Fix needed: either convert useSettings to a React Context/Provider pattern for shared state, or have handleStartValidation read directly from localStorage (via getProxyFromStorage() or localStorage.getItem) instead of relying on React state.",
+      "suggestedFix": "Option A (quick fix): In handleStartValidation (App.tsx:66), replace the check on settings.proxy.enabled with a direct localStorage read: `const proxySettings = JSON.parse(localStorage.getItem('proxy-settings') || '{}'); if (proxySettings.enabled && (!proxySettings.proxies || proxySettings.proxies.length === 0)) { ... }`. Option B (proper fix): Convert useSettings to use React.createContext/useContext Provider pattern so all components share the same state instance."
     }
   ],
   "blockedAssertions": [],
   "appliedUpdates": [],
-  "previousRound": ".factory/validation/proxy-failure-handling/user-testing/synthesis.json (round 1)",
+  "previousRound": ".factory/validation/proxy-failure-handling/user-testing/synthesis.json (round 2)",
   "testingMethodology": {
-    "approach": "Re-run targeting failed assertion VAL-FLR-007 only. Browser automation via agent-browser to verify behavior in running app.",
+    "approach": "Re-run targeting failed assertion VAL-FLR-007 only. Browser automation via agent-browser to verify behavior in running app. MutationObserver used on toast container to programmatically detect warning toast appearance.",
     "limitations": [
       "Tauri IPC calls fail in browser context (expected, documented in user-testing.md)",
-      "Validation does not actually run SMTP checks in browser context — but the assertion is about a pre-validation UI warning, which IS testable in browser"
+      "Toast auto-dismisses quickly (~4s), MutationObserver used to reliably capture toast text"
     ]
   },
   "testEvidence": {
-    "flowReport": ".factory/validation/proxy-failure-handling/user-testing/flows/val-flr-007-r2.json",
+    "flowReport": ".factory/validation/proxy-failure-handling/user-testing/flows/val-flr-007-r3.json",
     "screenshots": [
-      "proxy-failure-handling/val-flr-007-r2/01-initial-state.png",
-      "proxy-failure-handling/val-flr-007-r2/02-proxy-settings-before-enable.png",
-      "proxy-failure-handling/val-flr-007-r2/03-proxy-enabled-no-proxies.png",
-      "proxy-failure-handling/val-flr-007-r2/04-proxy-enabled-full-page.png",
-      "proxy-failure-handling/val-flr-007-r2/05-validation-started-no-warning.png",
-      "proxy-failure-handling/val-flr-007-r2/06-final-state-no-warning.png"
+      "proxy-failure-handling/val-flr-007-r3/01-initial-page.png",
+      "proxy-failure-handling/val-flr-007-r3/02-proxy-enabled-empty-list.png",
+      "proxy-failure-handling/val-flr-007-r3/03-before-start-validation.png",
+      "proxy-failure-handling/val-flr-007-r3/04-after-start-validation.png",
+      "proxy-failure-handling/val-flr-007-r3/05-reloaded-before-start.png",
+      "proxy-failure-handling/val-flr-007-r3/06-reloaded-after-start.png",
+      "proxy-failure-handling/val-flr-007-r3/07-check-toast-area.png",
+      "proxy-failure-handling/val-flr-007-r3/08-warning-toast-captured.png",
+      "proxy-failure-handling/val-flr-007-r3/09-fresh-proxy-enabled-empty.png",
+      "proxy-failure-handling/val-flr-007-r3/10-before-start-no-reload.png",
+      "proxy-failure-handling/val-flr-007-r3/11-after-start-no-reload.png"
     ]
   }
 }
