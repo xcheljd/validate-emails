@@ -39,7 +39,14 @@ const mockResults: ValidationResult[] = [
 
 describe('ResultsTable Structure', () => {
   it('renders valid table structure (no divs in tbody)', () => {
-    const { container } = render(<ResultsTable results={mockResults} onViewDetails={vi.fn()} />);
+    const { container } = render(
+      <ResultsTable
+        results={mockResults}
+        onViewDetails={vi.fn()}
+        statusFilter="all"
+        onStatusFilterChange={vi.fn()}
+      />
+    );
     const tbody = container.querySelector('tbody');
     expect(tbody).toBeInTheDocument();
     

@@ -16,7 +16,7 @@ import { ValidationResult } from "@/lib/types";
 import { RiskScoreBadge } from "./risk-score-badge";
 import { TypoWarning } from "./typo-warning";
 import * as typoDatabase from "@/lib/typo-database";
-import { exportColumns } from "@/lib/enhanced-export-utils";
+import { exportColumns, ExportColumn } from "@/lib/enhanced-export-utils";
 import { formatAsCSV } from "@/lib/export-utils";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
@@ -45,6 +45,9 @@ export function ResultsTable({
   const [showColumnMenu, setShowColumnMenu] = useState(false);
   const [riskFilter, setRiskFilter] = useState<string>("all");
   const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  const [localColumns, setLocalColumns] = useState<ExportColumn[]>(() =>
+    exportColumns.map(c => ({ ...c }))
+  );
   const parentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -162,11 +165,12 @@ export function ResultsTable({
   };
 
   const toggleColumn = (key: string) => {
-    const col = exportColumns.find(c => c.key === key);
-    if (col) {
-      col.enabled = !col.enabled;
-      setShowColumnMenu(false);
-    }
+    setLocalColumns(prev =>
+      prev.map(c =>
+        c.key === key ? { ...c, enabled: !c.enabled } : c
+      )
+    );
+    setShowColumnMenu(false);
   };
 
   const getStatusBadge = (status: string) => {
@@ -183,7 +187,7 @@ export function ResultsTable({
   };
 
   const visibleColumns = useMemo(() => {
-    const enabledColumns = exportColumns.filter(c => c.enabled);
+    const enabledColumns = localColumns.filter(c => c.enabled);
     
     if (windowWidth < 640) { // mobile
       return enabledColumns.filter(c => ['email', 'result'].includes(c.key));
@@ -192,7 +196,7 @@ export function ResultsTable({
     }
     
     return enabledColumns;
-  }, [windowWidth]);
+  }, [localColumns, windowWidth]);
 
   const { getVirtualItems, getTotalSize } = virtualizer;
   const items = getVirtualItems();
@@ -266,7 +270,7 @@ export function ResultsTable({
         <div className="bg-card border rounded-lg p-4 shadow-lg">
           <h4 className="font-medium mb-2">Toggle Columns</h4>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-            {exportColumns.map(col => (
+            {localColumns.map(col => (
               <label key={col.key} className="flex items-center gap-2 text-sm touch-action-manipulation">
                 <Checkbox
                   checked={col.enabled}
