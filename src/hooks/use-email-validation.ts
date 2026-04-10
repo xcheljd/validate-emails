@@ -34,7 +34,7 @@ export interface ValidationResult {
   proxyId?: string;
 }
 
-export type ValidationStatus = 'idle' | 'processing' | 'paused' | 'stopping';
+export type ValidationStatus = 'idle' | 'processing' | 'paused' | 'stopping' | 'waiting';
 
 export interface FailedProxyInfo {
   id: string;
@@ -64,10 +64,14 @@ export function useEmailValidation() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [allProxiesFailedState, setAllProxiesFailedState] = useState<AllProxiesFailedPayload | null>(null);
   const [usingDirectConnection, setUsingDirectConnection] = useState<boolean>(false);
+  const [waitingForProxy, setWaitingForProxy] = useState<boolean>(false);
+  const [waitingCooldownSecs, setWaitingCooldownSecs] = useState<number>(0);
 
   const pendingEmailsRef = useRef<string[]>([]);
   const currentConcurrencyRef = useRef<number>(5);
   const statusRef = useRef<ValidationStatus>('idle');
+  const waitingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cooldownEndTimeRef = useRef<number>(0);
 
   // Keep ref in sync for callbacks
   useEffect(() => {
@@ -272,9 +276,18 @@ export function useEmailValidation() {
   const stopValidation = useCallback(async () => {
     setStatus('stopping');
     statusRef.current = 'stopping';
+    // Clear any active waiting/cooldown timer
+    if (waitingTimerRef.current) {
+      clearInterval(waitingTimerRef.current);
+      waitingTimerRef.current = null;
+    }
     await invoke("stop_validation");
     setStatus('idle');
     statusRef.current = 'idle';
+    // Clear all proxy failure state so the modal closes
+    setAllProxiesFailedState(null);
+    setWaitingForProxy(false);
+    setWaitingCooldownSecs(0);
     // We don't reset progress/total here because the user might want to see the partial results
   }, []);
 
@@ -306,32 +319,62 @@ export function useEmailValidation() {
   }, [mutation, validationMode]);
 
   // Retry with cooldown - wait for nearest cooldown to expire then retry
-  const retryWithCooldown = useCallback(async () => {
+  const retryWithCooldown = useCallback(() => {
     if (!allProxiesFailedState || allProxiesFailedState.cooldownCount === 0) {
       return;
     }
 
-    try {
-      // Wait for the nearest cooldown to expire
-      const waitTime = allProxiesFailedState.nearestCooldownSecs * 1000;
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-      
-      // Clear the state
-      setAllProxiesFailedState(null);
-      
-      // Resume validation with remaining emails
-      setStatus('processing');
-      statusRef.current = 'processing';
-      mutation.mutate({
-        emails: pendingEmailsRef.current,
-        concurrency: currentConcurrencyRef.current,
-        mode: validationMode
-      });
-    } catch (error) {
-      console.error("Failed to retry with cooldown:", error);
-      notifyError(error instanceof Error ? error.message : "Failed to retry with cooldown");
+    const waitTimeSecs = allProxiesFailedState.nearestCooldownSecs;
+    if (waitTimeSecs <= 0) {
+      return;
     }
+
+    // Set waiting state
+    setWaitingForProxy(true);
+    setWaitingCooldownSecs(waitTimeSecs);
+    setStatus('waiting');
+    statusRef.current = 'waiting';
+    
+    // Store the end time
+    const now = Date.now();
+    cooldownEndTimeRef.current = now + (waitTimeSecs * 1000);
+    
+    // Start countdown timer (update every second)
+    waitingTimerRef.current = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((cooldownEndTimeRef.current - Date.now()) / 1000));
+      setWaitingCooldownSecs(remaining);
+      
+      // When cooldown expires, resume validation
+      if (remaining <= 0) {
+        if (waitingTimerRef.current) {
+          clearInterval(waitingTimerRef.current);
+          waitingTimerRef.current = null;
+        }
+        setWaitingForProxy(false);
+        setWaitingCooldownSecs(0);
+        setAllProxiesFailedState(null);
+        setStatus('processing');
+        statusRef.current = 'processing';
+        
+        // Resume validation
+        mutation.mutate({
+          emails: pendingEmailsRef.current,
+          concurrency: currentConcurrencyRef.current,
+          mode: validationMode
+        });
+      }
+    }, 1000);
   }, [allProxiesFailedState, mutation, validationMode]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (waitingTimerRef.current) {
+        clearInterval(waitingTimerRef.current);
+        waitingTimerRef.current = null;
+      }
+    };
+  }, []);
 
   return {
     results,
@@ -359,6 +402,9 @@ export function useEmailValidation() {
     retryWithCooldown,
     // Direct connection indicator
     usingDirectConnection,
+    // Waiting for proxy cooldown state
+    waitingForProxy,
+    waitingCooldownSecs,
     // Test helper - allows tests to set the all proxies failed state directly
     setAllProxiesFailedStateForTest: setAllProxiesFailedState,
   };
