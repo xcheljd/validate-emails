@@ -1,10 +1,29 @@
 import { describe, it, expect } from 'vitest';
 import { formatAsCSV } from './export-utils';
-import { ValidationResult } from '@/hooks/use-email-validation';
+import { ValidationResult } from '@/lib/types';
+
+const baseResult = {
+  logs: [] as string[],
+  domain: 'example.com',
+  validationDuration: 1000,
+  mxRecordCount: 2,
+  isDisposable: false,
+  isRoleAccount: false,
+  isCatchAll: false,
+  isDeliverable: true,
+  isDisabled: false,
+  hasFullInbox: false,
+  canConnectSmtp: true,
+  acceptsMail: true,
+  isValidSyntax: true,
+  isB2c: false,
+  timestamp: '2025-01-04T00:00:00Z',
+  validationMode: 'standard' as const,
+};
 
 const mockResults: ValidationResult[] = [
-  { email: 'test1@example.com', result: 'Safe', reason: 'Reachable', logs: [], domain: 'example.com', validationDuration: 1000, mxRecordCount: 2, isDisposable: false, isRoleAccount: false, isCatchAll: false, timestamp: '2025-01-04T00:00:00Z', validationMode: 'standard', riskScore: 0 },
-  { email: 'test2@example.com', result: 'Invalid', reason: 'Syntax error', logs: [], domain: 'example.com', validationDuration: 1000, mxRecordCount: 2, isDisposable: false, isRoleAccount: false, isCatchAll: false, timestamp: '2025-01-04T00:00:00Z', validationMode: 'standard', riskScore: 100 },
+  { email: 'test1@example.com', result: 'Safe', reason: 'Reachable', ...baseResult, riskScore: 0 },
+  { email: 'test2@example.com', result: 'Invalid', reason: 'Syntax error', ...baseResult, riskScore: 100 },
 ];
 
 describe('Export Utils', () => {
@@ -19,7 +38,7 @@ describe('Export Utils', () => {
 
   it('should escape commas in values', () => {
     const results: ValidationResult[] = [
-      { email: 'test@example.com', result: 'Risky', reason: 'Potential issues, check MX', logs: [], domain: 'example.com', validationDuration: 1000, mxRecordCount: 2, isDisposable: false, isRoleAccount: false, isCatchAll: false, timestamp: '2025-01-04T00:00:00Z', validationMode: 'standard', riskScore: 30 }
+      { email: 'test@example.com', result: 'Risky', reason: 'Potential issues, check MX', ...baseResult, riskScore: 30 }
     ];
     const csv = formatAsCSV(results);
     expect(csv).toContain('"Potential issues, check MX"');

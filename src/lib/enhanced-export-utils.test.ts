@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { exportToCSV, exportColumns } from './enhanced-export-utils';
-import { ValidationResult } from '@/hooks/use-email-validation';
+import { ValidationResult } from '@/lib/types';
 
 describe('enhanced-export-utils', () => {
   const mockResults: ValidationResult[] = [
@@ -15,6 +15,13 @@ describe('enhanced-export-utils', () => {
       isDisposable: false,
       isRoleAccount: false,
       isCatchAll: false,
+      isDeliverable: true,
+      isDisabled: false,
+      hasFullInbox: false,
+      canConnectSmtp: true,
+      acceptsMail: true,
+      isValidSyntax: true,
+      isB2c: false,
       timestamp: '2025-01-04T14:30:00Z',
       validationMode: 'standard',
       riskScore: 0,
@@ -30,6 +37,13 @@ describe('enhanced-export-utils', () => {
       isDisposable: false,
       isRoleAccount: false,
       isCatchAll: false,
+      isDeliverable: false,
+      isDisabled: false,
+      hasFullInbox: false,
+      canConnectSmtp: false,
+      acceptsMail: false,
+      isValidSyntax: false,
+      isB2c: false,
       timestamp: '2025-01-04T14:31:00Z',
       validationMode: 'standard',
       riskScore: 100,
@@ -44,7 +58,7 @@ describe('enhanced-export-utils', () => {
     const csv = exportToCSV(mockResults, exportColumns);
     const lines = csv.split('\n');
 
-    expect(lines[0]).toBe('Email,Status,Verdict Reason,Domain,Duration (ms),Proxy,MX Records,Disposable,Role Account,Catch-All,Error Type,Validated At,Validation Mode');
+    expect(lines[0]).toBe('Email,Status,Verdict Reason,Domain,Risk Score,Valid Syntax,Deliverable,Disabled,Full Inbox,Catch-All,Disposable,Role Account,B2C Provider,SMTP Connected,Accepts Mail,MX Records,Breached,Suggestion,Duration (ms),Validated At,Mode,Error Type');
     expect(lines).toHaveLength(3);
     expect(lines[1]).toContain('test1@example.com');
     expect(lines[1]).toContain('Safe');
@@ -81,7 +95,6 @@ describe('enhanced-export-utils', () => {
     const resultWithNulls: ValidationResult[] = [
       {
         ...mockResults[0],
-        proxyUsed: null as any,
         errorType: undefined,
       },
     ];
@@ -91,15 +104,13 @@ describe('enhanced-export-utils', () => {
     const dataLine = lines[1];
     const columns = dataLine.split(',');
 
-    const proxyIndex = exportColumns.findIndex(c => c.key === 'proxyUsed');
     const errorIndex = exportColumns.findIndex(c => c.key === 'errorType');
 
-    expect(columns[proxyIndex]).toBe('-');
     expect(columns[errorIndex]).toBe('-');
   });
 
-  it('exportColumns should have all 13 columns with correct labels', () => {
-    expect(exportColumns).toHaveLength(13);
+  it('exportColumns should have all columns with correct labels', () => {
+    expect(exportColumns).toHaveLength(22);
     expect(exportColumns[0]).toEqual({ key: 'email', label: 'Email', enabled: true });
     expect(exportColumns[1]).toEqual({ key: 'result', label: 'Status', enabled: true });
     expect(exportColumns[2]).toEqual({ key: 'reason', label: 'Verdict Reason', enabled: true });

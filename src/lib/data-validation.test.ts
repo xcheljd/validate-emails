@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { validateSession, validateResult, validateResultsBatch } from './data-validation';
-import { ValidationResult, ValidationSession } from './session-manager';
+import { ValidationResult } from './types';
+import { ValidationSession } from './session-manager';
 
 describe('Data Validation', () => {
   const validResult: ValidationResult = {
@@ -14,6 +15,13 @@ describe('Data Validation', () => {
     isDisposable: false,
     isRoleAccount: false,
     isCatchAll: false,
+    isDeliverable: true,
+    isDisabled: false,
+    hasFullInbox: false,
+    canConnectSmtp: true,
+    acceptsMail: true,
+    isValidSyntax: true,
+    isB2c: false,
     timestamp: new Date().toISOString(),
     validationMode: 'standard',
     riskScore: 10
@@ -30,9 +38,6 @@ describe('Data Validation', () => {
     createdAt: new Date().toISOString(),
     settings: {
       validationMode: 'standard',
-      proxyEnabled: false,
-      proxyRotationStrategy: 'round-robin',
-      maxEmailsPerProxy: 10
     }
   };
 

@@ -9,9 +9,6 @@ vi.mock('@tauri-apps/api/core', () => ({
 describe('session-manager', () => {
   const mockSettings = {
     validationMode: 'standard' as const,
-    proxyEnabled: false,
-    proxyRotationStrategy: 'on-failure',
-    maxEmailsPerProxy: 50,
   };
 
   const mockSession = {
@@ -57,6 +54,13 @@ describe('session-manager', () => {
         isDisposable: false,
         isRoleAccount: false,
         isCatchAll: false,
+        isDeliverable: true,
+        isDisabled: false,
+        hasFullInbox: false,
+        canConnectSmtp: true,
+        acceptsMail: true,
+        isValidSyntax: true,
+        isB2c: false,
         timestamp: '2025-01-04T14:30:00Z',
         validationMode: 'standard' as const,
         riskScore: 0,
@@ -69,6 +73,7 @@ describe('session-manager', () => {
       id: 'test-session-id',
       results: mockResults,
       currentIndex: 1,
+      backup: true,
     });
   });
 

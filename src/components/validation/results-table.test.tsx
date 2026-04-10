@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react';
 import { ResultsTable } from './results-table';
 import { describe, it, expect, vi, beforeAll } from 'vitest';
-import { ValidationResult } from '@/hooks/use-email-validation';
+import { ValidationResult } from '@/lib/types';
 import { filterResults, sortResults } from './results-table-logic';
 
 beforeAll(() => {
@@ -12,10 +12,29 @@ beforeAll(() => {
   };
 });
 
+const baseResult = {
+  logs: [] as string[],
+  domain: 'example.com',
+  validationDuration: 1000,
+  mxRecordCount: 2,
+  isDisposable: false,
+  isRoleAccount: false,
+  isCatchAll: false,
+  isDeliverable: true,
+  isDisabled: false,
+  hasFullInbox: false,
+  canConnectSmtp: true,
+  acceptsMail: true,
+  isValidSyntax: true,
+  isB2c: false,
+  timestamp: '2025-01-04T00:00:00Z',
+  validationMode: 'standard' as const,
+};
+
 const mockResults: ValidationResult[] = [
-  { email: 'c@example.com', result: 'Safe', reason: '', logs: [], domain: 'example.com', validationDuration: 1000, mxRecordCount: 2, isDisposable: false, isRoleAccount: false, isCatchAll: false, timestamp: '2025-01-04T00:00:00Z', validationMode: 'standard', riskScore: 0 },
-  { email: 'a@example.com', result: 'Invalid', reason: '', logs: [], domain: 'example.com', validationDuration: 1000, mxRecordCount: 2, isDisposable: false, isRoleAccount: false, isCatchAll: false, timestamp: '2025-01-04T00:00:00Z', validationMode: 'standard', riskScore: 100 },
-  { email: 'b@example.com', result: 'Risky', reason: '', logs: [], domain: 'example.com', validationDuration: 1000, mxRecordCount: 2, isDisposable: false, isRoleAccount: false, isCatchAll: false, timestamp: '2025-01-04T00:00:00Z', validationMode: 'standard', riskScore: 30 },
+  { email: 'c@example.com', result: 'Safe', reason: '', ...baseResult, riskScore: 0 },
+  { email: 'a@example.com', result: 'Invalid', reason: '', ...baseResult, riskScore: 100 },
+  { email: 'b@example.com', result: 'Risky', reason: '', ...baseResult, riskScore: 30 },
 ];
 
 describe('ResultsTable Structure', () => {
