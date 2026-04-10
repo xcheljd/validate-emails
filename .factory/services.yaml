@@ -1,0 +1,17 @@
+commands:
+  install: npm install
+  typecheck: npx tsc --noEmit
+  build: npm run build
+  test: npm test
+  lint: npx eslint src/
+  rust-check: cargo check --manifest-path src-tauri/Cargo.toml
+  rust-test: cargo test --manifest-path src-tauri/Cargo.toml --lib
+  rust-clippy: cargo clippy --manifest-path src-tauri/Cargo.toml
+
+services:
+  tauri-dev:
+    start: npm run tauri dev
+    stop: lsof -ti :1420 | xargs kill 2>/dev/null || true
+    healthcheck: curl -sf http://localhost:1420 2>/dev/null || echo "Tauri app not running"
+    port: 1420
+    depends_on: []
