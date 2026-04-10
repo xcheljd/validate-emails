@@ -1,0 +1,82 @@
+{
+  "groupId": "val-flr-007-r4",
+  "testedAt": "2026-04-10T12:00:00.000Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "browserSession": "e510d2dc7cca"
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-FLR-007",
+      "title": "No proxies configured warning",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Open app at http://localhost:1420",
+          "expected": "Validation dashboard displayed",
+          "observed": "Validation dashboard displayed with email input and sidebar navigation"
+        },
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy settings UI shown with enable/disable toggle",
+          "observed": "Proxy tab shown with 'Enable Proxy' toggle (unchecked), rotation mode selector, proxy input field, and cooldown slider"
+        },
+        {
+          "action": "Enable proxy toggle (turn ON)",
+          "expected": "Toggle switches to checked state, proxy fields become active",
+          "observed": "Toggle checked, rotation mode combobox and proxy input fields became enabled"
+        },
+        {
+          "action": "Verify proxy list is empty",
+          "expected": "No proxies listed in proxy pool",
+          "observed": "No proxies visible in the proxy list area. localStorage confirmed: proxy.proxies = []"
+        },
+        {
+          "action": "Click Save Settings",
+          "expected": "Settings persisted to localStorage",
+          "observed": "Settings saved. localStorage 'proxy-settings' shows enabled:true, proxies:[]. localStorage 'app-settings' shows proxy.enabled:true, proxy.proxies:[]"
+        },
+        {
+          "action": "Navigate to Validation view",
+          "expected": "Validation dashboard with email input",
+          "observed": "Validation dashboard displayed"
+        },
+        {
+          "action": "Enter test email 'test@example.com' and click Load",
+          "expected": "Email loaded, Start Validation button enabled",
+          "observed": "Button shows 'Load 1 Emails', clicking it reveals 'Start Validation' button"
+        },
+        {
+          "action": "Click 'Start Validation'",
+          "expected": "Warning toast shown: 'No proxies configured'. Validation does NOT start.",
+          "observed": "Warning toast appeared in Notifications region with text: 'No proxies configured. Please add proxies in Settings or disable proxy.' Validation did NOT start - 'Start Validation' button remained visible, no progress indicators appeared."
+        },
+        {
+          "action": "Stale state test: Navigate to Settings > Proxy tab, toggle proxy OFF then back ON, save, navigate to Validation (no page reload), click Start Validation",
+          "expected": "Warning toast still appears without page reload (reads from localStorage, not stale React state)",
+          "observed": "Warning toast appeared again with same text after toggling proxy off/on in Settings and returning to Validation without page reload. Validation did NOT start."
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-failure-handling/val-flr-007-r4/proxy-enabled-empty-list.png",
+          "proxy-failure-handling/val-flr-007-r4/after-click-start-validation.png",
+          "proxy-failure-handling/val-flr-007-r4/start-validation-attempt-2.png",
+          "proxy-failure-handling/val-flr-007-r4/no-proxies-warning-toast.png",
+          "proxy-failure-handling/val-flr-007-r4/proxy-toggled-back-on.png",
+          "proxy-failure-handling/val-flr-007-r4/stale-state-fix-warning-after-toggle.png"
+        ],
+        "consoleErrors": "none (pre-existing Tauri IPC 'transformCallback' errors from running in browser context without Tauri desktop wrapper - not related to proxy feature)",
+        "localStorage": {
+          "proxy-settings": "{\"proxies\":[],\"enabled\":true,\"rotationMode\":\"manual\",\"domainAssignments\":{},\"proxyStats\":{},\"cooldownDurationSecs\":60}",
+          "app-settings": "{\"validationMode\":\"standard\",\"concurrency\":5,\"timeout\":30,\"maxRetries\":3,\"autoSaveInterval\":10,\"sessionRetentionDays\":90,\"sidebarCollapsed\":false,\"proxy\":{\"proxies\":[],\"enabled\":true,\"rotationMode\":\"manual\",\"domainAssignments\":{},\"proxyStats\":{},\"cooldownDurationSecs\":60}}"
+        }
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 1 assertion: VAL-FLR-007 PASSED. The fix for the stale React state issue works correctly. When proxy is enabled with no proxies configured, clicking 'Start Validation' shows a warning toast ('No proxies configured. Please add proxies in Settings or disable proxy.') and validation does not start. Critically, this works WITHOUT a page reload after toggling proxy in Settings - the getLiveProxySettings() function reads directly from localStorage, bypassing the stale useSettings() React state. This confirms the fix applied in round 4 resolves the failures seen in rounds 2 and 3."
+}

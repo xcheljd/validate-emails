@@ -1,46 +1,37 @@
 {
   "milestone": "proxy-failure-handling",
-  "round": 3,
-  "status": "fail",
+  "round": 4,
+  "status": "pass",
   "assertionsSummary": {
     "total": 1,
-    "passed": 0,
-    "failed": 1,
+    "passed": 1,
+    "failed": 0,
     "blocked": 0
   },
-  "passedAssertions": [],
-  "failedAssertions": [
-    {
-      "id": "VAL-FLR-007",
-      "round": 3,
-      "reason": "Guard code IS present in App.tsx:69-73 and works after page reload, but FAILS in the normal user flow (Settings > enable proxy > navigate to validation > Start). Root cause: useSettings() is a custom hook with useState, not a shared React Context. Each component that calls useSettings() gets independent state. When user enables proxy in SettingsContent, only that component's React state and localStorage are updated. App component's React state (which contains handleStartValidation) still has proxy.enabled=false. After page reload, App's useEffect reads updated localStorage and the guard works. Fix needed: either convert useSettings to a React Context/Provider pattern for shared state, or have handleStartValidation read directly from localStorage (via getProxyFromStorage() or localStorage.getItem) instead of relying on React state.",
-      "suggestedFix": "Option A (quick fix): In handleStartValidation (App.tsx:66), replace the check on settings.proxy.enabled with a direct localStorage read: `const proxySettings = JSON.parse(localStorage.getItem('proxy-settings') || '{}'); if (proxySettings.enabled && (!proxySettings.proxies || proxySettings.proxies.length === 0)) { ... }`. Option B (proper fix): Convert useSettings to use React.createContext/useContext Provider pattern so all components share the same state instance."
-    }
-  ],
+  "passedAssertions": ["VAL-FLR-007"],
+  "failedAssertions": [],
   "blockedAssertions": [],
   "appliedUpdates": [],
-  "previousRound": ".factory/validation/proxy-failure-handling/user-testing/synthesis.json (round 2)",
+  "previousRound": ".factory/validation/proxy-failure-handling/user-testing/synthesis.json (round 3)",
   "testingMethodology": {
-    "approach": "Re-run targeting failed assertion VAL-FLR-007 only. Browser automation via agent-browser to verify behavior in running app. MutationObserver used on toast container to programmatically detect warning toast appearance.",
-    "limitations": [
-      "Tauri IPC calls fail in browser context (expected, documented in user-testing.md)",
-      "Toast auto-dismisses quickly (~4s), MutationObserver used to reliably capture toast text"
+    "approach": "Re-run (round 4) targeting failed assertion VAL-FLR-007 only. The fix (commit bfcf2b8) changed handleStartValidation to read proxy settings directly from localStorage via getLiveProxySettings() instead of relying on stale React state from useSettings() hook. Browser automation via agent-browser to verify the fix works in the normal user flow (Settings > enable proxy > navigate to validation > Start) WITHOUT a page reload.",
+    "fixes": [
+      {
+        "feature": "fix-no-proxies-warning-v2",
+        "description": "Replaced React state check with direct localStorage read in handleStartValidation. Added getLiveProxySettings() function that reads from 'proxy-settings' and 'app-settings' localStorage keys.",
+        "result": "Fix confirmed working. Warning toast now appears correctly without page reload."
+      }
     ]
   },
   "testEvidence": {
-    "flowReport": ".factory/validation/proxy-failure-handling/user-testing/flows/val-flr-007-r3.json",
+    "flowReport": ".factory/validation/proxy-failure-handling/user-testing/flows/val-flr-007-r4.json",
     "screenshots": [
-      "proxy-failure-handling/val-flr-007-r3/01-initial-page.png",
-      "proxy-failure-handling/val-flr-007-r3/02-proxy-enabled-empty-list.png",
-      "proxy-failure-handling/val-flr-007-r3/03-before-start-validation.png",
-      "proxy-failure-handling/val-flr-007-r3/04-after-start-validation.png",
-      "proxy-failure-handling/val-flr-007-r3/05-reloaded-before-start.png",
-      "proxy-failure-handling/val-flr-007-r3/06-reloaded-after-start.png",
-      "proxy-failure-handling/val-flr-007-r3/07-check-toast-area.png",
-      "proxy-failure-handling/val-flr-007-r3/08-warning-toast-captured.png",
-      "proxy-failure-handling/val-flr-007-r3/09-fresh-proxy-enabled-empty.png",
-      "proxy-failure-handling/val-flr-007-r3/10-before-start-no-reload.png",
-      "proxy-failure-handling/val-flr-007-r3/11-after-start-no-reload.png"
+      "proxy-failure-handling/val-flr-007-r4/proxy-enabled-empty-list.png",
+      "proxy-failure-handling/val-flr-007-r4/after-click-start-validation.png",
+      "proxy-failure-handling/val-flr-007-r4/start-validation-attempt-2.png",
+      "proxy-failure-handling/val-flr-007-r4/no-proxies-warning-toast.png",
+      "proxy-failure-handling/val-flr-007-r4/proxy-toggled-back-on.png",
+      "proxy-failure-handling/val-flr-007-r4/stale-state-fix-warning-after-toggle.png"
     ]
   }
 }
