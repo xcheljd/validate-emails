@@ -38,7 +38,7 @@ export function exportToExcel(
 ): void {
   const enabledColumns = columns.filter((c) => c.enabled);
   const data = results.map((result) => {
-    const row: any = {};
+    const row: Record<string, string | number | boolean | string[] | null> = {};
     enabledColumns.forEach((col) => {
       row[col.label] = result[col.key] ?? '-';
     });
@@ -71,7 +71,7 @@ export function exportToCSV(
   return [headers, ...rows].join('\n');
 }
 
-function escapeCSV(val: any): string {
+function escapeCSV(val: string | number | boolean | string[] | null): string {
   if (typeof val !== 'string') return String(val);
   if (val.includes(',') || val.includes('"') || val.includes('\n')) {
     return `"${String(val).replace(/"/g, '""')}"`;

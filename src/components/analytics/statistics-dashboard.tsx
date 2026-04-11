@@ -1,26 +1,32 @@
 import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PieChart, ResponsiveContainer, Cell, Pie } from 'recharts';
+import { ValidationResult } from '@/lib/types';
+
+interface StatusDataEntry {
+  name: string;
+  value: number;
+  color: string;
+}
 
 interface StatisticsDashboardProps {
-  results: any[];
+  results: ValidationResult[];
 }
 
 export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
   const stats = useMemo(() => {
     const total = results.length;
-    const safe = results.filter((r: any) => r.result === 'Safe').length;
-    const risky = results.filter((r: any) => r.result === 'Risky').length;
-    const invalid = results.filter((r: any) => r.result === 'Invalid').length;
-    const unknown = results.filter((r: any) => r.result === 'Unknown').length;
+    const safe = results.filter((r) => r.result === 'Safe').length;
+    const risky = results.filter((r) => r.result === 'Risky').length;
+    const invalid = results.filter((r) => r.result === 'Invalid').length;
+    const unknown = results.filter((r) => r.result === 'Unknown').length;
 
     const durations = results
-      .map((r: any) => r.validationDuration)
-      .filter((d: number) => d > 0);
+      .map((r) => r.validationDuration)
+      .filter((d) => d > 0);
     const avgDuration =
       durations.length > 0
-        ? durations.reduce((a: number, b: number) => a + b, 0) /
-          durations.length
+        ? durations.reduce((a, b) => a + b, 0) / durations.length
         : 0;
 
     return {
@@ -45,19 +51,19 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
 
   const riskCounts = useMemo(() => {
     const veryLow = results.filter(
-      (r: any) => r.riskScore >= 0 && r.riskScore < 10
+      (r) => r.riskScore >= 0 && r.riskScore < 10
     ).length;
     const low = results.filter(
-      (r: any) => r.riskScore >= 10 && r.riskScore < 30
+      (r) => r.riskScore >= 10 && r.riskScore < 30
     ).length;
     const medium = results.filter(
-      (r: any) => r.riskScore >= 30 && r.riskScore < 50
+      (r) => r.riskScore >= 30 && r.riskScore < 50
     ).length;
     const high = results.filter(
-      (r: any) => r.riskScore >= 50 && r.riskScore < 80
+      (r) => r.riskScore >= 50 && r.riskScore < 80
     ).length;
     const veryHigh = results.filter(
-      (r: any) => r.riskScore >= 80 && r.riskScore <= 100
+      (r) => r.riskScore >= 80 && r.riskScore <= 100
     ).length;
 
     return {
@@ -171,7 +177,7 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
                   outerRadius={80}
                   dataKey="value"
                 >
-                  {statusData.map((entry: any, index: number) => (
+                  {statusData.map((entry: StatusDataEntry, index: number) => (
                     <Cell
                       key={`cell-${index}`}
                       fill={entry.color}

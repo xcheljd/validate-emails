@@ -33,15 +33,15 @@ export function EmailInput({ onEmailsLoaded }: EmailInputProps) {
         Papa.parse(file, {
           complete: (results) => {
             const emails: string[] = [];
-            results.data.forEach((row: any) => {
+            results.data.forEach((row) => {
               if (Array.isArray(row)) {
                 row.forEach((cell) => {
                   if (typeof cell === 'string' && cell.includes('@')) {
                     emails.push(...parseEmails(cell));
                   }
                 });
-              } else if (typeof row === 'object') {
-                Object.values(row).forEach((val) => {
+              } else if (typeof row === 'object' && row !== null) {
+                Object.values(row as Record<string, unknown>).forEach((val) => {
                   if (typeof val === 'string' && val.includes('@')) {
                     emails.push(...parseEmails(val));
                   }

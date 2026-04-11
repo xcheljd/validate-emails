@@ -22,7 +22,7 @@ export function ValidationSettings() {
           <select
             id="validation-mode"
             value={validationMode}
-            onChange={(e) => setValidationMode(e.target.value as any)}
+            onChange={(e) => setValidationMode(e.target.value as 'quick' | 'standard' | 'thorough')}
             className="mt-2 w-full p-2 border rounded-md"
           >
             <option value="quick">Quick (10s)</option>

@@ -44,7 +44,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
     if (onClose) onClose();
   };
 
-  const handleChange = (key: keyof AppSettings, value: any) => {
+  const handleChange = (key: keyof AppSettings, value: string | number | boolean) => {
     setLocalSettings((prev) => ({ ...prev, [key]: value }));
   };
 

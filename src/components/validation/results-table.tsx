@@ -95,8 +95,11 @@ export function ResultsTable({
     }
 
     filtered.sort((a, b) => {
-      const aVal = (a as any)[sortKey];
-      const bVal = (b as any)[sortKey];
+      const aVal = a[sortKey as keyof ValidationResult];
+      const bVal = b[sortKey as keyof ValidationResult];
+      if (aVal == null || bVal == null) {
+        return 0;
+      }
       let comparison = 0;
       if (aVal < bVal) comparison = -1;
       if (aVal > bVal) comparison = 1;

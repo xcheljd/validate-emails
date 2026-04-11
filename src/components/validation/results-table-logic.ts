@@ -18,9 +18,12 @@ export function sortResults(
   key: string,
   order: 'asc' | 'desc'
 ): ValidationResult[] {
-  return [...results].sort((a: any, b: any) => {
-    if (a[key] < b[key]) return order === 'asc' ? -1 : 1;
-    if (a[key] > b[key]) return order === 'asc' ? 1 : -1;
+  return [...results].sort((a, b) => {
+    const aVal = a[key as keyof ValidationResult];
+    const bVal = b[key as keyof ValidationResult];
+    if (aVal == null || bVal == null) return 0;
+    if (aVal < bVal) return order === 'asc' ? -1 : 1;
+    if (aVal > bVal) return order === 'asc' ? 1 : -1;
     return 0;
   });
 }

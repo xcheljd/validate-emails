@@ -3,10 +3,20 @@ export interface ValidationReport {
   errors: string[];
 }
 
+/** Minimal shape required by validateSession — avoids circular import with session-manager */
+interface SessionData {
+  id?: string;
+  name?: string;
+  emails?: unknown[];
+  results?: unknown[];
+  settings?: { validationMode?: string };
+  status?: string;
+}
+
 /**
  * Validates a ValidationSession object structure and content.
  */
-export function validateSession(data: any): ValidationReport {
+export function validateSession(data: SessionData): ValidationReport {
   const errors: string[] = [];
 
   if (!data.id || typeof data.id !== 'string') {
@@ -29,7 +39,8 @@ export function validateSession(data: any): ValidationReport {
     errors.push('Invalid or missing settings object');
   } else {
     const validModes = ['quick', 'standard', 'thorough'];
-    if (!validModes.includes(data.settings.validationMode)) {
+    const mode = data.settings.validationMode;
+    if (!mode || !validModes.includes(mode)) {
       errors.push(`Invalid validation mode: ${data.settings.validationMode}`);
     }
   }
@@ -41,7 +52,8 @@ export function validateSession(data: any): ValidationReport {
     'paused',
     'stopped',
   ];
-  if (!validStatuses.includes(data.status)) {
+  const status = data.status;
+  if (!status || !validStatuses.includes(status)) {
     errors.push(`Invalid session status: ${data.status}`);
   }
 
@@ -54,30 +66,31 @@ export function validateSession(data: any): ValidationReport {
 /**
  * Validates a single ValidationResult object.
  */
-export function validateResult(data: any): ValidationReport {
+export function validateResult(data: unknown): ValidationReport {
   const errors: string[] = [];
+  const record = data as Record<string, unknown>;
 
-  if (!data.email || typeof data.email !== 'string') {
+  if (!record.email || typeof record.email !== 'string') {
     errors.push('Invalid or missing email');
   }
 
-  if (!data.result || typeof data.result !== 'string') {
+  if (!record.result || typeof record.result !== 'string') {
     errors.push('Invalid or missing result');
   } else {
     const validResults = ['Safe', 'Risky', 'Invalid', 'Unknown'];
-    if (!validResults.includes(data.result)) {
-      errors.push(`Invalid result value: ${data.result}`);
+    if (!validResults.includes(record.result)) {
+      errors.push(`Invalid result value: ${record.result}`);
     }
   }
 
-  if (!data.domain || typeof data.domain !== 'string') {
+  if (!record.domain || typeof record.domain !== 'string') {
     errors.push('Invalid or missing domain');
   }
 
   if (
-    typeof data.riskScore !== 'number' ||
-    data.riskScore < 0 ||
-    data.riskScore > 100
+    typeof record.riskScore !== 'number' ||
+    record.riskScore < 0 ||
+    record.riskScore > 100
   ) {
     errors.push('Invalid risk score');
   }
@@ -91,7 +104,7 @@ export function validateResult(data: any): ValidationReport {
 /**
  * Validates a batch of validation results.
  */
-export function validateResultsBatch(results: any[]): ValidationReport {
+export function validateResultsBatch(results: unknown[]): ValidationReport {
   const errors: string[] = [];
 
   if (!Array.isArray(results)) {
