@@ -1,0 +1,22 @@
+{
+  "featureId": "fix-test-warnings",
+  "reviewedAt": "2026-04-11T05:35:00.000Z",
+  "commitId": "da372cae297ba075d8b508b0cc11117f1521997c",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation correctly addresses all 5 primary assertions and 5 cross-flow assertions. The commit modifies 5 files (169 additions, 69 deletions) with clean, focused changes. act() warnings are properly resolved by wrapping render() and fireEvent calls in act(async () => {...}) blocks in settings-content.test.tsx (16 tests updated) and by using a pending promise instead of an immediately-resolved mock in use-email-validation.test.tsx. The hardcoded concurrency in resumeSession is replaced with an optional parameter that falls back to currentConcurrencyRef, and App.tsx is updated to pass settings.concurrency. The unused addedCount variable is cleanly removed from proxy-list.tsx. Two assertions (VAL-TYP-015, VAL-IMP-016) were already resolved by prior workers and verified in current state.",
+    "issues": [
+      {
+        "file": "src/App.tsx",
+        "line": 95,
+        "severity": "non_blocking",
+        "description": "startValidation(emails, 5, validationMode) still uses a hardcoded concurrency of 5. While this is out of scope for this feature (which specifically targeted resumeSession), it represents the same pattern that was fixed in resumeSession. Consider addressing in a follow-up."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS — All 5 primary assertions and 5 cross-flow assertions are properly fulfilled. The commit cleanly fixes act() warnings across 17 test cases by wrapping interactions in act(async () => {...}), replaces hardcoded concurrency in resumeSession with a configurable parameter, and removes the unused addedCount variable. Two assertions (risk-scorer.test.ts types and retry-modal.test.tsx unused import) were already resolved by prior workers and confirmed present in the current codebase. Full test suite (206 tests), typecheck, lint, and build all pass. One non-blocking note: startValidation in App.tsx still has a hardcoded concurrency value of 5, which is the same pattern that was fixed in resumeSession but was not in scope for this feature."
+}

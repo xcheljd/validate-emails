@@ -57,7 +57,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
       }));
       try {
         await updateProxyPoolConfig(enabled, undefined);
-      } catch (error) {
+      } catch (_error) {
         toast.error('Failed to update proxy settings');
       }
     },
@@ -73,7 +73,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
       }));
       try {
         await updateProxyPoolConfig(undefined, rotationMode);
-      } catch (error) {
+      } catch (_error) {
         toast.error('Failed to update rotation mode');
       }
     },
@@ -245,7 +245,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
       }));
       try {
         await setCooldownDuration(duration);
-      } catch (error) {
+      } catch (_error) {
         toast.error('Failed to update cooldown duration');
       }
     },
