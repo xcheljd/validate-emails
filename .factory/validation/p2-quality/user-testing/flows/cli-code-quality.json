@@ -1,0 +1,98 @@
+{
+  "groupId": "cli-code-quality",
+  "testedAt": "2026-04-10T22:16:30Z",
+  "isolation": {
+    "workingDirectory": "/Users/home/Documents/ValidateEmails",
+    "servicesNeeded": "none",
+    "operations": "read-only"
+  },
+  "toolsUsed": ["grep", "tsc", "vitest", "cat"],
+  "assertions": [
+    {
+      "id": "VAL-ANY-009",
+      "title": "Reduce `any` type usages to zero (or documented exceptions)",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "grep -rn '\\bany\\b' src/ --include='*.ts' --include='*.tsx'",
+          "expected": "Zero hits in implementation code, or only hits in comments/eslint-disable annotations",
+          "observed": "Only matches in test files using expect.any() matchers, one 'as any' cast with eslint-disable comment in layout-navigation.test.tsx, and the word 'any' in comments (e.g. 'if any', 'Clear any previous'). Zero 'any' type usages in implementation code."
+        },
+        {
+          "action": "Check for statistics-dashboard.tsx and data-validation.ts files",
+          "expected": "These files should have zero any types",
+          "observed": "Neither statistics-dashboard.tsx nor data-validation.ts exist as standalone files. Git history (bc76df4, a578efb) shows 'any' types were already replaced with proper types in prior commits."
+        },
+        {
+          "action": "npx tsc --noEmit",
+          "expected": "Exits with code 0, zero errors",
+          "observed": "Exited with code 0, zero errors"
+        }
+      ],
+      "evidence": {
+        "grepOutput": "src/components/layout/layout-navigation.test.tsx:24:  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock requires full AppSettings but sidebar only reads sidebarCollapsed\nsrc/components/layout/layout-navigation.test.tsx:25:  (useSettingsHook.useSettings as any).mockReturnValue({\nsrc/hooks/use-email-validation.ts:189:      // Clear any previous proxy bypass when starting a new validation\nsrc/hooks/use-email-validation.ts:306:    // Clear any active waiting/cooldown timer\nsrc/hooks/use-email-validation.retry.test.tsx:104:        concurrency: expect.any(Number),\nsrc/hooks/use-email-validation.retry.test.tsx:105:        mode: expect.any(String),\nsrc/lib/keyboard-shortcuts.test.ts:23:    expect(addSpy).toHaveBeenCalledWith('keydown', expect.any(Function));\nsrc/lib/keyboard-shortcuts.test.ts:30:    expect(removeSpy).toHaveBeenCalledWith('keydown', expect.any(Function));\nsrc/lib/types.ts:31:  /** The proxy ID used for this validation (if any) */",
+        "tscOutput": "Exited with code 0, zero diagnostics"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-NOT-010",
+      "title": "Deduplicated notification helpers",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "cat src/lib/notifications.ts",
+          "expected": "Each logical notification action has exactly one helper function; no duplicate implementations",
+          "observed": "notifications.ts contains: 1 shared private helper showNotification(title, body), and 3 exported functions (notifyValidationComplete, notifyError, notifySessionSaved) — each with distinct implementation. No duplicates found."
+        },
+        {
+          "action": "Check call sites for canonical function usage",
+          "expected": "All call sites import from the canonical notifications.ts",
+          "observed": "Only one call site found: src/hooks/use-email-validation.ts imports notifyValidationComplete and notifyError from '@/lib/notifications'."
+        },
+        {
+          "action": "npx vitest run",
+          "expected": "All tests pass",
+          "observed": "22 test files passed, 206 tests passed, exit code 0"
+        }
+      ],
+      "evidence": {
+        "notificationsContent": "Single showNotification helper + 3 distinct exported functions (notifyValidationComplete, notifyError, notifySessionSaved). No duplicate implementations.",
+        "callSites": "src/hooks/use-email-validation.ts imports { notifyValidationComplete, notifyError } from '@/lib/notifications'",
+        "vitestOutput": "22 test files passed, 206 tests passed, exit code 0, duration 3.58s"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-DEP-011",
+      "title": "`@types/xlsx` moved to devDependencies",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "grep -n '@types/xlsx' package.json",
+          "expected": "@types/xlsx appears only in devDependencies section",
+          "observed": "@types/xlsx found at line 49, which is inside the devDependencies block (devDependencies starts at line 38, dependencies section ends before that). NOT present in dependencies section."
+        },
+        {
+          "action": "cat package.json (first 80 lines)",
+          "expected": "Confirm @types/xlsx is in devDependencies only",
+          "observed": "dependencies section (lines 7-35) does not contain @types/xlsx. devDependencies section (lines 38-60) contains '@types/xlsx': '^0.0.35' at line 49."
+        },
+        {
+          "action": "npx tsc --noEmit",
+          "expected": "Passes with zero errors",
+          "observed": "Exited with code 0, zero errors"
+        }
+      ],
+      "evidence": {
+        "grepOutput": "package.json:49:    \"@types/xlsx\": \"^0.0.35\", (inside devDependencies block)",
+        "packageJsonSections": "dependencies: lines 7-35 (no @types/xlsx). devDependencies: lines 38-60 (contains @types/xlsx at line 49)",
+        "tscOutput": "Exited with code 0, zero diagnostics"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 3 assertions: all 3 passed. VAL-ANY-009: no 'any' type usages in implementation code (only in test files with documented eslint-disable, expect.any() matchers, and comments). VAL-NOT-010: notifications.ts has a single shared helper with 3 distinct exported functions, no duplicates. VAL-DEP-011: @types/xlsx correctly placed in devDependencies only. TypeScript and vitest both pass cleanly."
+}
