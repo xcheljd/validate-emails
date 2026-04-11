@@ -4,6 +4,7 @@ import { useEmailValidation } from './use-email-validation';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import type { ValidationResult } from '@/lib/types';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -37,17 +38,51 @@ describe('useEmailValidation retryUnknowns', () => {
   it('should call revalidate_emails_bulk with unknown emails', async () => {
     const { result } = renderHook(() => useEmailValidation(), { wrapper });
 
-    const mockResults = [
+    const mockResults: ValidationResult[] = [
       {
         email: 'safe@test.com',
         result: 'Safe',
+        reason: '',
+        logs: [],
+        domain: 'test.com',
         validationDuration: 100,
-      } as any,
+        mxRecordCount: 1,
+        isDisposable: false,
+        isRoleAccount: false,
+        isCatchAll: false,
+        isDeliverable: true,
+        isDisabled: false,
+        hasFullInbox: false,
+        canConnectSmtp: true,
+        acceptsMail: true,
+        isValidSyntax: true,
+        isB2c: false,
+        riskScore: 0,
+        timestamp: '',
+        validationMode: 'standard',
+      },
       {
         email: 'unknown@test.com',
         result: 'Unknown',
+        reason: '',
+        logs: [],
+        domain: 'test.com',
         validationDuration: 100,
-      } as any,
+        mxRecordCount: 0,
+        isDisposable: false,
+        isRoleAccount: false,
+        isCatchAll: false,
+        isDeliverable: false,
+        isDisabled: false,
+        hasFullInbox: false,
+        canConnectSmtp: false,
+        acceptsMail: false,
+        isValidSyntax: true,
+        isB2c: false,
+        riskScore: 50,
+        timestamp: '',
+        validationMode: 'standard',
+      },
     ];
 
     act(() => {

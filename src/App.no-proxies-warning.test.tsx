@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { AppSettings } from '@/hooks/use-settings';
 
 // Hoisted mock functions (needed because vi.mock factories are hoisted)
 const {
@@ -10,7 +11,7 @@ const {
   getMockSettings,
   mockUseSettingsFn,
 } = vi.hoisted(() => {
-  const mockSettingsState: any = {
+  const mockSettingsState: AppSettings = {
     validationMode: 'standard',
     concurrency: 5,
     timeout: 30,

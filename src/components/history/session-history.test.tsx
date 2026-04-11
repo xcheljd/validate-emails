@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { SessionHistory } from './session-history';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as sessionManager from '@/lib/session-manager';
+import type { ValidationSession } from '@/lib/session-manager';
 
 // Mock session manager
 vi.mock('@/lib/session-manager', () => ({
@@ -11,7 +12,7 @@ vi.mock('@/lib/session-manager', () => ({
   loadSession: vi.fn(),
 }));
 
-const mockSessions = [
+const mockSessions: ValidationSession[] = [
   {
     id: '1',
     name: 'Session 1',
@@ -20,7 +21,8 @@ const mockSessions = [
     total: 100,
     currentIndex: 100,
     results: [],
-    config: {},
+    emails: [],
+    settings: { validationMode: 'standard' },
   },
   {
     id: '2',
@@ -30,7 +32,8 @@ const mockSessions = [
     total: 50,
     currentIndex: 25,
     results: [],
-    config: {},
+    emails: [],
+    settings: { validationMode: 'standard' },
   },
 ];
 
@@ -40,7 +43,7 @@ describe('SessionHistory', () => {
   });
 
   it('renders sessions list', async () => {
-    (sessionManager.listSessions as any).mockResolvedValue(mockSessions);
+    (sessionManager.listSessions as ReturnType<typeof vi.fn>).mockResolvedValue(mockSessions);
 
     render(
       <SessionHistory
@@ -57,7 +60,7 @@ describe('SessionHistory', () => {
   });
 
   it('renders empty state', async () => {
-    (sessionManager.listSessions as any).mockResolvedValue([]);
+    (sessionManager.listSessions as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     render(
       <SessionHistory
