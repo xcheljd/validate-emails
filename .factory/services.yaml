@@ -4,6 +4,7 @@ commands:
   build: npm run build
   test: npm test
   lint: npx eslint src/
+  format: npx prettier --check "src/**/*.{ts,tsx}"
   rust-check: cargo check --manifest-path src-tauri/Cargo.toml
   rust-test: cargo test --manifest-path src-tauri/Cargo.toml --lib
   rust-clippy: cargo clippy --manifest-path src-tauri/Cargo.toml
