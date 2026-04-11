@@ -1,0 +1,103 @@
+{
+  "milestone": "p3-polish",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 10,
+    "passed": 10,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-TST-012",
+    "VAL-CFG-013",
+    "VAL-UND-014",
+    "VAL-TYP-015",
+    "VAL-IMP-016",
+    "VAL-XFLOW-017",
+    "VAL-XFLOW-018",
+    "VAL-XFLOW-019",
+    "VAL-XFLOW-020",
+    "VAL-XFLOW-021"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "evidence": {
+    "VAL-TST-012": {
+      "method": "CLI",
+      "commands": [
+        { "command": "npm test 2>&1 | grep -c \"act(\"", "exitCode": 0, "output": "0 occurrences of 'act(' in test output" }
+      ],
+      "observation": "Zero act() warnings in test output. All 206 tests pass with no React act() warnings."
+    },
+    "VAL-CFG-013": {
+      "method": "CLI code inspection",
+      "commands": [
+        { "command": "grep -n 'resumeSession' src/hooks/use-email-validation.ts", "exitCode": 0, "output": "Function accepts concurrency?: number parameter" },
+        { "command": "grep -n 'resumeSession(' src/App.tsx", "exitCode": 0, "output": "Called with settings.concurrency at line 182" }
+      ],
+      "observation": "resumeSession reads concurrency from settings.concurrency (App.tsx:182), no hardcoded numeric literal. Default ref value (5) is only fallback, overridden by settings."
+    },
+    "VAL-UND-014": {
+      "method": "CLI code inspection",
+      "commands": [
+        { "command": "grep 'addedCount' src/components/settings/settings-content.tsx", "exitCode": 1, "output": "No matches found" }
+      ],
+      "observation": "addedCount variable completely removed from proxy-list component code."
+    },
+    "VAL-TYP-015": {
+      "method": "CLI code inspection",
+      "commands": [
+        { "command": "grep 'as any' src/lib/risk-scorer.test.ts", "exitCode": 1, "output": "No matches found" }
+      ],
+      "observation": "No 'as any' casts in risk-scorer.test.ts. File compiles cleanly."
+    },
+    "VAL-IMP-016": {
+      "method": "CLI code inspection",
+      "commands": [
+        { "command": "grep 'import.*React' src/components/validation/retry-modal.test.tsx", "exitCode": 1, "output": "No matches found" }
+      ],
+      "observation": "Unused React import removed from retry-modal.test.tsx."
+    },
+    "VAL-XFLOW-017": {
+      "method": "CLI",
+      "commands": [
+        { "command": "npx tsc --noEmit", "exitCode": 0, "output": "Zero TypeScript errors" }
+      ],
+      "observation": "TypeScript compilation passes with zero errors."
+    },
+    "VAL-XFLOW-018": {
+      "method": "CLI",
+      "commands": [
+        { "command": "npm test", "exitCode": 0, "output": "22 test files, 206 tests passed, 0 failures" }
+      ],
+      "observation": "Full test suite passes: 22 test files, 206 tests, all passing."
+    },
+    "VAL-XFLOW-019": {
+      "method": "CLI",
+      "commands": [
+        { "command": "npx eslint src/ --max-warnings=0", "exitCode": 0, "output": "Zero errors, zero warnings" }
+      ],
+      "observation": "ESLint passes with zero errors and zero warnings."
+    },
+    "VAL-XFLOW-020": {
+      "method": "CLI",
+      "commands": [
+        { "command": "npm run build", "exitCode": 0, "output": "tsc && vite build completed successfully, output in dist/" }
+      ],
+      "observation": "Build succeeds: tsc passes, vite build produces dist/ output."
+    },
+    "VAL-XFLOW-021": {
+      "method": "CLI regression verification",
+      "commands": [
+        { "command": "npm test", "exitCode": 0, "output": "206 tests pass" },
+        { "command": "npx tsc --noEmit", "exitCode": 0, "output": "Zero errors" },
+        { "command": "npm run build", "exitCode": 0, "output": "Build succeeds" },
+        { "command": "grep -n 'resumeSession(' src/App.tsx", "exitCode": 0, "output": "Uses settings.concurrency" }
+      ],
+      "observation": "No regressions detected. All 206 tests pass, tsc clean, build succeeds, session resume uses user-configured concurrency from settings."
+    }
+  }
+}
