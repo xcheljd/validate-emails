@@ -7,9 +7,6 @@ use crate::validation::ValidationResult;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSettings {
     pub validation_mode: String,
-    pub proxy_enabled: bool,
-    pub proxy_rotation_strategy: String,
-    pub max_emails_per_proxy: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

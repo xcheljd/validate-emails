@@ -1,0 +1,117 @@
+{
+  "groupId": "failure-modal-ui",
+  "testedAt": "2026-04-10T08:38:00Z",
+  "isolation": {
+    "appUrl": "http://localhost:1420",
+    "session": "7f0b651d1d93",
+    "notes": "Tauri app running in browser context (no desktop wrapper). Tauri IPC calls fail but UI components render correctly."
+  },
+  "toolsUsed": ["agent-browser", "vitest", "eval"],
+  "assertions": [
+    {
+      "id": "VAL-FLR-002",
+      "title": "Failure modal appearance - All-proxies-failed state triggers modal with three options: Continue without proxy, Retry with cooldown, Stop.",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Verify ProxyFailureModal component exists in codebase",
+          "expected": "Component file exists with three buttons defined",
+          "observed": "proxy-failure-modal.tsx exists and contains all three buttons: 'Continue without Proxy', 'Retry with Cooldown', 'Stop Validation'"
+        },
+        {
+          "action": "Verify component is loaded by the app",
+          "expected": "proxy-failure-modal.tsx appears in loaded module list",
+          "observed": "Module loaded at http://localhost:1420/src/components/validation/proxy-failure-modal.tsx"
+        },
+        {
+          "action": "Verify ValidationDashboard imports and renders ProxyFailureModal conditionally",
+          "expected": "Dashboard imports ProxyFailureModal and renders it when allProxiesFailedState is truthy",
+          "observed": "validation-dashboard.tsx imports ProxyFailureModal, receives allProxiesFailedState/onContinueWithoutProxy/onRetryWithCooldown/onStop props, and renders {allProxiesFailedState && <ProxyFailureModal .../>}"
+        },
+        {
+          "action": "Verify source code has all three button labels",
+          "expected": "Source contains 'Continue without Proxy', 'Retry with Cooldown', 'Stop Validation'",
+          "observed": "Fetched source via browser eval confirmed: hasContinueWithoutProxy=true, hasRetryWithCooldown=true, hasStopValidation=true, hasAllProxiesUnavailable=true, hasDialog=true, buttonCount=3"
+        },
+        {
+          "action": "Run unit tests for ProxyFailureModal",
+          "expected": "All 18 tests pass including three-options tests",
+          "observed": "18/18 tests passed. Tests cover: renders when open, does not render when closed, shows all three buttons, calls correct handlers, disables retry when no cooldown, modal cannot be dismissed without choosing option"
+        },
+        {
+          "action": "Check browser console for errors related to modal",
+          "expected": "No errors related to ProxyFailureModal",
+          "observed": "Only Tauri IPC errors ('Cannot read properties of undefined (reading transformCallback)') which are expected in browser context and unrelated to proxy features"
+        }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "Only Tauri IPC errors (transformCallback) - expected in browser context, not related to proxy features",
+        "network": "N/A - no network requests for this assertion",
+        "unitTests": "18/18 passed in proxy-failure-modal.test.tsx",
+        "sourceVerification": "Component source loaded and verified via browser eval - all 3 buttons present"
+      },
+      "issues": null,
+      "notes": "The modal cannot be visually tested in browser context because it only renders when allProxiesFailedState is non-null, which requires actual proxy failure events from the Tauri backend. However, comprehensive unit tests (18 passing) and source code verification confirm the component correctly renders all three options. The modal is properly wired in ValidationDashboard with conditional rendering based on allProxiesFailedState."
+    },
+    {
+      "id": "VAL-FLR-007",
+      "title": "No proxies configured warning - User attempts validation with proxy enabled but no proxies configured. Warning shown.",
+      "status": "fail",
+      "steps": [
+        {
+          "action": "Navigate to Settings > Proxy tab",
+          "expected": "Proxy settings UI visible with 'No proxies configured' placeholder",
+          "observed": "Proxy settings tab shows 'No proxies configured' and 'Add proxies to enable proxy-based validation' text in the proxy list area when no proxies are added"
+        },
+        {
+          "action": "Take screenshot of proxy settings with empty state",
+          "expected": "Screenshot shows the 'No proxies configured' message",
+          "observed": "Screenshot saved showing the empty proxy list with placeholder text"
+        },
+        {
+          "action": "Check if handleStartValidation validates proxy state before starting",
+          "expected": "Warning or prevention when proxy enabled but no proxies configured",
+          "observed": "handleStartValidation in App.tsx only checks 'if (emails.length === 0 || isProcessing) return' - NO check for proxy enabled + empty proxy list"
+        },
+        {
+          "action": "Check if use-email-validation hook validates proxy state",
+          "expected": "startValidation should warn about missing proxies",
+          "observed": "startValidation in use-email-validation.ts has no proxy configuration validation - it directly calls mutation.mutate()"
+        },
+        {
+          "action": "Search codebase for any proxy-enabled-but-empty warning",
+          "expected": "Warning dialog or toast when proxy enabled but empty",
+          "observed": "No such warning exists anywhere in the codebase. The only 'No proxies configured' text is a static placeholder in proxy-list.tsx (settings UI)"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "proxy-failure-handling/failure-modal-ui/VAL-FLR-007-proxy-settings-tab.png",
+          "proxy-failure-handling/failure-modal-ui/VAL-FLR-007-proxy-settings-annotated.png"
+        ],
+        "consoleErrors": "Only Tauri IPC errors (transformCallback) - expected in browser context",
+        "network": "N/A",
+        "codeAnalysis": "handleStartValidation (App.tsx:62-66) has no proxy check. startValidation (use-email-validation.ts:167-182) has no proxy check. No toast/notification for missing proxies exists."
+      },
+      "issues": "The 'No proxies configured' text only exists as a static placeholder in the proxy settings UI (proxy-list.tsx:310). There is NO warning when a user attempts to start validation with proxy enabled but no proxies configured. The handleStartValidation function in App.tsx and startValidation in use-email-validation.ts do not check for this condition.",
+      "notes": "VAL-FLR-007 requires a warning when the user attempts validation with proxy enabled but no proxies configured. This warning does not exist. The 'No proxies configured' text visible in Settings > Proxy tab is a static placeholder, not a validation warning. The assertion should either be marked as not implemented, or a warning needs to be added to handleStartValidation/startValidation."
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Tauri IPC calls fail in browser context with 'Cannot read properties of undefined (reading transformCallback)' - this is expected and does not affect UI testing",
+      "resolved": true,
+      "resolution": "Ignored these errors as they are known Tauri-in-browser-context limitations documented in user-testing.md",
+      "affectedAssertions": ["VAL-FLR-002", "VAL-FLR-007"]
+    },
+    {
+      "description": "ProxyFailureModal cannot be visually triggered in browser context because it requires allProxiesFailedState from the Tauri backend",
+      "resolved": true,
+      "resolution": "Verified component structure via source code analysis (fetch + eval) and comprehensive unit tests (18/18 passing) instead of live rendering",
+      "affectedAssertions": ["VAL-FLR-002"]
+    }
+  ],
+  "blockers": [],
+  "summary": "Tested 2 assertions: 1 passed (VAL-FLR-002: modal component verified via source analysis and 18 passing unit tests), 1 failed (VAL-FLR-007: no validation warning exists when proxy enabled but no proxies configured - only a static placeholder in settings UI)"
+}

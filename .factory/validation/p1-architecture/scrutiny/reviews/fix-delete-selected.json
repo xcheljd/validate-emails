@@ -1,0 +1,28 @@
+{
+  "featureId": "fix-delete-selected",
+  "reviewedAt": "2026-04-11T04:30:00.000Z",
+  "commitId": "510ec81",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation correctly fixes handleDeleteSelected to remove selected results from the data array. The approach uses a callback pattern (onDeleteResults) that is clean and follows React conventions: the ResultsTable component delegates data removal to its parent via the callback, and parents (App.tsx, session-details.tsx) wire it to their state setters. All 3 VAL-DEL-005 requirements are satisfied: (1) results are removed from the array, (2) table re-renders with fewer rows via React state update, (3) selection state is cleared after deletion. Three well-structured tests cover confirmed delete, cancelled delete, and end-to-end state update flow.",
+    "issues": [
+      {
+        "file": "src/components/validation/results-table.tsx",
+        "line": 165,
+        "severity": "non_blocking",
+        "description": "onDeleteResults is optional, so if a consumer renders ResultsTable without passing onDeleteResults, the Delete button will appear and the confirm dialog will fire, but no results will actually be removed — only the selection clears. This is backward-compatible and all current consumers provide the prop, but it could confuse future consumers. A minor concern, not blocking."
+      },
+      {
+        "file": "src/components/history/session-details.tsx",
+        "line": 13,
+        "severity": "non_blocking",
+        "description": "Deleted results are removed from local state only, not persisted back to the session on disk. Navigating away from session details and returning will show the original results again. This is acceptable for a read-only detail view but worth noting."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The fix correctly implements all 3 requirements of VAL-DEL-005. handleDeleteSelected now calls onDeleteResults with the selected emails before clearing selection. App.tsx and session-details.tsx both wire the callback to filter results from their state. Three tests provide good coverage of the delete flow (confirmed, cancelled, end-to-end). The implementation is clean, follows existing patterns, and all 206 tests pass with zero TypeScript errors. Two non-blocking observations: optional onDeleteResults prop could silently no-op for consumers that don't pass it, and session-details deletions are not persisted to disk."
+}

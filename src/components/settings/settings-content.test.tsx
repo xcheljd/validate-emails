@@ -44,9 +44,7 @@ describe('SettingsContent', () => {
     await act(async () => {
       fireEvent.click(screen.getByText('History'));
     });
-    expect(
-      screen.getByText('Session Retention (days)')
-    ).toBeInTheDocument();
+    expect(screen.getByText('Session Retention (days)')).toBeInTheDocument();
   });
 
   it('calls onClose when save is clicked', async () => {

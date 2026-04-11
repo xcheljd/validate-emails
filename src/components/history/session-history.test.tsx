@@ -43,7 +43,9 @@ describe('SessionHistory', () => {
   });
 
   it('renders sessions list', async () => {
-    (sessionManager.listSessions as ReturnType<typeof vi.fn>).mockResolvedValue(mockSessions);
+    (sessionManager.listSessions as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockSessions
+    );
 
     render(
       <SessionHistory
@@ -60,7 +62,9 @@ describe('SessionHistory', () => {
   });
 
   it('renders empty state', async () => {
-    (sessionManager.listSessions as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (sessionManager.listSessions as ReturnType<typeof vi.fn>).mockResolvedValue(
+      []
+    );
 
     render(
       <SessionHistory

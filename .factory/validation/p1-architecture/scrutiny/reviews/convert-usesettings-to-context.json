@@ -1,0 +1,55 @@
+{
+  "featureId": "convert-usesettings-to-context",
+  "reviewedAt": "2026-04-11T04:35:00.000Z",
+  "commitId": "29ab7fd",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation correctly converts useSettings from a per-component useState hook to a shared React Context/Provider pattern. All requirements from VAL-CTX-004 are satisfied: SettingsProvider wraps the app in App.tsx, useSettings() reads from useContext(SettingsContext) with a proper null guard, all consuming components (sidebar.tsx, settings-content.tsx, AppContent) are nested inside the provider, and getLiveProxySettings() has been completely removed. Tests have been updated to either wrap in real SettingsProvider (settings-content.test.tsx) or mock a passthrough provider (App.no-proxies-warning.test.tsx, layout-navigation.test.tsx). All 206 tests pass.",
+    "issues": [
+      {
+        "file": "src/App.no-proxies-warning.test.tsx",
+        "line": 55,
+        "severity": "non_blocking",
+        "description": "The 'should reflect settings changes from context immediately (no stale state)' test is functionally identical to the first test ('should show warning toast and NOT start validation when proxy enabled but no proxies configured'). Both set proxy.enabled=true with empty proxies and assert the same warning toast + no validation. The test doesn't actually verify cross-component state propagation — it just confirms the mock returns the right values. This is acceptable since true cross-component integration testing would require a running app, but the test name is slightly misleading about what it actually validates."
+      },
+      {
+        "file": "src/hooks/settings-context.tsx",
+        "line": 136,
+        "severity": "non_blocking",
+        "description": "The SettingsProvider does not persist settings to localStorage when loaded from the backend in the initial useEffect (lines 163-174). The backend load path updates React state via setSettings but doesn't write to localStorage. The localStorage write only happens in updateSettings/addProxy/etc. This means if the backend returns different values than what's in localStorage, the stale localStorage data persists until the user makes a settings change. This is a minor inconsistency — the localStorage and backend state could diverge on initial load."
+      },
+      {
+        "file": "src/hooks/settings-context.tsx",
+        "line": 1,
+        "severity": "non_blocking",
+        "description": "The file is 652 lines long, containing all provider logic, state management, and proxy operation callbacks. This is a large file that could benefit from decomposition (e.g., extracting proxy operations into a custom hook or utility), but it is functionally correct and mirrors the structure of the original use-settings.ts."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The mission AGENTS.md documents 'useSettings is being converted to React Context/Provider' and 'Never read settings from localStorage directly in components (use the context)'. This is now accurate and complete. No gap found.",
+      "evidence": "AGENTS.md State Management section correctly describes the new pattern"
+    },
+    {
+      "area": "skills",
+      "observation": "The fullstack-worker skill says to 'Write failing tests first (red), then implement (green)'. The worker followed this pattern — reading existing code first, then implementing the context, then fixing test failures iteratively. The skill procedure was followed correctly.",
+      "evidence": "Transcript shows worker read code, created settings-context.tsx, then updated tests iteratively. skillFeedback.followedProcedure is true."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The worker discovered that vi.hoisted() is needed when mock functions are referenced inside vi.mock() factories (because vi.mock factories are hoisted to the top of the file). This is a vitest-specific pattern that could be useful for future workers writing tests that mock modules with dynamic behavior.",
+      "evidence": "Transcript shows the worker hit 'ReferenceError: Cannot access mockUseSettingsFn before initialization' and fixed it by moving mockUseSettingsFn into vi.hoisted()"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The worker discovered that when converting a hook to Context/Provider, tests that render components using the context need either: (a) a real SettingsProvider wrapper with mocked invoke(), or (b) a passthrough mock SettingsProvider. This two-pattern approach for context-based component testing could be documented.",
+      "evidence": "settings-content.test.tsx uses real SettingsProvider (approach a), while App.no-proxies-warning.test.tsx and layout-navigation.test.tsx use passthrough mock (approach b)"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The useSettings hook has been successfully converted to a React Context/Provider pattern. All 5 validation criteria from VAL-CTX-004 are met: (1) SettingsProvider wraps the app in App.tsx, (2) useSettings() reads from useContext with a null guard, (3) all consuming components are nested inside the provider, (4) shared context ensures settings changes propagate across components, (5) all 206 tests pass with proper provider wrapping. The getLiveProxySettings() workaround has been fully removed. Minor observations include some test redundancy and a large context file, but no blocking issues."
+}
