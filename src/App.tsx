@@ -9,31 +9,8 @@ import { Button } from "@/components/ui/button";
 import { ChevronLeft } from "lucide-react";
 import { useEmailValidation } from "@/hooks/use-email-validation";
 import { ValidationResult } from "@/lib/types";
-import { useSettings, ProxyConfig } from "@/hooks/use-settings";
+import { useSettings, SettingsProvider } from "@/hooks/use-settings";
 import { showWarning } from "@/lib/toast";
-
-/** Read proxy settings directly from localStorage to avoid stale React state.
- *  useSettings() is a hook with independent useState per component — not a shared Context.
- *  When proxy is enabled in the Settings view, the App component's state is not updated. */
-function getLiveProxySettings(): { enabled: boolean; proxies: ProxyConfig[] } {
-  try {
-    // Try 'proxy-settings' key first (used by localStorage fallback path in use-settings.ts)
-    const proxyStored = localStorage.getItem('proxy-settings');
-    if (proxyStored) {
-      const proxy = JSON.parse(proxyStored);
-      return { enabled: proxy.enabled ?? false, proxies: proxy.proxies ?? [] };
-    }
-    // Fall back to 'app-settings' key (used by Tauri success path in use-settings.ts)
-    const appStored = localStorage.getItem('app-settings');
-    if (appStored) {
-      const app = JSON.parse(appStored);
-      return { enabled: app.proxy?.enabled ?? false, proxies: app.proxy?.proxies ?? [] };
-    }
-  } catch (e) {
-    console.error('Failed to read proxy settings from localStorage:', e);
-  }
-  return { enabled: false, proxies: [] };
-}
 import { formatAsCSV } from "@/lib/export-utils";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
@@ -48,6 +25,14 @@ import { Badge } from "@/components/ui/badge";
 import { ValidationConfig } from "@/components/validation/validation-config";
 
 function App() {
+  return (
+    <SettingsProvider>
+      <AppContent />
+    </SettingsProvider>
+  );
+}
+
+function AppContent() {
   const [emails, setEmails] = useState<string[]>([]);
   const [showDashboard, setShowDashboard] = useState(false);
   const [selectedResult, setSelectedResult] = useState<ValidationResult | null>(null);
@@ -81,10 +66,8 @@ function App() {
     waitingCooldownSecs,
   } = useEmailValidation();
 
-  // useSettings() is kept for side effects (loading from backend),
-  // but proxy guard in handleStartValidation reads from localStorage
-  // to avoid stale React state (each useSettings() call has independent useState).
-  useSettings();
+  // Read settings from shared context — no more stale independent useState
+  const { settings } = useSettings();
 
   const handleNavigate = (view: SidebarView) => {
     setCurrentView(view);
@@ -94,10 +77,9 @@ function App() {
     if (emails.length === 0 || isProcessing) return;
 
     // VAL-FLR-007: Guard against proxy enabled with no proxies configured.
-    // Read from localStorage directly — useSettings() hook state is stale
-    // when proxy is toggled in Settings without a page reload.
-    const liveProxy = getLiveProxySettings();
-    if (liveProxy.enabled && liveProxy.proxies.length === 0) {
+    // Settings come from shared context — changes in SettingsContent are reflected here immediately.
+    const proxy = settings.proxy;
+    if (proxy.enabled && proxy.proxies.length === 0) {
       showWarning('No proxies configured. Please add proxies in Settings or disable proxy.');
       return;
     }

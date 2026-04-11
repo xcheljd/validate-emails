@@ -6,6 +6,7 @@ import * as useSettingsHook from '@/hooks/use-settings';
 // Mock useSettings
 vi.mock('@/hooks/use-settings', () => ({
   useSettings: vi.fn(),
+  SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 describe('Sidebar', () => {

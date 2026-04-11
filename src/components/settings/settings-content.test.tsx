@@ -1,6 +1,8 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SettingsContent } from './settings-content';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import React from 'react';
+import { SettingsProvider } from '@/hooks/use-settings';
 
 // Mock the invoke function
 vi.mock('@tauri-apps/api/core', () => ({
@@ -18,25 +20,30 @@ vi.mock('@tauri-apps/api/core', () => ({
   }),
 }));
 
+// Wrapper that provides SettingsProvider context
+function SettingsWrapper({ children }: { children: React.ReactNode }) {
+  return <SettingsProvider>{children}</SettingsProvider>;
+}
+
 describe('SettingsContent', () => {
   beforeEach(() => {
     localStorage.clear();
   });
 
   it('renders validation settings by default', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     expect(screen.getByText('Default Validation Mode')).toBeInTheDocument();
   });
 
   it('switches to history tab', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('History'));
     expect(screen.getByText('Session Retention (days)')).toBeInTheDocument();
   });
 
   it('calls onClose when save is clicked', () => {
     const handleClose = vi.fn();
-    render(<SettingsContent onClose={handleClose} />);
+    render(<SettingsContent onClose={handleClose} />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Save Settings'));
     expect(handleClose).toHaveBeenCalled();
   });
@@ -48,31 +55,31 @@ describe('ProxySettings Tab', () => {
   });
 
   it('switches to proxy tab', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     expect(screen.getByText('Enable Proxy')).toBeInTheDocument();
   });
 
   it('shows proxy toggle in proxy tab', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     expect(screen.getByRole('switch', { name: /enable proxy/i })).toBeInTheDocument();
   });
 
   it('shows rotation mode selector in proxy tab', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     expect(screen.getByLabelText('Rotation Mode')).toBeInTheDocument();
   });
 
   it('shows proxy list placeholder when no proxies configured', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     expect(screen.getByText('No proxies configured')).toBeInTheDocument();
   });
 
   it('toggles proxy enabled state', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     const toggle = screen.getByRole('switch', { name: /enable proxy/i });
     expect(toggle).toHaveAttribute('aria-checked', 'false');
@@ -81,14 +88,14 @@ describe('ProxySettings Tab', () => {
   });
 
   it('disables rotation mode selector when proxy is disabled', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     const select = screen.getByLabelText('Rotation Mode');
     expect(select).toBeDisabled();
   });
 
   it('enables rotation mode selector when proxy is enabled', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     const toggle = screen.getByRole('switch', { name: /enable proxy/i });
     fireEvent.click(toggle);
@@ -97,7 +104,7 @@ describe('ProxySettings Tab', () => {
   });
 
   it('changes rotation mode when selection changes', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     // Enable proxy first
     const toggle = screen.getByRole('switch', { name: /enable proxy/i });
@@ -108,7 +115,7 @@ describe('ProxySettings Tab', () => {
   });
 
   it('shows correct description for each rotation mode', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     const toggle = screen.getByRole('switch', { name: /enable proxy/i });
     fireEvent.click(toggle);
@@ -134,7 +141,7 @@ describe('Per-Domain Proxy Assignment', () => {
   });
 
   it('shows per-domain assignment section when Per-Domain mode is selected', async () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     
     // Enable proxy
@@ -150,7 +157,7 @@ describe('Per-Domain Proxy Assignment', () => {
   });
 
   it('hides per-domain assignment section when not in Per-Domain mode', () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     
     // Enable proxy
@@ -162,7 +169,7 @@ describe('Per-Domain Proxy Assignment', () => {
   });
 
   it('shows Gmail, Yahoo, and Hotmail domain options', async () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     
     // Enable proxy
@@ -179,7 +186,7 @@ describe('Per-Domain Proxy Assignment', () => {
   });
 
   it('shows default dropdown option for unassigned domains', async () => {
-    render(<SettingsContent />);
+    render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
     
     // Enable proxy
