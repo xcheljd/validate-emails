@@ -179,7 +179,7 @@ function AppContent() {
 
   const handleResumeSession = (sessionId: string) => {
     setSelectedSessionId(sessionId);
-    resumeSession(sessionId);
+    resumeSession(sessionId, settings.concurrency);
     setCurrentView('validation');
     setShowDashboard(true);
     setStatusFilter('all');

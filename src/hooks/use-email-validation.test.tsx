@@ -53,8 +53,15 @@ describe('useEmailValidation', () => {
     expect(result.current.isProcessing).toBe(false);
   });
 
-  it('should set isProcessing to true when validation starts', () => {
-    mockInvoke.mockResolvedValueOnce([]);
+  it('should set isProcessing to true when validation starts', async () => {
+    // Use a pending promise so the mutation doesn't resolve immediately,
+    // which would cause state updates outside act()
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'validate_emails_bulk') {
+        return new Promise(() => {}); // Never resolves
+      }
+      return Promise.resolve(undefined);
+    });
     const { result } = renderHook(() => useEmailValidation(), {
       wrapper: createWrapper(),
     });

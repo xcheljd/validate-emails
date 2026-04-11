@@ -214,7 +214,7 @@ export function useEmailValidation() {
   }, [mutation, validationMode]);
 
   const resumeSession = useCallback(
-    async (sessionIdToResume: string) => {
+    async (sessionIdToResume: string, concurrency?: number) => {
       try {
         const session: ValidationSession = await loadSession(sessionIdToResume);
         const unprocessedEmails = session.emails.slice(session.currentIndex);
@@ -224,19 +224,22 @@ export function useEmailValidation() {
 
         const emailsToRevalidate = [...unprocessedEmails, ...problemEmails];
 
+        const resolvedConcurrency =
+          concurrency ?? currentConcurrencyRef.current;
+
         setResults(session.results);
         setProgress(session.currentIndex);
         setTotal(session.total);
         setSessionId(sessionIdToResume);
         setValidationMode(session.settings.validationMode);
-        currentConcurrencyRef.current = 5;
+        currentConcurrencyRef.current = resolvedConcurrency;
         pendingEmailsRef.current = emailsToRevalidate;
 
         setStatus('processing');
         statusRef.current = 'processing';
         mutation.mutate({
           emails: emailsToRevalidate,
-          concurrency: 5,
+          concurrency: resolvedConcurrency,
           mode: session.settings.validationMode,
         });
       } catch (error) {

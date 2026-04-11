@@ -175,7 +175,6 @@ export function ProxyList({
 
   const handleBulkAdd = useCallback(() => {
     const lines = bulkInput.split('\n').filter((line) => line.trim());
-    let addedCount = 0;
 
     for (const line of lines) {
       const proxy = parseProxyString(line);
@@ -184,7 +183,6 @@ export function ProxyList({
         const isDuplicate = proxies.some((p) => isDuplicateProxy(p, proxy));
         if (!isDuplicate) {
           onAdd(proxy);
-          addedCount++;
         }
       }
     }
