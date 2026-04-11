@@ -29,13 +29,15 @@ interface ResultsTableProps {
   onViewDetails: (result: ValidationResult) => void;
   statusFilter: string;
   onStatusFilterChange: (filter: string) => void;
+  onDeleteResults?: (emailsToDelete: Set<string>) => void;
 }
 
 export function ResultsTable({ 
   results, 
   onViewDetails,
   statusFilter,
-  onStatusFilterChange 
+  onStatusFilterChange,
+  onDeleteResults
 }: ResultsTableProps) {
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebounce(query, 300);
@@ -160,6 +162,9 @@ export function ResultsTable({
 
   const handleDeleteSelected = () => {
     if (confirm(`Delete ${selectedRows.size} selected results?`)) {
+      if (onDeleteResults) {
+        onDeleteResults(new Set(selectedRows));
+      }
       setSelectedRows(new Set());
     }
   };

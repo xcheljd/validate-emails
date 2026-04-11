@@ -302,6 +302,9 @@ function AppContent() {
                     onViewDetails={handleViewDetails}
                     statusFilter={statusFilter}
                     onStatusFilterChange={setStatusFilter}
+                    onDeleteResults={(emailsToDelete) => {
+                      setResults(prev => prev.filter(r => !emailsToDelete.has(r.email)));
+                    }}
                   />
                   <ResultDetails
                     result={selectedResult}

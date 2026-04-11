@@ -2,14 +2,21 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ResultsTable } from '@/components/validation/results-table';
 import { loadSession, ValidationSession } from '@/lib/session-manager';
+import { ValidationResult } from '@/lib/types';
 
 export function SessionDetails({ sessionId }: { sessionId: string }) {
   const [session, setSession] = useState<ValidationSession | null>(null);
+  const [results, setResults] = useState<ValidationResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('all');
 
   useEffect(() => {
-    loadSession(sessionId).then(setSession).finally(() => setLoading(false));
+    loadSession(sessionId).then((s) => {
+      setSession(s);
+      if (s) {
+        setResults(s.results);
+      }
+    }).finally(() => setLoading(false));
   }, [sessionId]);
 
   if (loading) {
@@ -20,10 +27,10 @@ export function SessionDetails({ sessionId }: { sessionId: string }) {
 
   if (!session) return null;
 
-  const safeCount = session.results.filter(r => r.result === 'Safe').length;
-  const riskyCount = session.results.filter(r => r.result === 'Risky').length;
-  const invalidCount = session.results.filter(r => r.result === 'Invalid').length;
-  const unknownCount = session.results.filter(r => r.result === 'Unknown').length;
+  const safeCount = results.filter(r => r.result === 'Safe').length;
+  const riskyCount = results.filter(r => r.result === 'Risky').length;
+  const invalidCount = results.filter(r => r.result === 'Invalid').length;
+  const unknownCount = results.filter(r => r.result === 'Unknown').length;
 
   return (
     <div className="space-y-4">
@@ -76,10 +83,13 @@ export function SessionDetails({ sessionId }: { sessionId: string }) {
       <div className="space-y-4">
         <h3 className="text-lg font-semibold">Validation Results</h3>
         <ResultsTable
-          results={session.results}
+          results={results}
           onViewDetails={() => {}}
           statusFilter={statusFilter}
           onStatusFilterChange={setStatusFilter}
+          onDeleteResults={(emailsToDelete) => {
+            setResults(prev => prev.filter(r => !emailsToDelete.has(r.email)));
+          }}
         />
         <div className="flex justify-end mt-4">
           <button
