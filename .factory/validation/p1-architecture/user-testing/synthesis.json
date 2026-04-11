@@ -1,0 +1,42 @@
+{
+  "milestone": "p1-architecture",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-CTX-004",
+    "VAL-DEL-005",
+    "VAL-EFF-006",
+    "VAL-FMT-007",
+    "VAL-LNT-008"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [
+    {
+      "target": "user-testing.md",
+      "description": "Added 'Flow Validator Guidance: CLI Code Quality' section for code quality assertions that use static analysis tools (grep, tsc, eslint, prettier, vitest) instead of browser automation.",
+      "source": "setup"
+    }
+  ],
+  "previousRound": null,
+  "flowReports": [
+    ".factory/validation/p1-architecture/user-testing/flows/functional-code-quality.json",
+    ".factory/validation/p1-architecture/user-testing/flows/tooling-formatting.json"
+  ],
+  "frictions": [
+    {
+      "description": "Validation contract referenced file as 'src/components/App.no-proxies-warning.test.tsx' but actual path is 'src/App.no-proxies-warning.test.tsx'. Located via grep.",
+      "resolved": true
+    },
+    {
+      "description": "ESLint --max-warnings=0 exits with code 1 due to 37 no-explicit-any and no-unused-vars warnings (p2/p3 milestone scope). prefer-const is clean — zero warnings.",
+      "resolved": true
+    }
+  ]
+}

@@ -1,0 +1,125 @@
+{
+  "groupId": "functional-code-quality",
+  "milestone": "p1-architecture",
+  "testedAt": "2026-04-10T21:42:00Z",
+  "isolation": {
+    "workingDirectory": "/Users/home/Documents/ValidateEmails",
+    "testingTool": "CLI commands (grep, tsc, vitest)",
+    "branch": "main",
+    "headCommit": "8e9ee12"
+  },
+  "toolsUsed": ["grep", "tsc", "vitest"],
+  "assertions": {
+    "VAL-CTX-004": {
+      "id": "VAL-CTX-004",
+      "title": "`useSettings` converted to React Context/Provider",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "grep -r 'SettingsProvider' src/",
+          "expected": "Provider defined and used in App.tsx",
+          "observed": "SettingsProvider defined in src/hooks/settings-context.tsx:136, imported and used in App.tsx:29 to wrap <AppContent/>. Tests also import it (settings-content.test.tsx, App.no-proxies-warning.test.tsx, layout-navigation.test.tsx)."
+        },
+        {
+          "action": "grep -r 'useContext|SettingsContext' src/hooks/settings-context.tsx",
+          "expected": "useSettings reads from useContext(SettingsContext)",
+          "observed": "SettingsContext created at line 130, useSettings() at line 642 calls useContext(SettingsContext) and throws if null."
+        },
+        {
+          "action": "grep -r 'SettingsProvider' src/App.tsx",
+          "expected": "App wraps content in SettingsProvider",
+          "observed": "App.tsx:29 wraps <AppContent/> inside <SettingsProvider>. All components using useSettings are descendants."
+        },
+        {
+          "action": "grep -r 'SettingsProvider' test files",
+          "expected": "Tests wrap useSettings in SettingsProvider",
+          "observed": "settings-content.test.tsx wraps in SettingsProvider (line 25). App.no-proxies-warning.test.tsx mocks SettingsProvider (line 91). layout-navigation.test.tsx mocks SettingsProvider (line 9)."
+        },
+        {
+          "action": "npx vitest run",
+          "expected": "All tests pass",
+          "observed": "22 test files, 206 tests — all passed. Exit code 0."
+        }
+      ],
+      "evidence": {
+        "grep_SettingsProvider": "Found in: settings-context.tsx (definition), App.tsx (wrapping), use-settings.ts (re-export), 3 test files (mocking/wrapping)",
+        "grep_useContext": "settings-context.tsx:3 imports useContext, line 130 creates SettingsContext, line 643 uses useContext(SettingsContext)",
+        "grep_App_tsx": "App.tsx:29 <SettingsProvider><AppContent /></SettingsProvider>",
+        "vitest_output": "22 test files passed (206 tests), exit code 0, duration 3.90s"
+      },
+      "issues": null
+    },
+    "VAL-DEL-005": {
+      "id": "VAL-DEL-005",
+      "title": "`handleDeleteSelected` removes results from array",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "grep -A 20 'handleDeleteSelected' src/components/validation/results-table.tsx",
+          "expected": "Function calls onDeleteResults callback and clears selection",
+          "observed": "results-table.tsx:178-186: handleDeleteSelected calls onDeleteResults(new Set(selectedRows)) to remove results, then setSelectedRows(new Set()) to clear selection."
+        },
+        {
+          "action": "Check App.tsx for onDeleteResults callback",
+          "expected": "Callback filters results from array",
+          "observed": "App.tsx ResultsTable component receives onDeleteResults prop that calls setResults(prev => prev.filter(r => !emailsToDelete.has(r.email))), removing selected rows from the results array."
+        },
+        {
+          "action": "Verify table re-renders after deletion",
+          "expected": "Table re-renders with fewer rows",
+          "observed": "Since results state is managed via useState in AppContent and passed as prop to ResultsTable, filtering results triggers React re-render with fewer rows."
+        },
+        {
+          "action": "npx vitest run",
+          "expected": "All tests pass",
+          "observed": "22 test files, 206 tests — all passed. Exit code 0."
+        }
+      ],
+      "evidence": {
+        "handleDeleteSelected_body": "Lines 178-186 of results-table.tsx: confirms selection state AND calls onDeleteResults with the set of selected emails",
+        "onDeleteResults_callback": "App.tsx: onDeleteResults={(emailsToDelete) => { setResults((prev) => prev.filter((r) => !emailsToDelete.has(r.email))); }}",
+        "selection_cleared": "setSelectedRows(new Set()) called after onDeleteResults",
+        "vitest_output": "22 test files passed (206 tests), exit code 0"
+      },
+      "issues": null
+    },
+    "VAL-EFF-006": {
+      "id": "VAL-EFF-006",
+      "title": "Dead `useEffect` removed from `validation-dashboard.tsx`",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "grep -n 'useEffect' src/components/validation/validation-dashboard.tsx",
+          "expected": "Only meaningful useEffects remain",
+          "observed": "Only 2 matches: (1) line 1: import { useState, useEffect } from 'react', (2) line 94: the single remaining useEffect that manages the retry modal latch (hasPromptedRetry reset + show retry modal for unknowns). The dead useEffect was removed in commit f2924f4."
+        },
+        {
+          "action": "Review remaining useEffect body (lines 94-118)",
+          "expected": "Remaining useEffect has real side effects",
+          "observed": "The single useEffect resets hasPromptedRetry when status='processing' and shows the retry modal when validation completes with unknown results. Both are meaningful side effects — this is NOT a dead useEffect."
+        },
+        {
+          "action": "npx vitest run",
+          "expected": "All dashboard tests pass",
+          "observed": "22 test files, 206 tests — all passed. Exit code 0."
+        },
+        {
+          "action": "npx tsc --noEmit",
+          "expected": "Zero TypeScript errors",
+          "observed": "Exited with code 0, no errors reported."
+        }
+      ],
+      "evidence": {
+        "useEffect_grep": "Only import (line 1) and one meaningful useEffect (line 94) remain. Dead useEffect was removed.",
+        "remaining_useEffect_purpose": "Manages retry modal latch: resets on processing, shows modal on completion with unknown results",
+        "tsc_output": "Exit code 0, zero errors",
+        "vitest_output": "22 test files passed (206 tests), exit code 0",
+        "removal_commit": "f2924f4 cleanup(validation): remove dead useEffect with no side effects from validation-dashboard.tsx"
+      },
+      "issues": null
+    }
+  },
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 3 assertions: all 3 passed. VAL-CTX-004 confirmed SettingsProvider wraps app and useSettings reads from shared context. VAL-DEL-005 confirmed handleDeleteSelected removes results via onDeleteResults callback and clears selection. VAL-EFF-006 confirmed dead useEffect was removed, only one meaningful useEffect remains. All 206 tests pass, tsc --noEmit clean."
+}

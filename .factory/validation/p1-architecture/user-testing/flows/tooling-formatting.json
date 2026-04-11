@@ -1,0 +1,75 @@
+{
+  "groupId": "tooling-formatting",
+  "milestone": "p1-architecture",
+  "testedAt": "2026-04-10T00:00:00.000Z",
+  "isolation": {
+    "workingDirectory": "/Users/home/Documents/ValidateEmails",
+    "testingTool": "CLI commands (prettier, eslint, grep)",
+    "method": "static analysis only"
+  },
+  "toolsUsed": ["prettier", "eslint", "grep"],
+  "assertions": {
+    "VAL-FMT-007": {
+      "id": "VAL-FMT-007",
+      "title": "Prettier configuration added",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Read .prettierrc",
+          "expected": "Config exists with singleQuote, semi, tabWidth: 2, trailingComma",
+          "observed": ".prettierrc exists with singleQuote: true, semi: true, tabWidth: 2, trailingComma: 'es5', printWidth: 80, bracketSpacing: true, arrowParens: 'always', endOfLine: 'lf'"
+        },
+        {
+          "action": "npx prettier --check 'src/**/*.{ts,tsx}'",
+          "expected": "Zero files needing formatting",
+          "observed": "All matched files use Prettier code style! (exit code 0)"
+        }
+      ],
+      "evidence": {
+        "configFile": "p1-architecture/tooling-formatting/VAL-FMT-007-prettierrc.json",
+        "prettierCheckOutput": "p1-architecture/tooling-formatting/VAL-FMT-007-prettier-check.txt",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    "VAL-LNT-008": {
+      "id": "VAL-LNT-008",
+      "title": "ESLint let vs const error fixed",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Search for 'let' declarations in src/App.no-proxies-warning.test.tsx",
+          "expected": "Zero let declarations (all const)",
+          "observed": "grep for '\\blet\\b' returned no matches — file uses only const declarations"
+        },
+        {
+          "action": "npx eslint src/ --max-warnings=0",
+          "expected": "Zero prefer-const warnings",
+          "observed": "37 total warnings (0 errors), all are no-explicit-any or no-unused-vars — zero prefer-const warnings. Note: --max-warnings=0 causes exit code 1 due to other warnings, but prefer-const is clean."
+        }
+      ],
+      "evidence": {
+        "eslintOutput": "p1-architecture/tooling-formatting/VAL-LNT-008-eslint-check.txt",
+        "fileLocation": "src/App.no-proxies-warning.test.tsx (note: in src/ not src/components/ as contract suggested)",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    }
+  },
+  "frictions": [
+    {
+      "description": "The validation contract referenced the file as 'src/components/App.no-proxies-warning.test.tsx' but the actual file is at 'src/App.no-proxies-warning.test.tsx'. Had to search for the correct path.",
+      "resolved": true,
+      "resolution": "Used grep to locate the actual file path",
+      "affectedAssertions": ["VAL-LNT-008"]
+    },
+    {
+      "description": "ESLint --max-warnings=0 exits with code 1 due to 37 no-explicit-any and no-unused-vars warnings (p2/p3 milestone issues), but the assertion only cares about prefer-const which has zero instances.",
+      "resolved": true,
+      "resolution": "Confirmed all 37 warnings are non-prefer-const issues (no-explicit-any, no-unused-vars) — the prefer-const fix is verified clean",
+      "affectedAssertions": ["VAL-LNT-008"]
+    }
+  ],
+  "blockers": [],
+  "summary": "Tested 2 assertions: 2 passed. VAL-FMT-007: .prettierrc exists with correct settings (singleQuote, semi, tabWidth:2, trailingComma:es5) and prettier --check reports zero violations. VAL-LNT-008: The offending 'let' has been changed to 'const' in App.no-proxies-warning.test.tsx and ESLint reports zero prefer-const warnings (37 other warnings are from no-explicit-any/no-unused-vars, tracked in p2/p3 milestones)."
+}

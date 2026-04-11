@@ -124,3 +124,35 @@ Testing surface, required testing skills/tools, and resource cost classification
 ### Test Data
 - Use test email addresses like `test@example.com` for UI testing
 - Do not validate real email addresses during testing
+
+---
+
+## Flow Validator Guidance: CLI Code Quality
+
+### When to Use
+- For code quality assertions that don't require browser interaction
+- For static analysis (tsc, eslint, prettier) and code structure checks (grep)
+- For verifying unit test results (vitest)
+
+### Isolation Rules
+- **Read-only operations**: All CLI code quality checks are read-only
+- **No shared mutable state**: Multiple validators can run concurrently
+- **Exception**: Only one validator should run `npx vitest run` at a time to avoid file/process conflicts
+- **No services needed**: These checks don't require Tauri dev server or browser
+
+### Boundaries
+- Only read source files and run static analysis tools
+- Do not modify any source files
+- Do not start/stop services
+- Report command outputs verbatim as evidence
+
+### Tools
+- `git grep` / `grep` for code structure verification
+- `npx tsc --noEmit` for TypeScript type checking
+- `npx eslint src/` for linting
+- `npx prettier --check` for formatting verification
+- `npx vitest run` for unit test execution
+
+### Known Frictions (p1-architecture round)
+- The validation contract references `src/components/App.no-proxies-warning.test.tsx` but the actual path is `src/App.no-proxies-warning.test.tsx`
+- `npx eslint src/ --max-warnings=0` exits with code 1 due to `no-explicit-any` and `no-unused-vars` warnings (p2/p3 scope). Use `npx eslint src/ 2>&1 | grep prefer-const` to check specifically for the prefer-const assertion.
