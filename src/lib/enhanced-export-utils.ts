@@ -36,10 +36,10 @@ export function exportToExcel(
   results: ValidationResult[],
   columns: ExportColumn[]
 ): void {
-  const enabledColumns = columns.filter(c => c.enabled);
-  const data = results.map(result => {
+  const enabledColumns = columns.filter((c) => c.enabled);
+  const data = results.map((result) => {
     const row: any = {};
-    enabledColumns.forEach(col => {
+    enabledColumns.forEach((col) => {
       row[col.label] = result[col.key] ?? '-';
     });
     return row;
@@ -55,14 +55,18 @@ export function exportToCSV(
   results: ValidationResult[],
   columns: ExportColumn[]
 ): string {
-  const enabledColumns = columns.filter(c => c.enabled);
-  const headers = enabledColumns.map(c => c.label).join(',');
-  const rows = results.map(result => {
-    return enabledColumns.map(col => {
-      const value = result[col.key];
-      const stringValue = value ?? '-';
-      return typeof stringValue === 'string' ? escapeCSV(stringValue) : String(stringValue);
-    }).join(',');
+  const enabledColumns = columns.filter((c) => c.enabled);
+  const headers = enabledColumns.map((c) => c.label).join(',');
+  const rows = results.map((result) => {
+    return enabledColumns
+      .map((col) => {
+        const value = result[col.key];
+        const stringValue = value ?? '-';
+        return typeof stringValue === 'string'
+          ? escapeCSV(stringValue)
+          : String(stringValue);
+      })
+      .join(',');
   });
   return [headers, ...rows].join('\n');
 }

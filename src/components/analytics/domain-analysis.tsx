@@ -1,6 +1,13 @@
 import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { ValidationResult } from '@/lib/types';
 
 interface DomainStats {
@@ -18,7 +25,7 @@ export function DomainAnalysis({ results }: { results: ValidationResult[] }) {
   const domainStats = useMemo(() => {
     const statsMap = new Map<string, DomainStats>();
 
-    results.forEach(result => {
+    results.forEach((result) => {
       const domain = result.domain;
       if (!statsMap.has(domain)) {
         statsMap.set(domain, {
@@ -41,13 +48,26 @@ export function DomainAnalysis({ results }: { results: ValidationResult[] }) {
       else if (result.result === 'Unknown') stats.unknownCount++;
     });
 
-    const freeProviders = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'aol.com', 'icloud.com', 'protonmail.com'];
+    const freeProviders = [
+      'gmail.com',
+      'yahoo.com',
+      'outlook.com',
+      'hotmail.com',
+      'aol.com',
+      'icloud.com',
+      'protonmail.com',
+    ];
 
     Array.from(statsMap.values())
       .sort((a, b) => b.totalCount - a.totalCount)
-      .forEach(stats => {
-        stats.successRate = stats.totalCount > 0 ? Math.round((stats.safeCount / stats.totalCount) * 100) : 0;
-        stats.isFreeProvider = freeProviders.includes(stats.domain.toLowerCase());
+      .forEach((stats) => {
+        stats.successRate =
+          stats.totalCount > 0
+            ? Math.round((stats.safeCount / stats.totalCount) * 100)
+            : 0;
+        stats.isFreeProvider = freeProviders.includes(
+          stats.domain.toLowerCase()
+        );
       });
 
     return Array.from(statsMap.values());
@@ -76,9 +96,15 @@ export function DomainAnalysis({ results }: { results: ValidationResult[] }) {
               <TableRow key={`${stats.domain}-${idx}`}>
                 <TableCell className="font-medium">{stats.domain}</TableCell>
                 <TableCell>{stats.totalCount}</TableCell>
-                <TableCell className="text-green-600">{stats.safeCount}</TableCell>
-                <TableCell className="text-yellow-600">{stats.riskyCount}</TableCell>
-                <TableCell className="text-red-600">{stats.invalidCount}</TableCell>
+                <TableCell className="text-green-600">
+                  {stats.safeCount}
+                </TableCell>
+                <TableCell className="text-yellow-600">
+                  {stats.riskyCount}
+                </TableCell>
+                <TableCell className="text-red-600">
+                  {stats.invalidCount}
+                </TableCell>
                 <TableCell>{stats.unknownCount}</TableCell>
                 <TableCell>{stats.successRate}%</TableCell>
               </TableRow>

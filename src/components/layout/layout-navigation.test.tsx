@@ -6,7 +6,9 @@ import * as useSettingsHook from '@/hooks/use-settings';
 // Mock useSettings
 vi.mock('@/hooks/use-settings', () => ({
   useSettings: vi.fn(),
-  SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SettingsProvider: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
 }));
 
 describe('Sidebar', () => {
@@ -39,10 +41,10 @@ describe('Sidebar', () => {
     });
 
     it('shows active state for current view', () => {
-       const handleNavigate = vi.fn();
-       render(<Sidebar currentView="validation" onNavigate={handleNavigate} />);
-       const validationBtn = screen.getByRole('button', { name: /Validation/i });
-       expect(validationBtn.className).toContain('bg-secondary');
+      const handleNavigate = vi.fn();
+      render(<Sidebar currentView="validation" onNavigate={handleNavigate} />);
+      const validationBtn = screen.getByRole('button', { name: /Validation/i });
+      expect(validationBtn.className).toContain('bg-secondary');
     });
   });
 
@@ -59,7 +61,7 @@ describe('Sidebar', () => {
         settings: { ...mockSettings, sidebarCollapsed: true },
         updateSettings: mockUpdateSettings,
       });
-      
+
       render(<Sidebar currentView="validation" onNavigate={vi.fn()} />);
       expect(screen.queryByText('ReachCheck')).not.toBeInTheDocument();
       expect(screen.queryByText('Validation')).not.toBeInTheDocument();
@@ -70,7 +72,9 @@ describe('Sidebar', () => {
       render(<Sidebar currentView="validation" onNavigate={vi.fn()} />);
       const toggleBtn = screen.getByTitle('Collapse Sidebar');
       fireEvent.click(toggleBtn);
-      expect(mockUpdateSettings).toHaveBeenCalledWith({ sidebarCollapsed: true });
+      expect(mockUpdateSettings).toHaveBeenCalledWith({
+        sidebarCollapsed: true,
+      });
     });
 
     it('shows tooltips (via title) when collapsed', () => {
@@ -78,7 +82,7 @@ describe('Sidebar', () => {
         settings: { ...mockSettings, sidebarCollapsed: true },
         updateSettings: mockUpdateSettings,
       });
-      
+
       render(<Sidebar currentView="validation" onNavigate={vi.fn()} />);
       expect(screen.getByTitle('Validation')).toBeInTheDocument();
       expect(screen.getByTitle('History')).toBeInTheDocument();

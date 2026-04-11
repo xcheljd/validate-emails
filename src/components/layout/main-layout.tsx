@@ -1,4 +1,4 @@
-import { Sidebar, SidebarView } from "./sidebar";
+import { Sidebar, SidebarView } from './sidebar';
 
 interface MainLayoutProps {
   children: React.ReactNode;
@@ -6,7 +6,11 @@ interface MainLayoutProps {
   onNavigate: (view: SidebarView) => void;
 }
 
-export function MainLayout({ children, currentView, onNavigate }: MainLayoutProps) {
+export function MainLayout({
+  children,
+  currentView,
+  onNavigate,
+}: MainLayoutProps) {
   return (
     <div className="flex min-h-screen bg-background overflow-hidden">
       <Sidebar currentView={currentView} onNavigate={onNavigate} />

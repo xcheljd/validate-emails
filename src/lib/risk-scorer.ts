@@ -4,10 +4,18 @@ export function calculateRiskScore(result: ValidationResult): number {
   let score = 0;
 
   switch (result.result) {
-    case 'Safe': score += 0; break;
-    case 'Risky': score += 30; break;
-    case 'Invalid': score += 100; break;
-    case 'Unknown': score += 50; break;
+    case 'Safe':
+      score += 0;
+      break;
+    case 'Risky':
+      score += 30;
+      break;
+    case 'Invalid':
+      score += 100;
+      break;
+    case 'Unknown':
+      score += 50;
+      break;
   }
 
   if (result.isDisposable) score += 40;
@@ -23,7 +31,9 @@ export function calculateRiskScore(result: ValidationResult): number {
   return Math.min(score, 100);
 }
 
-export function getRiskLevel(score: number): 'Very Low' | 'Low' | 'Medium' | 'High' | 'Very High' {
+export function getRiskLevel(
+  score: number
+): 'Very Low' | 'Low' | 'Medium' | 'High' | 'Very High' {
   if (score < 10) return 'Very Low';
   if (score < 30) return 'Low';
   if (score < 50) return 'Medium';
@@ -42,21 +52,31 @@ export function getRiskReasons(result: ValidationResult): string[] {
   const reasons: string[] = [];
 
   switch (result.result) {
-    case 'Safe': reasons.push('Valid email address'); break;
-    case 'Risky': reasons.push('Potential deliverability issues'); break;
-    case 'Invalid': reasons.push('Undeliverable email'); break;
-    case 'Unknown': reasons.push('Unable to verify email'); break;
+    case 'Safe':
+      reasons.push('Valid email address');
+      break;
+    case 'Risky':
+      reasons.push('Potential deliverability issues');
+      break;
+    case 'Invalid':
+      reasons.push('Undeliverable email');
+      break;
+    case 'Unknown':
+      reasons.push('Unable to verify email');
+      break;
   }
 
   if (result.isDisposable) reasons.push('Disposable email provider detected');
 
-  if (result.isRoleAccount) reasons.push('Role account (info@, support@, etc.)');
+  if (result.isRoleAccount)
+    reasons.push('Role account (info@, support@, etc.)');
 
   if (result.isCatchAll) reasons.push('Catch-all domain - may not exist');
 
   if (result.mxRecordCount === 0) reasons.push('No MX records found');
 
-  if (result.errorType === 'network_error') reasons.push('Network or connection error');
+  if (result.errorType === 'network_error')
+    reasons.push('Network or connection error');
 
   return reasons;
 }

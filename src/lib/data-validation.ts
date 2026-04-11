@@ -34,14 +34,20 @@ export function validateSession(data: any): ValidationReport {
     }
   }
 
-  const validStatuses = ['pending', 'in-progress', 'completed', 'paused', 'stopped'];
+  const validStatuses = [
+    'pending',
+    'in-progress',
+    'completed',
+    'paused',
+    'stopped',
+  ];
   if (!validStatuses.includes(data.status)) {
     errors.push(`Invalid session status: ${data.status}`);
   }
 
   return {
     valid: errors.length === 0,
-    errors
+    errors,
   };
 }
 
@@ -68,13 +74,17 @@ export function validateResult(data: any): ValidationReport {
     errors.push('Invalid or missing domain');
   }
 
-  if (typeof data.riskScore !== 'number' || data.riskScore < 0 || data.riskScore > 100) {
+  if (
+    typeof data.riskScore !== 'number' ||
+    data.riskScore < 0 ||
+    data.riskScore > 100
+  ) {
     errors.push('Invalid risk score');
   }
 
   return {
     valid: errors.length === 0,
-    errors
+    errors,
   };
 }
 
@@ -83,7 +93,7 @@ export function validateResult(data: any): ValidationReport {
  */
 export function validateResultsBatch(results: any[]): ValidationReport {
   const errors: string[] = [];
-  
+
   if (!Array.isArray(results)) {
     return { valid: false, errors: ['Results must be an array'] };
   }
@@ -97,6 +107,6 @@ export function validateResultsBatch(results: any[]): ValidationReport {
 
   return {
     valid: errors.length === 0,
-    errors
+    errors,
   };
 }

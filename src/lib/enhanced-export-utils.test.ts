@@ -51,14 +51,16 @@ describe('enhanced-export-utils', () => {
   ];
 
   beforeEach(() => {
-    exportColumns.forEach(col => col.enabled = true);
+    exportColumns.forEach((col) => (col.enabled = true));
   });
 
   it('should export all columns when all are enabled', () => {
     const csv = exportToCSV(mockResults, exportColumns);
     const lines = csv.split('\n');
 
-    expect(lines[0]).toBe('Email,Status,Verdict Reason,Domain,Risk Score,Valid Syntax,Deliverable,Disabled,Full Inbox,Catch-All,Disposable,Role Account,B2C Provider,SMTP Connected,Accepts Mail,MX Records,Breached,Suggestion,Duration (ms),Validated At,Mode,Error Type');
+    expect(lines[0]).toBe(
+      'Email,Status,Verdict Reason,Domain,Risk Score,Valid Syntax,Deliverable,Disabled,Full Inbox,Catch-All,Disposable,Role Account,B2C Provider,SMTP Connected,Accepts Mail,MX Records,Breached,Suggestion,Duration (ms),Validated At,Mode,Error Type'
+    );
     expect(lines).toHaveLength(3);
     expect(lines[1]).toContain('test1@example.com');
     expect(lines[1]).toContain('Safe');
@@ -68,8 +70,8 @@ describe('enhanced-export-utils', () => {
 
   it('should export only enabled columns', () => {
     const enabledColumns = exportColumns.slice(0, 3);
-    exportColumns.forEach(col => col.enabled = false);
-    enabledColumns.forEach(col => col.enabled = true);
+    exportColumns.forEach((col) => (col.enabled = false));
+    enabledColumns.forEach((col) => (col.enabled = true));
 
     const csv = exportToCSV(mockResults, exportColumns);
     const lines = csv.split('\n');
@@ -104,16 +106,32 @@ describe('enhanced-export-utils', () => {
     const dataLine = lines[1];
     const columns = dataLine.split(',');
 
-    const errorIndex = exportColumns.findIndex(c => c.key === 'errorType');
+    const errorIndex = exportColumns.findIndex((c) => c.key === 'errorType');
 
     expect(columns[errorIndex]).toBe('-');
   });
 
   it('exportColumns should have all columns with correct labels', () => {
     expect(exportColumns).toHaveLength(22);
-    expect(exportColumns[0]).toEqual({ key: 'email', label: 'Email', enabled: true });
-    expect(exportColumns[1]).toEqual({ key: 'result', label: 'Status', enabled: true });
-    expect(exportColumns[2]).toEqual({ key: 'reason', label: 'Verdict Reason', enabled: true });
-    expect(exportColumns[3]).toEqual({ key: 'domain', label: 'Domain', enabled: true });
+    expect(exportColumns[0]).toEqual({
+      key: 'email',
+      label: 'Email',
+      enabled: true,
+    });
+    expect(exportColumns[1]).toEqual({
+      key: 'result',
+      label: 'Status',
+      enabled: true,
+    });
+    expect(exportColumns[2]).toEqual({
+      key: 'reason',
+      label: 'Verdict Reason',
+      enabled: true,
+    });
+    expect(exportColumns[3]).toEqual({
+      key: 'domain',
+      label: 'Domain',
+      enabled: true,
+    });
   });
 });

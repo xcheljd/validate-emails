@@ -3,7 +3,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 
 export function ValidationSettings() {
-  const [validationMode, setValidationMode] = useState<'quick' | 'standard' | 'thorough'>('standard');
+  const [validationMode, setValidationMode] = useState<
+    'quick' | 'standard' | 'thorough'
+  >('standard');
   const [concurrency, setConcurrency] = useState(5);
   const [timeout, setTimeout] = useState(30);
   const [maxRetries, setMaxRetries] = useState(3);
@@ -30,7 +32,9 @@ export function ValidationSettings() {
         </div>
 
         <div>
-          <Label htmlFor="concurrency">Concurrency: {concurrency} parallel validations</Label>
+          <Label htmlFor="concurrency">
+            Concurrency: {concurrency} parallel validations
+          </Label>
           <input
             id="concurrency"
             type="range"
@@ -69,7 +73,9 @@ export function ValidationSettings() {
         </div>
 
         <div>
-          <Label htmlFor="auto-save-interval">Auto-Save every {autoSaveInterval} validations</Label>
+          <Label htmlFor="auto-save-interval">
+            Auto-Save every {autoSaveInterval} validations
+          </Label>
           <input
             id="auto-save-interval"
             type="number"

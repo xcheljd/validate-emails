@@ -43,7 +43,9 @@ describe('SettingsContent', () => {
 
   it('calls onClose when save is clicked', () => {
     const handleClose = vi.fn();
-    render(<SettingsContent onClose={handleClose} />, { wrapper: SettingsWrapper });
+    render(<SettingsContent onClose={handleClose} />, {
+      wrapper: SettingsWrapper,
+    });
     fireEvent.click(screen.getByText('Save Settings'));
     expect(handleClose).toHaveBeenCalled();
   });
@@ -63,7 +65,9 @@ describe('ProxySettings Tab', () => {
   it('shows proxy toggle in proxy tab', () => {
     render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
-    expect(screen.getByRole('switch', { name: /enable proxy/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('switch', { name: /enable proxy/i })
+    ).toBeInTheDocument();
   });
 
   it('shows rotation mode selector in proxy tab', () => {
@@ -121,16 +125,22 @@ describe('ProxySettings Tab', () => {
     fireEvent.click(toggle);
 
     // Manual mode (default)
-    expect(screen.getByText(/Proxy only changes when you manually select/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Proxy only changes when you manually select/i)
+    ).toBeInTheDocument();
 
     // Switch to Automatic
     const select = screen.getByLabelText('Rotation Mode');
     fireEvent.change(select, { target: { value: 'automatic' } });
-    expect(screen.getByText(/Proxies rotate automatically during validation/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Proxies rotate automatically during validation/i)
+    ).toBeInTheDocument();
 
     // Switch to Per-Domain
     fireEvent.change(select, { target: { value: 'perDomain' } });
-    expect(screen.getByText(/Assign specific proxies to Gmail, Yahoo, Hotmail/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Assign specific proxies to Gmail, Yahoo, Hotmail/i)
+    ).toBeInTheDocument();
   });
 });
 
@@ -143,11 +153,11 @@ describe('Per-Domain Proxy Assignment', () => {
   it('shows per-domain assignment section when Per-Domain mode is selected', async () => {
     render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
-    
+
     // Enable proxy
     const toggle = screen.getByRole('switch', { name: /enable proxy/i });
     fireEvent.click(toggle);
-    
+
     // Switch to Per-Domain mode
     const select = screen.getByLabelText('Rotation Mode');
     fireEvent.change(select, { target: { value: 'perDomain' } });
@@ -159,11 +169,11 @@ describe('Per-Domain Proxy Assignment', () => {
   it('hides per-domain assignment section when not in Per-Domain mode', () => {
     render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
-    
+
     // Enable proxy
     const toggle = screen.getByRole('switch', { name: /enable proxy/i });
     fireEvent.click(toggle);
-    
+
     // In Manual or Automatic mode, per-domain section should not be visible
     expect(screen.queryByText('Domain Assignments')).not.toBeInTheDocument();
   });
@@ -171,11 +181,11 @@ describe('Per-Domain Proxy Assignment', () => {
   it('shows Gmail, Yahoo, and Hotmail domain options', async () => {
     render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
-    
+
     // Enable proxy
     const toggle = screen.getByRole('switch', { name: /enable proxy/i });
     fireEvent.click(toggle);
-    
+
     // Switch to Per-Domain mode
     const select = screen.getByLabelText('Rotation Mode');
     fireEvent.change(select, { target: { value: 'perDomain' } });
@@ -188,11 +198,11 @@ describe('Per-Domain Proxy Assignment', () => {
   it('shows default dropdown option for unassigned domains', async () => {
     render(<SettingsContent />, { wrapper: SettingsWrapper });
     fireEvent.click(screen.getByText('Proxy'));
-    
+
     // Enable proxy
     const toggle = screen.getByRole('switch', { name: /enable proxy/i });
     fireEvent.click(toggle);
-    
+
     // Switch to Per-Domain mode
     const select = screen.getByLabelText('Rotation Mode');
     fireEvent.change(select, { target: { value: 'perDomain' } });

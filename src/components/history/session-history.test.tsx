@@ -12,8 +12,26 @@ vi.mock('@/lib/session-manager', () => ({
 }));
 
 const mockSessions = [
-  { id: '1', name: 'Session 1', createdAt: '2025-01-01', status: 'completed', total: 100, currentIndex: 100, results: [], config: {} },
-  { id: '2', name: 'Session 2', createdAt: '2025-01-02', status: 'in-progress', total: 50, currentIndex: 25, results: [], config: {} },
+  {
+    id: '1',
+    name: 'Session 1',
+    createdAt: '2025-01-01',
+    status: 'completed',
+    total: 100,
+    currentIndex: 100,
+    results: [],
+    config: {},
+  },
+  {
+    id: '2',
+    name: 'Session 2',
+    createdAt: '2025-01-02',
+    status: 'in-progress',
+    total: 50,
+    currentIndex: 25,
+    results: [],
+    config: {},
+  },
 ];
 
 describe('SessionHistory', () => {
@@ -23,12 +41,12 @@ describe('SessionHistory', () => {
 
   it('renders sessions list', async () => {
     (sessionManager.listSessions as any).mockResolvedValue(mockSessions);
-    
+
     render(
-      <SessionHistory 
-        onViewDetails={vi.fn()} 
-        onResume={vi.fn()} 
-        onSessionSelected={vi.fn()} 
+      <SessionHistory
+        onViewDetails={vi.fn()}
+        onResume={vi.fn()}
+        onSessionSelected={vi.fn()}
       />
     );
 
@@ -40,12 +58,12 @@ describe('SessionHistory', () => {
 
   it('renders empty state', async () => {
     (sessionManager.listSessions as any).mockResolvedValue([]);
-    
+
     render(
-      <SessionHistory 
-        onViewDetails={vi.fn()} 
-        onResume={vi.fn()} 
-        onSessionSelected={vi.fn()} 
+      <SessionHistory
+        onViewDetails={vi.fn()}
+        onResume={vi.fn()}
+        onSessionSelected={vi.fn()}
       />
     );
 

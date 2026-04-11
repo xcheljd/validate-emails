@@ -36,9 +36,27 @@ const baseResult = {
 };
 
 const mockResults: ValidationResult[] = [
-  { email: 'c@example.com', result: 'Safe', reason: '', ...baseResult, riskScore: 0 },
-  { email: 'a@example.com', result: 'Invalid', reason: '', ...baseResult, riskScore: 100 },
-  { email: 'b@example.com', result: 'Risky', reason: '', ...baseResult, riskScore: 30 },
+  {
+    email: 'c@example.com',
+    result: 'Safe',
+    reason: '',
+    ...baseResult,
+    riskScore: 0,
+  },
+  {
+    email: 'a@example.com',
+    result: 'Invalid',
+    reason: '',
+    ...baseResult,
+    riskScore: 100,
+  },
+  {
+    email: 'b@example.com',
+    result: 'Risky',
+    reason: '',
+    ...baseResult,
+    riskScore: 30,
+  },
 ];
 
 describe('ResultsTable Structure', () => {
@@ -53,13 +71,16 @@ describe('ResultsTable Structure', () => {
     );
     const tbody = container.querySelector('tbody');
     expect(tbody).toBeInTheDocument();
-    
+
     // Direct children of tbody must be TRs
     const children = Array.from(tbody!.children);
-    const nonTrChildren = children.filter(child => child.tagName !== 'TR');
-    
+    const nonTrChildren = children.filter((child) => child.tagName !== 'TR');
+
     if (nonTrChildren.length > 0) {
-        console.log('Invalid children tags:', nonTrChildren.map(c => c.tagName));
+      console.log(
+        'Invalid children tags:',
+        nonTrChildren.map((c) => c.tagName)
+      );
     }
     expect(nonTrChildren).toHaveLength(0);
   });
@@ -163,7 +184,11 @@ describe('ResultsTable Delete Selected', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     let currentResults = [...mockResults];
-    const setResults = (updaterOrValue: ValidationResult[] | ((prev: ValidationResult[]) => ValidationResult[])) => {
+    const setResults = (
+      updaterOrValue:
+        | ValidationResult[]
+        | ((prev: ValidationResult[]) => ValidationResult[])
+    ) => {
       if (typeof updaterOrValue === 'function') {
         currentResults = updaterOrValue(currentResults);
       } else {
@@ -172,7 +197,7 @@ describe('ResultsTable Delete Selected', () => {
     };
 
     const handleDeleteResults = (emailsToDelete: Set<string>) => {
-      setResults(prev => prev.filter(r => !emailsToDelete.has(r.email)));
+      setResults((prev) => prev.filter((r) => !emailsToDelete.has(r.email)));
     };
 
     render(

@@ -5,8 +5,8 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 
 interface RetryModalProps {
   open: boolean;
@@ -27,16 +27,15 @@ export function RetryModal({
         <DialogHeader>
           <DialogTitle>Validation Complete</DialogTitle>
           <DialogDescription>
-            We found {unknownCount} Unknown results. Would you like to retry these specific emails using different proxies to improve accuracy?
+            We found {unknownCount} Unknown results. Would you like to retry
+            these specific emails using different proxies to improve accuracy?
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="flex-col sm:flex-row gap-2">
           <Button variant="ghost" onClick={onCancel}>
             Cancel
           </Button>
-          <Button onClick={onRetry}>
-            Retry Unknown Emails
-          </Button>
+          <Button onClick={onRetry}>Retry Unknown Emails</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

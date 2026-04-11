@@ -11,26 +11,30 @@ export function SessionDetails({ sessionId }: { sessionId: string }) {
   const [statusFilter, setStatusFilter] = useState('all');
 
   useEffect(() => {
-    loadSession(sessionId).then((s) => {
-      setSession(s);
-      if (s) {
-        setResults(s.results);
-      }
-    }).finally(() => setLoading(false));
+    loadSession(sessionId)
+      .then((s) => {
+        setSession(s);
+        if (s) {
+          setResults(s.results);
+        }
+      })
+      .finally(() => setLoading(false));
   }, [sessionId]);
 
   if (loading) {
-    return <div className="flex justify-center items-center h-screen">
-      <div className="text-lg">Loading session...</div>
-    </div>;
+    return (
+      <div className="flex justify-center items-center h-screen">
+        <div className="text-lg">Loading session...</div>
+      </div>
+    );
   }
 
   if (!session) return null;
 
-  const safeCount = results.filter(r => r.result === 'Safe').length;
-  const riskyCount = results.filter(r => r.result === 'Risky').length;
-  const invalidCount = results.filter(r => r.result === 'Invalid').length;
-  const unknownCount = results.filter(r => r.result === 'Unknown').length;
+  const safeCount = results.filter((r) => r.result === 'Safe').length;
+  const riskyCount = results.filter((r) => r.result === 'Risky').length;
+  const invalidCount = results.filter((r) => r.result === 'Invalid').length;
+  const unknownCount = results.filter((r) => r.result === 'Unknown').length;
 
   return (
     <div className="space-y-4">
@@ -66,7 +70,9 @@ export function SessionDetails({ sessionId }: { sessionId: string }) {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{invalidCount}</div>
-            <p className="text-xs text-muted-foreground">Undeliverable emails</p>
+            <p className="text-xs text-muted-foreground">
+              Undeliverable emails
+            </p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-slate-500">
@@ -88,7 +94,9 @@ export function SessionDetails({ sessionId }: { sessionId: string }) {
           statusFilter={statusFilter}
           onStatusFilterChange={setStatusFilter}
           onDeleteResults={(emailsToDelete) => {
-            setResults(prev => prev.filter(r => !emailsToDelete.has(r.email)));
+            setResults((prev) =>
+              prev.filter((r) => !emailsToDelete.has(r.email))
+            );
           }}
         />
         <div className="flex justify-end mt-4">

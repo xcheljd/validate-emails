@@ -1,6 +1,14 @@
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from '@tauri-apps/plugin-notification';
 
-export async function notifyValidationComplete(total: number, safeCount: number, riskyCount: number) {
+export async function notifyValidationComplete(
+  total: number,
+  safeCount: number,
+  riskyCount: number
+) {
   try {
     const hasPermission = await isPermissionGranted();
     if (!hasPermission) {
@@ -9,24 +17,24 @@ export async function notifyValidationComplete(total: number, safeCount: number,
     await sendNotification({
       title: 'Validation Complete',
       body: `Finished ${total} emails. Safe: ${safeCount}, Risky: ${riskyCount}`,
-      icon: '/vite.svg'
+      icon: '/vite.svg',
     });
   } catch (error) {
-    console.error("Failed to send notification:", error);
+    console.error('Failed to send notification:', error);
     try {
-      if ("Notification" in window) {
-        if (Notification.permission === "default") {
+      if ('Notification' in window) {
+        if (Notification.permission === 'default') {
           await Notification.requestPermission();
         }
-        if (Notification.permission === "granted") {
-          new Notification("Validation Complete", {
+        if (Notification.permission === 'granted') {
+          new Notification('Validation Complete', {
             body: `Finished ${total} emails. Safe: ${safeCount}, Risky: ${riskyCount}`,
-            icon: '/vite.svg'
+            icon: '/vite.svg',
           });
         }
       }
     } catch (fallbackError) {
-      console.error("Fallback notification also failed:", fallbackError);
+      console.error('Fallback notification also failed:', fallbackError);
     }
   }
 }
@@ -40,24 +48,24 @@ export async function notifyError(message: string) {
     await sendNotification({
       title: 'Error',
       body: message,
-      icon: '/vite.svg'
+      icon: '/vite.svg',
     });
   } catch (error) {
-    console.error("Failed to send notification:", error);
+    console.error('Failed to send notification:', error);
     try {
-      if ("Notification" in window) {
-        if (Notification.permission === "default") {
+      if ('Notification' in window) {
+        if (Notification.permission === 'default') {
           await Notification.requestPermission();
         }
-        if (Notification.permission === "granted") {
-          new Notification("Error", {
+        if (Notification.permission === 'granted') {
+          new Notification('Error', {
             body: message,
-            icon: '/vite.svg'
+            icon: '/vite.svg',
           });
         }
       }
     } catch (fallbackError) {
-      console.error("Fallback notification also failed:", fallbackError);
+      console.error('Fallback notification also failed:', fallbackError);
     }
   }
 }
@@ -71,24 +79,24 @@ export async function notifySessionSaved(sessionName: string) {
     await sendNotification({
       title: 'Session Saved',
       body: `Validation session "${sessionName}" has been saved.`,
-      icon: '/vite.svg'
+      icon: '/vite.svg',
     });
   } catch (error) {
-    console.error("Failed to send notification:", error);
+    console.error('Failed to send notification:', error);
     try {
-      if ("Notification" in window) {
-        if (Notification.permission === "default") {
+      if ('Notification' in window) {
+        if (Notification.permission === 'default') {
           await Notification.requestPermission();
         }
-        if (Notification.permission === "granted") {
-          new Notification("Session Saved", {
+        if (Notification.permission === 'granted') {
+          new Notification('Session Saved', {
             body: `Validation session "${sessionName}" has been saved.`,
-            icon: '/vite.svg'
+            icon: '/vite.svg',
           });
         }
       }
     } catch (fallbackError) {
-      console.error("Fallback notification also failed:", fallbackError);
+      console.error('Fallback notification also failed:', fallbackError);
     }
   }
 }

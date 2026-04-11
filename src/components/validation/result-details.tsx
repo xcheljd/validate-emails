@@ -4,15 +4,37 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { ValidationResult } from "@/lib/types";
-import { Mail, ShieldCheck, AlertCircle, XCircle, Info, Clock, Globe, Activity, Check, AlertTriangle, ShieldAlert, Inbox, Plug, MailCheck, ShieldOff, Building2 } from "lucide-react";
-import { calculateRiskScore, getRiskLevel, getRiskColor, getRiskReasons } from "@/lib/risk-scorer";
-import * as typoDatabase from "@/lib/typo-database";
+} from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { ValidationResult } from '@/lib/types';
+import {
+  Mail,
+  ShieldCheck,
+  AlertCircle,
+  XCircle,
+  Info,
+  Clock,
+  Globe,
+  Activity,
+  Check,
+  AlertTriangle,
+  ShieldAlert,
+  Inbox,
+  Plug,
+  MailCheck,
+  ShieldOff,
+  Building2,
+} from 'lucide-react';
+import {
+  calculateRiskScore,
+  getRiskLevel,
+  getRiskColor,
+  getRiskReasons,
+} from '@/lib/risk-scorer';
+import * as typoDatabase from '@/lib/typo-database';
 
 interface ResultDetailsProps {
   result: ValidationResult | null;
@@ -21,7 +43,12 @@ interface ResultDetailsProps {
   onFixEmail?: (correctedEmail: string) => void;
 }
 
-export function ResultDetails({ result, open, onOpenChange, onFixEmail }: ResultDetailsProps) {
+export function ResultDetails({
+  result,
+  open,
+  onOpenChange,
+  onFixEmail,
+}: ResultDetailsProps) {
   if (!result) return null;
 
   const riskScore = calculateRiskScore(result);
@@ -32,11 +59,11 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case "Safe":
+      case 'Safe':
         return <ShieldCheck className="h-5 w-5 text-green-500" />;
-      case "Risky":
+      case 'Risky':
         return <AlertCircle className="h-5 w-5 text-yellow-500" />;
-      case "Invalid":
+      case 'Invalid':
         return <XCircle className="h-5 w-5 text-red-500" />;
       default:
         return <Info className="h-5 w-5 text-slate-500" />;
@@ -45,11 +72,11 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
 
   const getStatusBadge = (status: string) => {
     switch (status) {
-      case "Safe":
+      case 'Safe':
         return <Badge className="bg-green-500">Safe</Badge>;
-      case "Risky":
+      case 'Risky':
         return <Badge className="bg-yellow-500">Risky</Badge>;
-      case "Invalid":
+      case 'Invalid':
         return <Badge variant="destructive">Invalid</Badge>;
       default:
         return <Badge variant="outline">Unknown</Badge>;
@@ -99,7 +126,13 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
         {typoCorrection && (
           <div className="flex items-center gap-2 text-yellow-600 text-sm bg-yellow-50 border border-yellow-200 rounded px-3 py-2">
             <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-            <span>Typo detected: <span className="font-semibold">{result.email}</span> → <span className="font-semibold text-green-600">{typoCorrection}</span></span>
+            <span>
+              Typo detected:{' '}
+              <span className="font-semibold">{result.email}</span> →{' '}
+              <span className="font-semibold text-green-600">
+                {typoCorrection}
+              </span>
+            </span>
             {onFixEmail && (
               <Button
                 variant="outline"
@@ -170,30 +203,44 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
             <CardContent>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <div className="text-xs text-muted-foreground mb-1">Domain</div>
+                  <div className="text-xs text-muted-foreground mb-1">
+                    Domain
+                  </div>
                   <div className="font-medium text-sm flex items-center gap-1">
                     <Globe className="h-3 w-3" />
                     {result.domain}
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-muted-foreground mb-1">Duration</div>
+                  <div className="text-xs text-muted-foreground mb-1">
+                    Duration
+                  </div>
                   <div className="font-medium text-sm flex items-center gap-1">
                     <Clock className="h-3 w-3" />
                     {formatDuration(result.validationDuration)}
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-muted-foreground mb-1">MX Records</div>
-                  <div className="font-medium text-sm">{result.mxRecordCount} found</div>
+                  <div className="text-xs text-muted-foreground mb-1">
+                    MX Records
+                  </div>
+                  <div className="font-medium text-sm">
+                    {result.mxRecordCount} found
+                  </div>
                 </div>
                 <div>
-                  <div className="text-xs text-muted-foreground mb-1">Timestamp</div>
-                  <div className="font-medium text-sm text-xs">{new Date(result.timestamp).toLocaleString()}</div>
+                  <div className="text-xs text-muted-foreground mb-1">
+                    Timestamp
+                  </div>
+                  <div className="font-medium text-sm text-xs">
+                    {new Date(result.timestamp).toLocaleString()}
+                  </div>
                 </div>
                 <div>
                   <div className="text-xs text-muted-foreground mb-1">Mode</div>
-                  <div className="font-medium text-sm capitalize">{result.validationMode}</div>
+                  <div className="font-medium text-sm capitalize">
+                    {result.validationMode}
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -201,7 +248,9 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Risk Factors</CardTitle>
+              <CardTitle className="text-sm font-medium">
+                Risk Factors
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               {result.isDisabled && (
@@ -216,22 +265,23 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
                   <span className="text-sm">Inbox is full</span>
                 </div>
               )}
-              {riskReasons.length > 0 ? (
-                riskReasons.map((reason, idx) => (
-                  <div key={idx} className="flex items-start gap-2">
-                    {reason.includes('Valid') || reason.includes('found') ? (
-                      <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
-                    ) : (
-                      <AlertTriangle className="h-4 w-4 text-yellow-500 mt-0.5 flex-shrink-0" />
-                    )}
-                    <span className="text-sm">{reason}</span>
-                  </div>
-                ))
-              ) : (
-                !result.isDisabled && !result.hasFullInbox && (
-                  <div className="text-sm text-muted-foreground italic">No risk factors detected</div>
-                )
-              )}
+              {riskReasons.length > 0
+                ? riskReasons.map((reason, idx) => (
+                    <div key={idx} className="flex items-start gap-2">
+                      {reason.includes('Valid') || reason.includes('found') ? (
+                        <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
+                      ) : (
+                        <AlertTriangle className="h-4 w-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                      )}
+                      <span className="text-sm">{reason}</span>
+                    </div>
+                  ))
+                : !result.isDisabled &&
+                  !result.hasFullInbox && (
+                    <div className="text-sm text-muted-foreground italic">
+                      No risk factors detected
+                    </div>
+                  )}
             </CardContent>
           </Card>
 
@@ -242,35 +292,54 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
             <CardContent>
               <div className="flex flex-wrap gap-2">
                 {result.isDisposable && (
-                  <Badge variant="outline" className="border-orange-500 text-orange-500">
+                  <Badge
+                    variant="outline"
+                    className="border-orange-500 text-orange-500"
+                  >
                     Disposable
                   </Badge>
                 )}
                 {result.isRoleAccount && (
-                  <Badge variant="outline" className="border-yellow-500 text-yellow-500">
+                  <Badge
+                    variant="outline"
+                    className="border-yellow-500 text-yellow-500"
+                  >
                     Role Account
                   </Badge>
                 )}
                 {result.isCatchAll && (
-                  <Badge variant="outline" className="border-blue-500 text-blue-500">
+                  <Badge
+                    variant="outline"
+                    className="border-blue-500 text-blue-500"
+                  >
                     Catch-All
                   </Badge>
                 )}
                 {result.isB2c && (
-                  <Badge variant="outline" className="border-purple-500 text-purple-500">
+                  <Badge
+                    variant="outline"
+                    className="border-purple-500 text-purple-500"
+                  >
                     <Building2 className="h-3 w-3 mr-1" />
                     B2C Provider
                   </Badge>
                 )}
                 {result.haveibeenpwned && (
-                  <Badge variant="outline" className="border-red-500 text-red-500">
+                  <Badge
+                    variant="outline"
+                    className="border-red-500 text-red-500"
+                  >
                     <ShieldAlert className="h-3 w-3 mr-1" />
                     Breached
                   </Badge>
                 )}
-                {!result.isDisposable && !result.isRoleAccount && !result.isCatchAll && !result.isB2c && !result.haveibeenpwned && (
-                  <Badge variant="outline">None</Badge>
-                )}
+                {!result.isDisposable &&
+                  !result.isRoleAccount &&
+                  !result.isCatchAll &&
+                  !result.isB2c &&
+                  !result.haveibeenpwned && (
+                    <Badge variant="outline">None</Badge>
+                  )}
               </div>
             </CardContent>
           </Card>
@@ -285,7 +354,11 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
               </CardHeader>
               <CardContent>
                 <div className="text-sm">
-                  Did you mean <span className="font-semibold text-green-600">{result.suggestion}</span>?
+                  Did you mean{' '}
+                  <span className="font-semibold text-green-600">
+                    {result.suggestion}
+                  </span>
+                  ?
                 </div>
               </CardContent>
             </Card>
@@ -293,18 +366,23 @@ export function ResultDetails({ result, open, onOpenChange, onFixEmail }: Result
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Verdict Reason</CardTitle>
+              <CardTitle className="text-sm font-medium">
+                Verdict Reason
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="p-3 rounded-md bg-muted/50 border text-sm">
-                {result.reason || "No specific reason provided by validation engine."}
+                {result.reason ||
+                  'No specific reason provided by validation engine.'}
               </div>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Technical Logs</CardTitle>
+              <CardTitle className="text-sm font-medium">
+                Technical Logs
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="h-[200px] rounded-md border bg-black p-4 font-mono text-[11px] leading-relaxed text-green-400 overflow-auto">

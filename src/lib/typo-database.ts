@@ -31,7 +31,7 @@ export function suggestCorrection(email: string): string | null {
 
 export function detectTypos(emails: string[]): Map<string, string> {
   const corrections = new Map<string, string>();
-  emails.forEach(email => {
+  emails.forEach((email) => {
     const correction = suggestCorrection(email);
     if (correction) corrections.set(email, correction);
   });

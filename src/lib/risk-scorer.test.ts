@@ -1,9 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { calculateRiskScore, getRiskLevel, getRiskColor, getRiskReasons } from './risk-scorer';
+import {
+  calculateRiskScore,
+  getRiskLevel,
+  getRiskColor,
+  getRiskReasons,
+} from './risk-scorer';
 import { ValidationResult } from '@/lib/types';
 
 describe('risk-scorer', () => {
-  const createMockResult = (overrides: Partial<ValidationResult> = {}): ValidationResult => ({
+  const createMockResult = (
+    overrides: Partial<ValidationResult> = {}
+  ): ValidationResult => ({
     email: 'test@example.com',
     result: 'Safe',
     reason: 'Valid',

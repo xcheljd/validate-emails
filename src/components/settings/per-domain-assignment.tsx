@@ -107,7 +107,9 @@ export function PerDomainAssignment({
                     !assignedProxy && 'text-muted-foreground'
                   )}
                   value={assignedId}
-                  onChange={(e) => handleAssignmentChange(domain.id, e.target.value)}
+                  onChange={(e) =>
+                    handleAssignmentChange(domain.id, e.target.value)
+                  }
                   disabled={disabled}
                   aria-label={`Select proxy for ${domain.label}`}
                 >

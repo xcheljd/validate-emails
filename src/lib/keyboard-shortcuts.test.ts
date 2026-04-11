@@ -32,63 +32,63 @@ describe('useKeyboardShortcuts', () => {
 
   it('should trigger startValidation on Ctrl+Enter', () => {
     renderHook(() => useKeyboardShortcuts(handlers));
-    
+
     const event = new KeyboardEvent('keydown', {
       key: 'Enter',
       ctrlKey: true,
-      bubbles: true
+      bubbles: true,
     });
-    
+
     window.dispatchEvent(event);
     expect(handlers.startValidation).toHaveBeenCalled();
   });
 
   it('should trigger exportCSV on Ctrl+e', () => {
     renderHook(() => useKeyboardShortcuts(handlers));
-    
+
     const event = new KeyboardEvent('keydown', {
       key: 'e',
       ctrlKey: true,
-      bubbles: true
+      bubbles: true,
     });
-    
+
     window.dispatchEvent(event);
     expect(handlers.exportCSV).toHaveBeenCalled();
   });
 
   it('should trigger stopValidation on Escape', () => {
     renderHook(() => useKeyboardShortcuts(handlers));
-    
+
     const event = new KeyboardEvent('keydown', {
       key: 'Escape',
-      bubbles: true
+      bubbles: true,
     });
-    
+
     window.dispatchEvent(event);
     expect(handlers.stopValidation).toHaveBeenCalled();
   });
 
   it('should not trigger handler if modifier key is missing for Ctrl shortcuts', () => {
     renderHook(() => useKeyboardShortcuts(handlers));
-    
+
     const event = new KeyboardEvent('keydown', {
       key: 'e', // Missing Ctrl
-      bubbles: true
+      bubbles: true,
     });
-    
+
     window.dispatchEvent(event);
     expect(handlers.exportCSV).not.toHaveBeenCalled();
   });
 
   it('should respect Meta key (Command) for Mac users', () => {
     renderHook(() => useKeyboardShortcuts(handlers));
-    
+
     const event = new KeyboardEvent('keydown', {
       key: 'Enter',
       metaKey: true,
-      bubbles: true
+      bubbles: true,
     });
-    
+
     window.dispatchEvent(event);
     expect(handlers.startValidation).toHaveBeenCalled();
   });

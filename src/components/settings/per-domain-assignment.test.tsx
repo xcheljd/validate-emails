@@ -158,9 +158,14 @@ describe('PerDomainAssignment', () => {
         />
       );
       const gmailDropdown = screen.getByLabelText('Select proxy for Gmail');
-      fireEvent.change(gmailDropdown, { target: { value: '192.168.1.1:8080' } });
+      fireEvent.change(gmailDropdown, {
+        target: { value: '192.168.1.1:8080' },
+      });
 
-      expect(mockHandlers.onAssign).toHaveBeenCalledWith('gmail.com', '192.168.1.1:8080');
+      expect(mockHandlers.onAssign).toHaveBeenCalledWith(
+        'gmail.com',
+        '192.168.1.1:8080'
+      );
     });
 
     it('calls onAssign with null when selecting default option', () => {
@@ -191,15 +196,25 @@ describe('PerDomainAssignment', () => {
 
       // Assign proxy to Gmail
       const gmailDropdown = screen.getByLabelText('Select proxy for Gmail');
-      fireEvent.change(gmailDropdown, { target: { value: '192.168.1.1:8080' } });
+      fireEvent.change(gmailDropdown, {
+        target: { value: '192.168.1.1:8080' },
+      });
 
       // Assign different proxy to Yahoo
       const yahooDropdown = screen.getByLabelText('Select proxy for Yahoo');
       fireEvent.change(yahooDropdown, { target: { value: '10.0.0.1:1080' } });
 
       expect(mockHandlers.onAssign).toHaveBeenCalledTimes(2);
-      expect(mockHandlers.onAssign).toHaveBeenNthCalledWith(1, 'gmail.com', '192.168.1.1:8080');
-      expect(mockHandlers.onAssign).toHaveBeenNthCalledWith(2, 'yahoo.com', '10.0.0.1:1080');
+      expect(mockHandlers.onAssign).toHaveBeenNthCalledWith(
+        1,
+        'gmail.com',
+        '192.168.1.1:8080'
+      );
+      expect(mockHandlers.onAssign).toHaveBeenNthCalledWith(
+        2,
+        'yahoo.com',
+        '10.0.0.1:1080'
+      );
     });
   });
 

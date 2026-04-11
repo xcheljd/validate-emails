@@ -46,14 +46,18 @@ describe('useEmailValidation', () => {
   });
 
   it('should initialize with empty results', () => {
-    const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useEmailValidation(), {
+      wrapper: createWrapper(),
+    });
     expect(result.current.results).toEqual([]);
     expect(result.current.isProcessing).toBe(false);
   });
 
   it('should set isProcessing to true when validation starts', () => {
     mockInvoke.mockResolvedValueOnce([]);
-    const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useEmailValidation(), {
+      wrapper: createWrapper(),
+    });
 
     act(() => {
       result.current.startValidation(['test@example.com']);
@@ -65,7 +69,9 @@ describe('useEmailValidation', () => {
 
   it('should transition to paused state when pause is called', async () => {
     mockInvoke.mockResolvedValueOnce([]);
-    const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useEmailValidation(), {
+      wrapper: createWrapper(),
+    });
 
     act(() => {
       result.current.startValidation(['test@example.com']);
@@ -81,7 +87,9 @@ describe('useEmailValidation', () => {
 
   it('should transition to idle state when stop is called', async () => {
     mockInvoke.mockResolvedValueOnce([]);
-    const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useEmailValidation(), {
+      wrapper: createWrapper(),
+    });
 
     act(() => {
       result.current.startValidation(['test@example.com']);
@@ -102,7 +110,7 @@ describe('useEmailValidation', () => {
       const mutationPromise = new Promise((resolve) => {
         resolveMutation = resolve;
       });
-      
+
       mockInvoke.mockImplementation((cmd: string) => {
         if (cmd === 'validate_emails_bulk') {
           return mutationPromise;
@@ -110,7 +118,9 @@ describe('useEmailValidation', () => {
         return Promise.resolve(undefined);
       });
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       // Start validation
       await act(async () => {
@@ -127,7 +137,7 @@ describe('useEmailValidation', () => {
 
       // Should show direct connection indicator
       expect(result.current.usingDirectConnection).toBe(true);
-      
+
       // Resolve the mutation
       await act(async () => {
         resolveMutation!([]);
@@ -140,7 +150,9 @@ describe('useEmailValidation', () => {
       mockInvoke.mockResolvedValueOnce(undefined); // set_proxy_bypass_for_session
       mockInvoke.mockResolvedValueOnce([]); // validate_emails_bulk on resume
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       await act(async () => {
         result.current.startValidation(['test@example.com'], 5, 'standard');
@@ -162,7 +174,9 @@ describe('useEmailValidation', () => {
       });
 
       // Should have called set_proxy_bypass_for_session with bypass=true
-      expect(mockInvoke).toHaveBeenCalledWith('set_proxy_bypass_for_session', { bypass: true });
+      expect(mockInvoke).toHaveBeenCalledWith('set_proxy_bypass_for_session', {
+        bypass: true,
+      });
     });
 
     it('should preserve proxy settings for future sessions', async () => {
@@ -171,7 +185,9 @@ describe('useEmailValidation', () => {
       mockInvoke.mockResolvedValueOnce(undefined); // set_proxy_bypass_for_session
       mockInvoke.mockResolvedValueOnce([]); // validate_emails_bulk on resume
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       await act(async () => {
         result.current.startValidation(['test@example.com'], 5, 'standard');
@@ -195,7 +211,8 @@ describe('useEmailValidation', () => {
       // Should NOT have called update_proxy_pool_config with enabled: false
       // (which would permanently disable proxy)
       const updateProxyCall = mockInvoke.mock.calls.find(
-        (call) => call[0] === 'update_proxy_pool_config' && call[1]?.enabled === false
+        (call) =>
+          call[0] === 'update_proxy_pool_config' && call[1]?.enabled === false
       );
       expect(updateProxyCall).toBeUndefined();
     });
@@ -211,7 +228,9 @@ describe('useEmailValidation', () => {
         return Promise.resolve(undefined);
       });
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       // Start validation
       await act(async () => {
@@ -221,13 +240,15 @@ describe('useEmailValidation', () => {
       // Set all proxies failed state with cooldown
       await act(async () => {
         result.current.setAllProxiesFailedStateForTest?.({
-          failedProxies: [{
-            id: '192.168.1.1:8080',
-            isBad: false,
-            remainingCooldownSecs: 30,
-            consecutiveFailures: 2,
-            successRate: 50,
-          }],
+          failedProxies: [
+            {
+              id: '192.168.1.1:8080',
+              isBad: false,
+              remainingCooldownSecs: 30,
+              consecutiveFailures: 2,
+              successRate: 50,
+            },
+          ],
           proxyEnabled: true,
           totalProxies: 1,
           badCount: 0,
@@ -243,7 +264,7 @@ describe('useEmailValidation', () => {
 
       // Should be in waiting state (status should be 'waiting')
       expect(result.current.status).toBe('waiting');
-      
+
       // Should show waiting message
       expect(result.current.waitingForProxy).toBe(true);
       expect(result.current.waitingCooldownSecs).toBe(30);
@@ -257,7 +278,9 @@ describe('useEmailValidation', () => {
         return Promise.resolve(undefined);
       });
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       await act(async () => {
         result.current.startValidation(['test@example.com'], 5, 'standard');
@@ -265,13 +288,15 @@ describe('useEmailValidation', () => {
 
       await act(async () => {
         result.current.setAllProxiesFailedStateForTest?.({
-          failedProxies: [{
-            id: '192.168.1.1:8080',
-            isBad: false,
-            remainingCooldownSecs: 30,
-            consecutiveFailures: 2,
-            successRate: 50,
-          }],
+          failedProxies: [
+            {
+              id: '192.168.1.1:8080',
+              isBad: false,
+              remainingCooldownSecs: 30,
+              consecutiveFailures: 2,
+              successRate: 50,
+            },
+          ],
           proxyEnabled: true,
           totalProxies: 1,
           badCount: 0,
@@ -316,7 +341,9 @@ describe('useEmailValidation', () => {
         return Promise.resolve(undefined);
       });
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       await act(async () => {
         result.current.startValidation(['test@example.com'], 5, 'standard');
@@ -324,13 +351,15 @@ describe('useEmailValidation', () => {
 
       await act(async () => {
         result.current.setAllProxiesFailedStateForTest?.({
-          failedProxies: [{
-            id: '192.168.1.1:8080',
-            isBad: false,
-            remainingCooldownSecs: 5,
-            consecutiveFailures: 2,
-            successRate: 50,
-          }],
+          failedProxies: [
+            {
+              id: '192.168.1.1:8080',
+              isBad: false,
+              remainingCooldownSecs: 5,
+              consecutiveFailures: 2,
+              successRate: 50,
+            },
+          ],
           proxyEnabled: true,
           totalProxies: 1,
           badCount: 0,
@@ -356,7 +385,7 @@ describe('useEmailValidation', () => {
       expect(result.current.waitingForProxy).toBe(false);
       // Status should be 'processing' since mutation is still pending
       expect(result.current.status).toBe('processing');
-      
+
       // Resolve the mutation to complete
       await act(async () => {
         resolveMutation!([]);
@@ -375,7 +404,9 @@ describe('useEmailValidation', () => {
         return Promise.resolve(undefined);
       });
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       await act(async () => {
         result.current.startValidation(['test@example.com'], 5, 'standard');
@@ -386,13 +417,15 @@ describe('useEmailValidation', () => {
 
       await act(async () => {
         result.current.setAllProxiesFailedStateForTest?.({
-          failedProxies: [{
-            id: '192.168.1.1:8080',
-            isBad: true, // Bad, not in cooldown
-            remainingCooldownSecs: 0,
-            consecutiveFailures: 3,
-            successRate: 0,
-          }],
+          failedProxies: [
+            {
+              id: '192.168.1.1:8080',
+              isBad: true, // Bad, not in cooldown
+              remainingCooldownSecs: 0,
+              consecutiveFailures: 3,
+              successRate: 0,
+            },
+          ],
           proxyEnabled: true,
           totalProxies: 1,
           badCount: 1,
@@ -410,7 +443,7 @@ describe('useEmailValidation', () => {
       expect(result.current.waitingForProxy).toBe(false);
       // Status should still be processing since retryWithCooldown didn't change it
       expect(result.current.status).toBe('processing');
-      
+
       // Cleanup
       await act(async () => {
         resolveMutation!([]);
@@ -429,7 +462,9 @@ describe('useEmailValidation', () => {
         return Promise.resolve(undefined);
       });
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       await act(async () => {
         result.current.startValidation(['test@example.com'], 5, 'standard');
@@ -437,13 +472,15 @@ describe('useEmailValidation', () => {
 
       await act(async () => {
         result.current.setAllProxiesFailedStateForTest?.({
-          failedProxies: [{
-            id: '192.168.1.1:8080',
-            isBad: false,
-            remainingCooldownSecs: 2,
-            consecutiveFailures: 2,
-            successRate: 50,
-          }],
+          failedProxies: [
+            {
+              id: '192.168.1.1:8080',
+              isBad: false,
+              remainingCooldownSecs: 2,
+              consecutiveFailures: 2,
+              successRate: 50,
+            },
+          ],
           proxyEnabled: true,
           totalProxies: 1,
           badCount: 0,
@@ -465,7 +502,7 @@ describe('useEmailValidation', () => {
 
       // Should have cleared the failed state
       expect(result.current.allProxiesFailedState).toBeNull();
-      
+
       // Resolve mutation to clean up
       await act(async () => {
         resolveMutation!([]);
@@ -479,7 +516,9 @@ describe('useEmailValidation', () => {
       mockInvoke.mockResolvedValueOnce(undefined); // clear_proxy_bypass_for_session
       mockInvoke.mockResolvedValueOnce(undefined); // stop_validation
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       // Start validation
       await act(async () => {
@@ -489,13 +528,15 @@ describe('useEmailValidation', () => {
       // Simulate all proxies failed (modal would appear)
       await act(async () => {
         result.current.setAllProxiesFailedStateForTest?.({
-          failedProxies: [{
-            id: '192.168.1.1:8080',
-            isBad: true,
-            remainingCooldownSecs: 0,
-            consecutiveFailures: 3,
-            successRate: 0,
-          }],
+          failedProxies: [
+            {
+              id: '192.168.1.1:8080',
+              isBad: true,
+              remainingCooldownSecs: 0,
+              consecutiveFailures: 3,
+              successRate: 0,
+            },
+          ],
           proxyEnabled: true,
           totalProxies: 1,
           badCount: 1,
@@ -524,15 +565,22 @@ describe('useEmailValidation', () => {
           return new Promise(() => {}); // Never resolves - simulates in-progress
         }
         if (cmd === 'stop_validation') return Promise.resolve(undefined);
-        if (cmd === 'clear_proxy_bypass_for_session') return Promise.resolve(undefined);
+        if (cmd === 'clear_proxy_bypass_for_session')
+          return Promise.resolve(undefined);
         return Promise.resolve(undefined);
       });
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       // Start validation
       await act(async () => {
-        result.current.startValidation(['test@example.com', 'test2@example.com'], 5, 'standard');
+        result.current.startValidation(
+          ['test@example.com', 'test2@example.com'],
+          5,
+          'standard'
+        );
       });
 
       // Manually add some partial results (simulating validation-progress events)
@@ -566,13 +614,15 @@ describe('useEmailValidation', () => {
       // Simulate all proxies failed
       await act(async () => {
         result.current.setAllProxiesFailedStateForTest?.({
-          failedProxies: [{
-            id: '192.168.1.1:8080',
-            isBad: true,
-            remainingCooldownSecs: 0,
-            consecutiveFailures: 3,
-            successRate: 0,
-          }],
+          failedProxies: [
+            {
+              id: '192.168.1.1:8080',
+              isBad: true,
+              remainingCooldownSecs: 0,
+              consecutiveFailures: 3,
+              successRate: 0,
+            },
+          ],
           proxyEnabled: true,
           totalProxies: 1,
           badCount: 1,
@@ -600,11 +650,14 @@ describe('useEmailValidation', () => {
           return new Promise(() => {}); // Never resolves
         }
         if (cmd === 'stop_validation') return Promise.resolve(undefined);
-        if (cmd === 'clear_proxy_bypass_for_session') return Promise.resolve(undefined);
+        if (cmd === 'clear_proxy_bypass_for_session')
+          return Promise.resolve(undefined);
         return Promise.resolve(undefined);
       });
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       // Start validation
       await act(async () => {
@@ -614,13 +667,15 @@ describe('useEmailValidation', () => {
       // Simulate all proxies failed with cooldown
       await act(async () => {
         result.current.setAllProxiesFailedStateForTest?.({
-          failedProxies: [{
-            id: '192.168.1.1:8080',
-            isBad: false,
-            remainingCooldownSecs: 60,
-            consecutiveFailures: 2,
-            successRate: 50,
-          }],
+          failedProxies: [
+            {
+              id: '192.168.1.1:8080',
+              isBad: false,
+              remainingCooldownSecs: 60,
+              consecutiveFailures: 2,
+              successRate: 50,
+            },
+          ],
           proxyEnabled: true,
           totalProxies: 1,
           badCount: 0,
@@ -657,11 +712,14 @@ describe('useEmailValidation', () => {
           return new Promise(() => {}); // Never resolves
         }
         if (cmd === 'stop_validation') return Promise.resolve(undefined);
-        if (cmd === 'clear_proxy_bypass_for_session') return Promise.resolve(undefined);
+        if (cmd === 'clear_proxy_bypass_for_session')
+          return Promise.resolve(undefined);
         return Promise.resolve(undefined);
       });
 
-      const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+      const { result } = renderHook(() => useEmailValidation(), {
+        wrapper: createWrapper(),
+      });
 
       await act(async () => {
         result.current.startValidation(['test@example.com'], 5, 'standard');
@@ -669,13 +727,15 @@ describe('useEmailValidation', () => {
 
       await act(async () => {
         result.current.setAllProxiesFailedStateForTest?.({
-          failedProxies: [{
-            id: '192.168.1.1:8080',
-            isBad: false,
-            remainingCooldownSecs: 30,
-            consecutiveFailures: 2,
-            successRate: 50,
-          }],
+          failedProxies: [
+            {
+              id: '192.168.1.1:8080',
+              isBad: false,
+              remainingCooldownSecs: 30,
+              consecutiveFailures: 2,
+              successRate: 50,
+            },
+          ],
           proxyEnabled: true,
           totalProxies: 1,
           badCount: 0,

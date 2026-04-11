@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { 
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -11,8 +11,24 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { Trash2, Edit2, Plus, ListPlus, Shield, AlertCircle, Timer, RefreshCw } from 'lucide-react';
-import { ProxyConfig, ProxyStats, getProxyId, isProxyInCooldown, getRemainingCooldown, formatCooldown } from '@/hooks/use-settings';
+import {
+  Trash2,
+  Edit2,
+  Plus,
+  ListPlus,
+  Shield,
+  AlertCircle,
+  Timer,
+  RefreshCw,
+} from 'lucide-react';
+import {
+  ProxyConfig,
+  ProxyStats,
+  getProxyId,
+  isProxyInCooldown,
+  getRemainingCooldown,
+  formatCooldown,
+} from '@/hooks/use-settings';
 import { HealthIndicator } from './health-indicator';
 import { cn } from '@/lib/utils';
 
@@ -32,7 +48,9 @@ function parseProxyString(input: string): ProxyConfig | null {
   if (!trimmed) return null;
 
   // Try socks5://user:pass@host:port format
-  const socks5WithAuth = trimmed.match(/^socks5:\/\/([^:]+):([^@]+)@([^:]+):(\d+)$/i);
+  const socks5WithAuth = trimmed.match(
+    /^socks5:\/\/([^:]+):([^@]+)@([^:]+):(\d+)$/i
+  );
   if (socks5WithAuth) {
     const [, username, password, host, portStr] = socks5WithAuth;
     const port = parseInt(portStr, 10);
@@ -86,20 +104,20 @@ const defaultStats: ProxyStats = {
   cooldownUntil: null,
 };
 
-export function ProxyList({ 
-  proxies, 
-  proxyStats = {}, 
-  onAdd, 
-  onUpdate, 
+export function ProxyList({
+  proxies,
+  proxyStats = {},
+  onAdd,
+  onUpdate,
   onDelete,
   onBypassCooldown,
-  disabled = false 
+  disabled = false,
 }: ProxyListProps) {
   const [inputValue, setInputValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [showBulkAdd, setShowBulkAdd] = useState(false);
   const [bulkInput, setBulkInput] = useState('');
-  
+
   // Edit dialog state
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [editHost, setEditHost] = useState('');
@@ -107,84 +125,90 @@ export function ProxyList({
   const [editUsername, setEditUsername] = useState('');
   const [editPassword, setEditPassword] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
-  
+
   // Delete confirmation dialog state
   const [deleteIndex, setDeleteIndex] = useState<number | null>(null);
-  
+
   // Cooldown timer update state
   const [, setTick] = useState(0);
-  
+
   // Update cooldown timers every second
   useEffect(() => {
     const interval = setInterval(() => {
-      setTick(t => t + 1);
+      setTick((t) => t + 1);
     }, 1000);
     return () => clearInterval(interval);
   }, []);
 
   const handleAddProxy = useCallback(() => {
     const proxy = parseProxyString(inputValue);
-    
+
     if (!proxy) {
       setError('Invalid format. Use host:port or socks5://user:pass@host:port');
       return;
     }
-    
+
     if (proxy.port <= 0 || proxy.port > 65535) {
       setError('Invalid port. Port must be between 1 and 65535');
       return;
     }
-    
+
     // Check for duplicates
-    const isDuplicate = proxies.some(p => isDuplicateProxy(p, proxy));
+    const isDuplicate = proxies.some((p) => isDuplicateProxy(p, proxy));
     if (isDuplicate) {
       setError('This proxy already exists in your list');
       return;
     }
-    
+
     onAdd(proxy);
     setInputValue('');
     setError(null);
   }, [inputValue, proxies, onAdd]);
 
-  const handleInputChange = useCallback((value: string) => {
-    setInputValue(value);
-    if (error) setError(null);
-  }, [error]);
+  const handleInputChange = useCallback(
+    (value: string) => {
+      setInputValue(value);
+      if (error) setError(null);
+    },
+    [error]
+  );
 
   const handleBulkAdd = useCallback(() => {
-    const lines = bulkInput.split('\n').filter(line => line.trim());
+    const lines = bulkInput.split('\n').filter((line) => line.trim());
     let addedCount = 0;
-    
+
     for (const line of lines) {
       const proxy = parseProxyString(line);
       if (proxy) {
         // Check for duplicates within existing proxies
-        const isDuplicate = proxies.some(p => isDuplicateProxy(p, proxy));
+        const isDuplicate = proxies.some((p) => isDuplicateProxy(p, proxy));
         if (!isDuplicate) {
           onAdd(proxy);
           addedCount++;
         }
       }
     }
-    
+
     setBulkInput('');
     setShowBulkAdd(false);
   }, [bulkInput, proxies, onAdd]);
 
-  const handleEditClick = useCallback((index: number) => {
-    const proxy = proxies[index];
-    setEditIndex(index);
-    setEditHost(proxy.host);
-    setEditPort(proxy.port.toString());
-    setEditUsername(proxy.username || '');
-    setEditPassword(proxy.password || '');
-    setEditError(null);
-  }, [proxies]);
+  const handleEditClick = useCallback(
+    (index: number) => {
+      const proxy = proxies[index];
+      setEditIndex(index);
+      setEditHost(proxy.host);
+      setEditPort(proxy.port.toString());
+      setEditUsername(proxy.username || '');
+      setEditPassword(proxy.password || '');
+      setEditError(null);
+    },
+    [proxies]
+  );
 
   const handleEditSave = useCallback(() => {
     if (editIndex === null) return;
-    
+
     const port = parseInt(editPort, 10);
     if (!editHost.trim()) {
       setEditError('Host is required');
@@ -194,25 +218,35 @@ export function ProxyList({
       setEditError('Port must be between 1 and 65535');
       return;
     }
-    
+
     const updatedProxy: ProxyConfig = {
       host: editHost.trim(),
       port,
       username: editUsername.trim() || undefined,
       password: editPassword.trim() || undefined,
     };
-    
+
     // Check for duplicates (excluding current proxy)
-    const isDuplicate = proxies.some((p, i) => i !== editIndex && isDuplicateProxy(p, updatedProxy));
+    const isDuplicate = proxies.some(
+      (p, i) => i !== editIndex && isDuplicateProxy(p, updatedProxy)
+    );
     if (isDuplicate) {
       setEditError('This proxy already exists');
       return;
     }
-    
+
     onUpdate(editIndex, updatedProxy);
     setEditIndex(null);
     setEditError(null);
-  }, [editIndex, editHost, editPort, editUsername, editPassword, proxies, onUpdate]);
+  }, [
+    editIndex,
+    editHost,
+    editPort,
+    editUsername,
+    editPassword,
+    proxies,
+    onUpdate,
+  ]);
 
   const handleDeleteConfirm = useCallback(() => {
     if (deleteIndex === null) return;
@@ -228,7 +262,7 @@ export function ProxyList({
           {proxies.length} configured
         </span>
       </div>
-      
+
       {/* Add proxy form */}
       <div className="space-y-2">
         <div className="flex gap-2">
@@ -242,8 +276,8 @@ export function ProxyList({
               className={cn(error && 'border-destructive')}
             />
           </div>
-          <Button 
-            onClick={handleAddProxy} 
+          <Button
+            onClick={handleAddProxy}
             size="sm"
             disabled={disabled || !inputValue.trim()}
           >
@@ -260,14 +294,14 @@ export function ProxyList({
             Bulk
           </Button>
         </div>
-        
+
         {error && (
           <div className="flex items-center gap-2 text-sm text-destructive">
             <AlertCircle className="h-4 w-4" />
             {error}
           </div>
         )}
-        
+
         {/* Bulk add textarea */}
         {showBulkAdd && (
           <div className="space-y-2 pt-2">
@@ -279,8 +313,8 @@ export function ProxyList({
               disabled={disabled}
             />
             <div className="flex justify-end gap-2">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 size="sm"
                 onClick={() => {
                   setShowBulkAdd(false);
@@ -289,7 +323,7 @@ export function ProxyList({
               >
                 Cancel
               </Button>
-              <Button 
+              <Button
                 size="sm"
                 onClick={handleBulkAdd}
                 disabled={disabled || !bulkInput.trim()}
@@ -301,14 +335,16 @@ export function ProxyList({
           </div>
         )}
       </div>
-      
+
       {/* Proxy list */}
       <div className="border rounded-md min-h-[120px] bg-muted/30">
         {proxies.length === 0 ? (
           <div className="text-center text-sm text-muted-foreground py-6">
             <Shield className="h-8 w-8 mx-auto mb-2 opacity-50" />
             <p>No proxies configured</p>
-            <p className="text-xs mt-1">Add proxies to enable proxy-based validation</p>
+            <p className="text-xs mt-1">
+              Add proxies to enable proxy-based validation
+            </p>
           </div>
         ) : (
           <div className="divide-y">
@@ -317,17 +353,24 @@ export function ProxyList({
               const stats = proxyStats[proxyId] || defaultStats;
               const inCooldown = isProxyInCooldown(stats);
               const remainingCooldown = getRemainingCooldown(stats);
-              
+
               return (
                 <div
                   key={proxyKey(proxy, index)}
                   className={cn(
-                    "flex items-center justify-between px-3 py-2 text-sm transition-colors",
-                    inCooldown ? "bg-orange-50 dark:bg-orange-950/20" : "hover:bg-muted/50"
+                    'flex items-center justify-between px-3 py-2 text-sm transition-colors',
+                    inCooldown
+                      ? 'bg-orange-50 dark:bg-orange-950/20'
+                      : 'hover:bg-muted/50'
                   )}
                 >
                   <div className="flex items-center gap-3">
-                    <span className={cn("font-mono", inCooldown && "text-muted-foreground")}>
+                    <span
+                      className={cn(
+                        'font-mono',
+                        inCooldown && 'text-muted-foreground'
+                      )}
+                    >
                       {proxy.host}:{proxy.port}
                     </span>
                     {proxy.username && (
@@ -339,7 +382,10 @@ export function ProxyList({
                     <HealthIndicator stats={stats} showBadIndicator compact />
                     {/* Cooldown timer */}
                     {inCooldown && (
-                      <Badge variant="outline" className="text-xs text-orange-600 dark:text-orange-400 border-orange-300 dark:border-orange-700">
+                      <Badge
+                        variant="outline"
+                        className="text-xs text-orange-600 dark:text-orange-400 border-orange-300 dark:border-orange-700"
+                      >
                         <Timer className="h-3 w-3 mr-1" />
                         {formatCooldown(remainingCooldown)}
                       </Badge>
@@ -388,19 +434,25 @@ export function ProxyList({
           </div>
         )}
       </div>
-      
+
       {/* Edit Dialog */}
-      <Dialog open={editIndex !== null} onOpenChange={(open) => !open && setEditIndex(null)}>
+      <Dialog
+        open={editIndex !== null}
+        onOpenChange={(open) => !open && setEditIndex(null)}
+      >
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle>Edit Proxy</DialogTitle>
             <DialogDescription>
-              Modify the proxy configuration. Changes will be saved when you click Save.
+              Modify the proxy configuration. Changes will be saved when you
+              click Save.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="edit-host" className="text-right">Host</Label>
+              <Label htmlFor="edit-host" className="text-right">
+                Host
+              </Label>
               <Input
                 id="edit-host"
                 value={editHost}
@@ -412,7 +464,9 @@ export function ProxyList({
               />
             </div>
             <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="edit-port" className="text-right">Port</Label>
+              <Label htmlFor="edit-port" className="text-right">
+                Port
+              </Label>
               <Input
                 id="edit-port"
                 type="number"
@@ -427,7 +481,9 @@ export function ProxyList({
               />
             </div>
             <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="edit-username" className="text-right">Username</Label>
+              <Label htmlFor="edit-username" className="text-right">
+                Username
+              </Label>
               <Input
                 id="edit-username"
                 value={editUsername}
@@ -437,7 +493,9 @@ export function ProxyList({
               />
             </div>
             <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="edit-password" className="text-right">Password</Label>
+              <Label htmlFor="edit-password" className="text-right">
+                Password
+              </Label>
               <Input
                 id="edit-password"
                 type="password"
@@ -462,16 +520,20 @@ export function ProxyList({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      
+
       {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteIndex !== null} onOpenChange={(open) => !open && setDeleteIndex(null)}>
+      <Dialog
+        open={deleteIndex !== null}
+        onOpenChange={(open) => !open && setDeleteIndex(null)}
+      >
         <DialogContent className="sm:max-w-[400px]">
           <DialogHeader>
             <DialogTitle>Remove Proxy</DialogTitle>
             <DialogDescription>
               Are you sure you want to remove{' '}
               <span className="font-mono font-medium">
-                {deleteIndex !== null && proxies[deleteIndex] && 
+                {deleteIndex !== null &&
+                  proxies[deleteIndex] &&
                   `${proxies[deleteIndex].host}:${proxies[deleteIndex].port}`}
               </span>
               ? This action cannot be undone.

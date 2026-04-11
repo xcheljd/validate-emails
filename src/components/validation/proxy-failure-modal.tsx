@@ -5,11 +5,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, Clock, XCircle, Timer } from "lucide-react";
-import { cn } from "@/lib/utils";
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { AlertTriangle, Clock, XCircle, Timer } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 export interface FailedProxyInfo {
   id: string;
@@ -55,8 +55,13 @@ export function ProxyFailureModal({
   onStop,
 }: ProxyFailureModalProps) {
   return (
-    <Dialog open={open} onOpenChange={() => {/* Modal can only be closed by choosing an option */}}>
-      <DialogContent 
+    <Dialog
+      open={open}
+      onOpenChange={() => {
+        /* Modal can only be closed by choosing an option */
+      }}
+    >
+      <DialogContent
         className="sm:max-w-lg"
         onPointerDownOutside={(e) => e.preventDefault()}
         onEscapeKeyDown={(e) => e.preventDefault()}
@@ -70,12 +75,18 @@ export function ProxyFailureModal({
           <DialogDescription asChild>
             <div className="space-y-2">
               <p>
-                All {totalProxies} configured {totalProxies === 1 ? 'proxy is' : 'proxies are'} currently unavailable.
+                All {totalProxies} configured{' '}
+                {totalProxies === 1 ? 'proxy is' : 'proxies are'} currently
+                unavailable.
               </p>
               <p className="text-sm">
-                <span className="text-destructive font-medium">{badCount} bad</span>
+                <span className="text-destructive font-medium">
+                  {badCount} bad
+                </span>
                 {' • '}
-                <span className="text-yellow-600 dark:text-yellow-400 font-medium">{cooldownCount} in cooldown</span>
+                <span className="text-yellow-600 dark:text-yellow-400 font-medium">
+                  {cooldownCount} in cooldown
+                </span>
               </p>
             </div>
           </DialogDescription>
@@ -87,10 +98,10 @@ export function ProxyFailureModal({
             <div
               key={proxy.id}
               className={cn(
-                "flex items-center justify-between p-3 rounded-lg border",
-                proxy.isBad 
-                  ? "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900" 
-                  : "bg-yellow-50 dark:bg-yellow-950/30 border-yellow-200 dark:border-yellow-900"
+                'flex items-center justify-between p-3 rounded-lg border',
+                proxy.isBad
+                  ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900'
+                  : 'bg-yellow-50 dark:bg-yellow-950/30 border-yellow-200 dark:border-yellow-900'
               )}
             >
               <div className="flex items-center gap-3">
@@ -102,13 +113,13 @@ export function ProxyFailureModal({
                 <span className="font-mono text-sm">{proxy.id}</span>
               </div>
               <div className="flex items-center gap-2">
-                <Badge 
-                  variant="outline" 
+                <Badge
+                  variant="outline"
                   className={cn(
-                    "text-xs",
-                    proxy.isBad 
-                      ? "border-red-300 text-red-600 dark:border-red-700 dark:text-red-400" 
-                      : "border-yellow-300 text-yellow-600 dark:border-yellow-700 dark:text-yellow-400"
+                    'text-xs',
+                    proxy.isBad
+                      ? 'border-red-300 text-red-600 dark:border-red-700 dark:text-red-400'
+                      : 'border-yellow-300 text-yellow-600 dark:border-yellow-700 dark:text-yellow-400'
                   )}
                 >
                   {proxy.successRate}%
@@ -118,7 +129,10 @@ export function ProxyFailureModal({
                     Failed
                   </Badge>
                 ) : proxy.remainingCooldownSecs > 0 ? (
-                  <Badge variant="outline" className="text-xs border-yellow-300 text-yellow-600 dark:border-yellow-700 dark:text-yellow-400">
+                  <Badge
+                    variant="outline"
+                    className="text-xs border-yellow-300 text-yellow-600 dark:border-yellow-700 dark:text-yellow-400"
+                  >
                     <Timer className="h-3 w-3 mr-1" />
                     {formatCooldownTime(proxy.remainingCooldownSecs)}
                   </Badge>
@@ -129,15 +143,11 @@ export function ProxyFailureModal({
         </div>
 
         <DialogFooter className="flex-col sm:flex-row gap-2">
-          <Button 
-            variant="ghost" 
-            onClick={onStop}
-            className="w-full sm:w-auto"
-          >
+          <Button variant="ghost" onClick={onStop} className="w-full sm:w-auto">
             Stop Validation
           </Button>
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             onClick={onRetryWithCooldown}
             disabled={cooldownCount === 0}
             className="w-full sm:w-auto"
@@ -148,13 +158,10 @@ export function ProxyFailureModal({
                 Retry with Cooldown ({formatCooldownTime(nearestCooldownSecs)})
               </>
             ) : (
-              "Retry with Cooldown"
+              'Retry with Cooldown'
             )}
           </Button>
-          <Button 
-            onClick={onContinueWithoutProxy}
-            className="w-full sm:w-auto"
-          >
+          <Button onClick={onContinueWithoutProxy} className="w-full sm:w-auto">
             Continue without Proxy
           </Button>
         </DialogFooter>

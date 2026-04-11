@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
-import { createSession, updateSessionProgress, loadSession, listSessions, deleteSession, cleanupOldSessions } from './session-manager';
+import {
+  createSession,
+  updateSessionProgress,
+  loadSession,
+  listSessions,
+  deleteSession,
+  cleanupOldSessions,
+} from './session-manager';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -82,7 +89,9 @@ describe('session-manager', () => {
 
     const result = await loadSession('test-session-1');
 
-    expect(invoke).toHaveBeenCalledWith('load_validation_session', { id: 'test-session-1' });
+    expect(invoke).toHaveBeenCalledWith('load_validation_session', {
+      id: 'test-session-1',
+    });
     expect(result).toEqual(mockSession);
   });
 
@@ -100,7 +109,9 @@ describe('session-manager', () => {
 
     await deleteSession('test-session-1');
 
-    expect(invoke).toHaveBeenCalledWith('delete_validation_session', { id: 'test-session-1' });
+    expect(invoke).toHaveBeenCalledWith('delete_validation_session', {
+      id: 'test-session-1',
+    });
   });
 
   it('cleanupOldSessions should invoke cleanup_old_sessions with correct parameters', async () => {

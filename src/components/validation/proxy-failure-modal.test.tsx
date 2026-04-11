@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { ProxyFailureModal, type ProxyFailureModalProps, type FailedProxyInfo } from './proxy-failure-modal';
+import {
+  ProxyFailureModal,
+  type ProxyFailureModalProps,
+  type FailedProxyInfo,
+} from './proxy-failure-modal';
 
 describe('ProxyFailureModal', () => {
   const mockFailedProxies: FailedProxyInfo[] = [
@@ -44,7 +48,9 @@ describe('ProxyFailureModal', () => {
 
     it('does not render when open is false', () => {
       render(<ProxyFailureModal {...defaultProps} open={false} />);
-      expect(screen.queryByText('All Proxies Unavailable')).not.toBeInTheDocument();
+      expect(
+        screen.queryByText('All Proxies Unavailable')
+      ).not.toBeInTheDocument();
     });
 
     it('shows the list of failed proxies', () => {
@@ -83,17 +89,23 @@ describe('ProxyFailureModal', () => {
   describe('three options', () => {
     it('shows Continue without proxy button', () => {
       render(<ProxyFailureModal {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /continue without proxy/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /continue without proxy/i })
+      ).toBeInTheDocument();
     });
 
     it('shows Retry with cooldown button when there are proxies in cooldown', () => {
       render(<ProxyFailureModal {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /retry with cooldown/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /retry with cooldown/i })
+      ).toBeInTheDocument();
     });
 
     it('shows Stop validation button', () => {
       render(<ProxyFailureModal {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /stop validation/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /stop validation/i })
+      ).toBeInTheDocument();
     });
 
     it('disables Retry button when no proxies are in cooldown', () => {
@@ -103,7 +115,9 @@ describe('ProxyFailureModal', () => {
         nearestCooldownSecs: 0,
       };
       render(<ProxyFailureModal {...props} />);
-      const retryButton = screen.getByRole('button', { name: /retry with cooldown/i });
+      const retryButton = screen.getByRole('button', {
+        name: /retry with cooldown/i,
+      });
       expect(retryButton).toBeDisabled();
     });
   });
@@ -111,24 +125,38 @@ describe('ProxyFailureModal', () => {
   describe('interactions', () => {
     it('calls onContinueWithoutProxy when Continue button is clicked', () => {
       const onContinueWithoutProxy = vi.fn();
-      render(<ProxyFailureModal {...defaultProps} onContinueWithoutProxy={onContinueWithoutProxy} />);
-      
-      fireEvent.click(screen.getByRole('button', { name: /continue without proxy/i }));
+      render(
+        <ProxyFailureModal
+          {...defaultProps}
+          onContinueWithoutProxy={onContinueWithoutProxy}
+        />
+      );
+
+      fireEvent.click(
+        screen.getByRole('button', { name: /continue without proxy/i })
+      );
       expect(onContinueWithoutProxy).toHaveBeenCalledTimes(1);
     });
 
     it('calls onRetryWithCooldown when Retry button is clicked', () => {
       const onRetryWithCooldown = vi.fn();
-      render(<ProxyFailureModal {...defaultProps} onRetryWithCooldown={onRetryWithCooldown} />);
-      
-      fireEvent.click(screen.getByRole('button', { name: /retry with cooldown/i }));
+      render(
+        <ProxyFailureModal
+          {...defaultProps}
+          onRetryWithCooldown={onRetryWithCooldown}
+        />
+      );
+
+      fireEvent.click(
+        screen.getByRole('button', { name: /retry with cooldown/i })
+      );
       expect(onRetryWithCooldown).toHaveBeenCalledTimes(1);
     });
 
     it('calls onStop when Stop button is clicked', () => {
       const onStop = vi.fn();
       render(<ProxyFailureModal {...defaultProps} onStop={onStop} />);
-      
+
       fireEvent.click(screen.getByRole('button', { name: /stop validation/i }));
       expect(onStop).toHaveBeenCalledTimes(1);
     });
@@ -152,20 +180,30 @@ describe('ProxyFailureModal', () => {
 
   describe('edge cases', () => {
     it('handles empty failed proxies list', () => {
-      render(<ProxyFailureModal {...defaultProps} failedProxies={[]} totalProxies={0} badCount={0} cooldownCount={0} />);
+      render(
+        <ProxyFailureModal
+          {...defaultProps}
+          failedProxies={[]}
+          totalProxies={0}
+          badCount={0}
+          cooldownCount={0}
+        />
+      );
       expect(screen.getByText('All Proxies Unavailable')).toBeInTheDocument();
     });
 
     it('formats cooldown time correctly for minutes', () => {
       const props = {
         ...defaultProps,
-        failedProxies: [{
-          id: '192.168.1.1:8080',
-          isBad: true,
-          remainingCooldownSecs: 125, // 2m 5s
-          consecutiveFailures: 3,
-          successRate: 0,
-        }],
+        failedProxies: [
+          {
+            id: '192.168.1.1:8080',
+            isBad: true,
+            remainingCooldownSecs: 125, // 2m 5s
+            consecutiveFailures: 3,
+            successRate: 0,
+          },
+        ],
         nearestCooldownSecs: 125,
       };
       render(<ProxyFailureModal {...props} />);

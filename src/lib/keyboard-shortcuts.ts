@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 
-export type ShortcutAction = 
+export type ShortcutAction =
   | 'startValidation'
   | 'pauseValidation'
   | 'resumeValidation'
@@ -14,7 +14,7 @@ export const keyboardShortcuts: Record<string, ShortcutAction> = {
   'Ctrl+Enter': 'startValidation',
   'Ctrl+p': 'pauseValidation',
   'Ctrl+r': 'resumeValidation',
-  'Escape': 'stopValidation',
+  Escape: 'stopValidation',
   'Ctrl+e': 'exportCSV',
   'Ctrl+,': 'openSettings',
   'Ctrl+h': 'openHistory',
@@ -36,7 +36,7 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
     const handleKeyDown = (event: KeyboardEvent) => {
       const isMod = event.ctrlKey || event.metaKey;
       let key = event.key;
-      
+
       // Normalize key
       if (key === 'Enter') key = 'Enter';
       else if (key === 'Escape') key = 'Escape';
@@ -54,7 +54,7 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
       if (shortcut && keyboardShortcuts[shortcut]) {
         const action = keyboardShortcuts[shortcut];
         const handler = handlers[action];
-        
+
         if (handler) {
           event.preventDefault();
           handler();

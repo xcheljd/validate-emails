@@ -14,8 +14,14 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
     const invalid = results.filter((r: any) => r.result === 'Invalid').length;
     const unknown = results.filter((r: any) => r.result === 'Unknown').length;
 
-    const durations = results.map((r: any) => r.validationDuration).filter((d: number) => d > 0);
-    const avgDuration = durations.length > 0 ? durations.reduce((a: number, b: number) => a + b, 0) / durations.length : 0;
+    const durations = results
+      .map((r: any) => r.validationDuration)
+      .filter((d: number) => d > 0);
+    const avgDuration =
+      durations.length > 0
+        ? durations.reduce((a: number, b: number) => a + b, 0) /
+          durations.length
+        : 0;
 
     return {
       total,
@@ -38,11 +44,21 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
   }, [results]);
 
   const riskCounts = useMemo(() => {
-    const veryLow = results.filter((r: any) => r.riskScore >= 0 && r.riskScore < 10).length;
-    const low = results.filter((r: any) => r.riskScore >= 10 && r.riskScore < 30).length;
-    const medium = results.filter((r: any) => r.riskScore >= 30 && r.riskScore < 50).length;
-    const high = results.filter((r: any) => r.riskScore >= 50 && r.riskScore < 80).length;
-    const veryHigh = results.filter((r: any) => r.riskScore >= 80 && r.riskScore <= 100).length;
+    const veryLow = results.filter(
+      (r: any) => r.riskScore >= 0 && r.riskScore < 10
+    ).length;
+    const low = results.filter(
+      (r: any) => r.riskScore >= 10 && r.riskScore < 30
+    ).length;
+    const medium = results.filter(
+      (r: any) => r.riskScore >= 30 && r.riskScore < 50
+    ).length;
+    const high = results.filter(
+      (r: any) => r.riskScore >= 50 && r.riskScore < 80
+    ).length;
+    const veryHigh = results.filter(
+      (r: any) => r.riskScore >= 80 && r.riskScore <= 100
+    ).length;
 
     return {
       veryLow,
@@ -70,7 +86,9 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.safe}</div>
-            <div className="text-xs text-muted-foreground">Deliverable emails</div>
+            <div className="text-xs text-muted-foreground">
+              Deliverable emails
+            </div>
           </CardContent>
         </Card>
         <Card className="p-6 border-l-4 border-l-yellow-500">
@@ -79,25 +97,35 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.risky}</div>
-            <div className="text-xs text-muted-foreground">Potential issues</div>
+            <div className="text-xs text-muted-foreground">
+              Potential issues
+            </div>
           </CardContent>
         </Card>
         <Card className="p-6 border-l-4 border-l-red-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-4xl font-bold">{stats.invalid}</CardTitle>
+            <CardTitle className="text-4xl font-bold">
+              {stats.invalid}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.invalid}</div>
-            <div className="text-xs text-muted-foreground">Undeliverable emails</div>
+            <div className="text-xs text-muted-foreground">
+              Undeliverable emails
+            </div>
           </CardContent>
         </Card>
         <Card className="p-6 border-l-4 border-l-slate-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-4xl font-bold">{stats.unknown}</CardTitle>
+            <CardTitle className="text-4xl font-bold">
+              {stats.unknown}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.unknown}</div>
-            <div className="text-xs text-muted-foreground">Verification failed</div>
+            <div className="text-xs text-muted-foreground">
+              Verification failed
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -117,8 +145,12 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
             <CardTitle>Average Duration</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{Math.round(stats.avgDuration / 1000)}s</div>
-            <div className="text-xs text-muted-foreground">seconds per email</div>
+            <div className="text-2xl font-bold">
+              {Math.round(stats.avgDuration / 1000)}s
+            </div>
+            <div className="text-xs text-muted-foreground">
+              seconds per email
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -140,7 +172,12 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
                   dataKey="value"
                 >
                   {statusData.map((entry: any, index: number) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} stroke="#fff" strokeWidth={2} />
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={entry.color}
+                      stroke="#fff"
+                      strokeWidth={2}
+                    />
                   ))}
                 </Pie>
               </PieChart>

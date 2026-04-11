@@ -20,7 +20,10 @@ export interface SessionSettings {
   validationMode: 'quick' | 'standard' | 'thorough';
 }
 
-export async function createSession(emails: string[], settings: SessionSettings): Promise<string> {
+export async function createSession(
+  emails: string[],
+  settings: SessionSettings
+): Promise<string> {
   return invoke('create_validation_session', { emails, settings });
 }
 
@@ -37,12 +40,21 @@ export async function updateSessionProgress(
   }
 
   // Backup is handled internally by the Rust update_validation_session command
-  return invoke('update_validation_session', { id: sessionId, results, currentIndex, backup: true });
+  return invoke('update_validation_session', {
+    id: sessionId,
+    results,
+    currentIndex,
+    backup: true,
+  });
 }
 
-export async function loadSession(sessionId: string): Promise<ValidationSession> {
-  const session = await invoke<ValidationSession>('load_validation_session', { id: sessionId });
-  
+export async function loadSession(
+  sessionId: string
+): Promise<ValidationSession> {
+  const session = await invoke<ValidationSession>('load_validation_session', {
+    id: sessionId,
+  });
+
   // Validate session structure after loading
   const validation = validateSession(session);
   if (!validation.valid) {
@@ -50,18 +62,23 @@ export async function loadSession(sessionId: string): Promise<ValidationSession>
     showError(errorMsg);
     throw new Error(errorMsg);
   }
-  
+
   return session;
 }
 
 export async function listSessions(): Promise<ValidationSession[]> {
-  const sessions = await invoke<ValidationSession[]>('list_validation_sessions');
-  
+  const sessions = await invoke<ValidationSession[]>(
+    'list_validation_sessions'
+  );
+
   // Filter out invalid sessions from the list to prevent UI crashes
-  return sessions.filter(session => {
+  return sessions.filter((session) => {
     const validation = validateSession(session);
     if (!validation.valid) {
-      console.warn(`Skipping invalid session ${session.id}:`, validation.errors);
+      console.warn(
+        `Skipping invalid session ${session.id}:`,
+        validation.errors
+      );
       return false;
     }
     return true;

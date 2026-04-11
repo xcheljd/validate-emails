@@ -33,30 +33,32 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
-      return this.props.fallback || (
-        <div className="flex items-center justify-center min-h-screen p-8 bg-background">
-          <Card className="max-w-md w-full">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-destructive" />
-                Something went wrong
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                An unexpected error occurred. Please try again.
-              </p>
-              {this.state.error && (
-                <div className="text-xs bg-muted p-3 rounded font-mono overflow-auto max-h-32">
-                  {this.state.error.message}
-                </div>
-              )}
-              <Button onClick={this.handleReset} className="w-full">
-                Try Again
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
+      return (
+        this.props.fallback || (
+          <div className="flex items-center justify-center min-h-screen p-8 bg-background">
+            <Card className="max-w-md w-full">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-destructive" />
+                  Something went wrong
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  An unexpected error occurred. Please try again.
+                </p>
+                {this.state.error && (
+                  <div className="text-xs bg-muted p-3 rounded font-mono overflow-auto max-h-32">
+                    {this.state.error.message}
+                  </div>
+                )}
+                <Button onClick={this.handleReset} className="w-full">
+                  Try Again
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        )
       );
     }
 

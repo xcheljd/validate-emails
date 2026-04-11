@@ -22,8 +22,20 @@ const baseResult = {
 };
 
 const mockResults: ValidationResult[] = [
-  { email: 'test1@example.com', result: 'Safe', reason: 'Reachable', ...baseResult, riskScore: 0 },
-  { email: 'test2@example.com', result: 'Invalid', reason: 'Syntax error', ...baseResult, riskScore: 100 },
+  {
+    email: 'test1@example.com',
+    result: 'Safe',
+    reason: 'Reachable',
+    ...baseResult,
+    riskScore: 0,
+  },
+  {
+    email: 'test2@example.com',
+    result: 'Invalid',
+    reason: 'Syntax error',
+    ...baseResult,
+    riskScore: 100,
+  },
 ];
 
 describe('Export Utils', () => {
@@ -38,7 +50,13 @@ describe('Export Utils', () => {
 
   it('should escape commas in values', () => {
     const results: ValidationResult[] = [
-      { email: 'test@example.com', result: 'Risky', reason: 'Potential issues, check MX', ...baseResult, riskScore: 30 }
+      {
+        email: 'test@example.com',
+        result: 'Risky',
+        reason: 'Potential issues, check MX',
+        ...baseResult,
+        riskScore: 30,
+      },
     ];
     const csv = formatAsCSV(results);
     expect(csv).toContain('"Potential issues, check MX"');

@@ -107,9 +107,7 @@ function createWrapper() {
   });
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return (
-      <QueryClientProvider client={queryClient}>
-        {children}
-      </QueryClientProvider>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
   };
 }
@@ -138,9 +136,12 @@ describe('SessionDetails', () => {
   });
 
   it('passes statusFilter and onStatusFilterChange props to ResultsTable', async () => {
-    const { container } = render(<SessionDetails sessionId="test-session-1" />, {
-      wrapper: createWrapper(),
-    });
+    const { container } = render(
+      <SessionDetails sessionId="test-session-1" />,
+      {
+        wrapper: createWrapper(),
+      }
+    );
 
     // Wait for load
     await waitFor(() => {

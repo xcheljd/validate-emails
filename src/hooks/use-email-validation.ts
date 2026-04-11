@@ -1,12 +1,17 @@
-import { useState, useCallback, useEffect, useRef } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { notifyValidationComplete, notifyError } from "@/lib/notifications";
-import { loadSession, ValidationSession } from "@/lib/session-manager";
-import { ValidationResult } from "@/lib/types";
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { useMutation } from '@tanstack/react-query';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { notifyValidationComplete, notifyError } from '@/lib/notifications';
+import { loadSession, ValidationSession } from '@/lib/session-manager';
+import { ValidationResult } from '@/lib/types';
 
-export type ValidationStatus = 'idle' | 'processing' | 'paused' | 'stopping' | 'waiting';
+export type ValidationStatus =
+  | 'idle'
+  | 'processing'
+  | 'paused'
+  | 'stopping'
+  | 'waiting';
 
 export interface FailedProxyInfo {
   id: string;
@@ -30,12 +35,17 @@ export function useEmailValidation() {
   const [status, setStatus] = useState<ValidationStatus>('idle');
   const [progress, setProgress] = useState(0);
   const [total, setTotal] = useState(0);
-  const [validationMode, setValidationMode] = useState<'quick' | 'standard' | 'thorough'>('standard');
+  const [validationMode, setValidationMode] = useState<
+    'quick' | 'standard' | 'thorough'
+  >('standard');
   const [validationSpeed, setValidationSpeed] = useState<number>(0);
-  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<number>(0);
+  const [estimatedTimeRemaining, setEstimatedTimeRemaining] =
+    useState<number>(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [allProxiesFailedState, setAllProxiesFailedState] = useState<AllProxiesFailedPayload | null>(null);
-  const [usingDirectConnection, setUsingDirectConnection] = useState<boolean>(false);
+  const [allProxiesFailedState, setAllProxiesFailedState] =
+    useState<AllProxiesFailedPayload | null>(null);
+  const [usingDirectConnection, setUsingDirectConnection] =
+    useState<boolean>(false);
   const [waitingForProxy, setWaitingForProxy] = useState<boolean>(false);
   const [waitingCooldownSecs, setWaitingCooldownSecs] = useState<number>(0);
 
@@ -57,10 +67,12 @@ export function useEmailValidation() {
     if (progress >= 1 && results.length > 0) {
       const sampleSize = Math.min(results.length, 20);
       const recentResults = results.slice(-sampleSize);
-      const avgDuration = recentResults.reduce((a, b) => a + b.validationDuration, 0) / recentResults.length;
-      
+      const avgDuration =
+        recentResults.reduce((a, b) => a + b.validationDuration, 0) /
+        recentResults.length;
+
       const speed = avgDuration > 0 ? 60000 / avgDuration : 0;
-      const remaining = (total - progress) * avgDuration / 1000;
+      const remaining = ((total - progress) * avgDuration) / 1000;
 
       setValidationSpeed(Math.round(speed));
       setEstimatedTimeRemaining(Math.round(remaining));
@@ -69,9 +81,14 @@ export function useEmailValidation() {
 
   // Completion notification
   useEffect(() => {
-    if (status === 'idle' && results.length > 0 && progress === total && total > 0) {
-      const safeCount = results.filter(r => r.result === 'Safe').length;
-      const riskyCount = results.filter(r => r.result === 'Risky').length;
+    if (
+      status === 'idle' &&
+      results.length > 0 &&
+      progress === total &&
+      total > 0
+    ) {
+      const safeCount = results.filter((r) => r.result === 'Safe').length;
+      const riskyCount = results.filter((r) => r.result === 'Risky').length;
       notifyValidationComplete(total, safeCount, riskyCount);
     }
   }, [status, results.length, progress, total]);
@@ -83,17 +100,25 @@ export function useEmailValidation() {
     let isActive = true;
 
     const setupListeners = async () => {
-      const unlistenProgressFn = await listen<ValidationResult>("validation-progress", (event) => {
-        setResults((prev) => [...prev, event.payload]);
-        setProgress((prev) => prev + 1);
-        pendingEmailsRef.current = pendingEmailsRef.current.filter(e => e !== event.payload.email);
-      });
+      const unlistenProgressFn = await listen<ValidationResult>(
+        'validation-progress',
+        (event) => {
+          setResults((prev) => [...prev, event.payload]);
+          setProgress((prev) => prev + 1);
+          pendingEmailsRef.current = pendingEmailsRef.current.filter(
+            (e) => e !== event.payload.email
+          );
+        }
+      );
 
-      const unlistenProxiesFailedFn = await listen<AllProxiesFailedPayload>("all-proxies-failed", (event) => {
-        setAllProxiesFailedState(event.payload);
-        setStatus('paused');
-        statusRef.current = 'paused';
-      });
+      const unlistenProxiesFailedFn = await listen<AllProxiesFailedPayload>(
+        'all-proxies-failed',
+        (event) => {
+          setAllProxiesFailedState(event.payload);
+          setStatus('paused');
+          statusRef.current = 'paused';
+        }
+      );
 
       if (!isActive) {
         unlistenProgressFn();
@@ -114,11 +139,19 @@ export function useEmailValidation() {
   }, []);
 
   const mutation = useMutation({
-    mutationFn: async ({ emails, concurrency, mode }: { emails: string[], concurrency: number, mode: 'quick' | 'standard' | 'thorough' }) => {
-      return invoke<ValidationResult[]>("validate_emails_bulk", { 
-        emails, 
-        concurrency, 
-        mode
+    mutationFn: async ({
+      emails,
+      concurrency,
+      mode,
+    }: {
+      emails: string[];
+      concurrency: number;
+      mode: 'quick' | 'standard' | 'thorough';
+    }) => {
+      return invoke<ValidationResult[]>('validate_emails_bulk', {
+        emails,
+        concurrency,
+        mode,
       });
     },
     onSuccess: () => {
@@ -129,85 +162,105 @@ export function useEmailValidation() {
     },
     onError: (error) => {
       if (statusRef.current === 'processing') {
-        console.error("Bulk validation failed:", error);
-        notifyError(error instanceof Error ? error.message : "Validation failed");
+        console.error('Bulk validation failed:', error);
+        notifyError(
+          error instanceof Error ? error.message : 'Validation failed'
+        );
         setStatus('idle');
       }
-    }
+    },
   });
 
-  const startValidation = useCallback((emails: string[], concurrency: number = 5, mode: 'quick' | 'standard' | 'thorough' = 'standard') => {
-    setResults([]);
-    setProgress(0);
-    setTotal(emails.length);
-    setStatus('processing');
-    statusRef.current = 'processing';
-    setValidationMode(mode);
-    setUsingDirectConnection(false);
-    pendingEmailsRef.current = [...emails];
-    currentConcurrencyRef.current = concurrency;
-    // Clear any previous proxy bypass when starting a new validation
-    invoke("clear_proxy_bypass_for_session").catch(() => {
-      // Ignore errors - this is a cleanup call
-    });
-    mutation.mutate({ emails, concurrency, mode });
-  }, [mutation]);
+  const startValidation = useCallback(
+    (
+      emails: string[],
+      concurrency: number = 5,
+      mode: 'quick' | 'standard' | 'thorough' = 'standard'
+    ) => {
+      setResults([]);
+      setProgress(0);
+      setTotal(emails.length);
+      setStatus('processing');
+      statusRef.current = 'processing';
+      setValidationMode(mode);
+      setUsingDirectConnection(false);
+      pendingEmailsRef.current = [...emails];
+      currentConcurrencyRef.current = concurrency;
+      // Clear any previous proxy bypass when starting a new validation
+      invoke('clear_proxy_bypass_for_session').catch(() => {
+        // Ignore errors - this is a cleanup call
+      });
+      mutation.mutate({ emails, concurrency, mode });
+    },
+    [mutation]
+  );
 
   const pauseValidation = useCallback(async () => {
     setStatus('paused');
     statusRef.current = 'paused';
-    await invoke("pause_validation");
+    await invoke('pause_validation');
   }, []);
 
   const resumeValidation = useCallback(async () => {
     if (statusRef.current !== 'paused') return;
     setStatus('processing');
     statusRef.current = 'processing';
-    await invoke("resume_validation");
+    await invoke('resume_validation');
     mutation.mutate({
       emails: pendingEmailsRef.current,
       concurrency: currentConcurrencyRef.current,
-      mode: validationMode
+      mode: validationMode,
     });
   }, [mutation, validationMode]);
 
-  const resumeSession = useCallback(async (sessionIdToResume: string) => {
-    try {
-      const session: ValidationSession = await loadSession(sessionIdToResume);
-      const unprocessedEmails = session.emails.slice(session.currentIndex);
-      const problemEmails = session.results
-        .filter(r => r.result === 'Unknown' || r.result === 'Invalid')
-        .map(r => r.email);
+  const resumeSession = useCallback(
+    async (sessionIdToResume: string) => {
+      try {
+        const session: ValidationSession = await loadSession(sessionIdToResume);
+        const unprocessedEmails = session.emails.slice(session.currentIndex);
+        const problemEmails = session.results
+          .filter((r) => r.result === 'Unknown' || r.result === 'Invalid')
+          .map((r) => r.email);
 
-      const emailsToRevalidate = [...unprocessedEmails, ...problemEmails];
+        const emailsToRevalidate = [...unprocessedEmails, ...problemEmails];
 
-      setResults(session.results);
-      setProgress(session.currentIndex);
-      setTotal(session.total);
-      setSessionId(sessionIdToResume);
-      setValidationMode(session.settings.validationMode);
-      currentConcurrencyRef.current = 5;
-      pendingEmailsRef.current = emailsToRevalidate;
+        setResults(session.results);
+        setProgress(session.currentIndex);
+        setTotal(session.total);
+        setSessionId(sessionIdToResume);
+        setValidationMode(session.settings.validationMode);
+        currentConcurrencyRef.current = 5;
+        pendingEmailsRef.current = emailsToRevalidate;
 
-      setStatus('processing');
-      statusRef.current = 'processing';
-      mutation.mutate({
-        emails: emailsToRevalidate,
-        concurrency: 5,
-        mode: session.settings.validationMode
-      });
-    } catch (error) {
-      console.error("Failed to resume session:", error);
-      notifyError(`Failed to resume session: ${error}`);
-    }
-  }, [mutation]);
+        setStatus('processing');
+        statusRef.current = 'processing';
+        mutation.mutate({
+          emails: emailsToRevalidate,
+          concurrency: 5,
+          mode: session.settings.validationMode,
+        });
+      } catch (error) {
+        console.error('Failed to resume session:', error);
+        notifyError(`Failed to resume session: ${error}`);
+      }
+    },
+    [mutation]
+  );
 
   const revalidationMutation = useMutation({
-    mutationFn: async ({ items, concurrency, mode }: { items: { email: string }[], concurrency: number, mode: 'quick' | 'standard' | 'thorough' }) => {
-      return invoke<ValidationResult[]>("revalidate_emails_bulk", {
+    mutationFn: async ({
+      items,
+      concurrency,
+      mode,
+    }: {
+      items: { email: string }[];
+      concurrency: number;
+      mode: 'quick' | 'standard' | 'thorough';
+    }) => {
+      return invoke<ValidationResult[]>('revalidate_emails_bulk', {
         items,
         concurrency,
-        mode
+        mode,
       });
     },
     onSuccess: () => {
@@ -217,31 +270,33 @@ export function useEmailValidation() {
     },
     onError: (error) => {
       if (statusRef.current === 'processing') {
-        console.error("Revalidation failed:", error);
-        notifyError(error instanceof Error ? error.message : "Revalidation failed");
+        console.error('Revalidation failed:', error);
+        notifyError(
+          error instanceof Error ? error.message : 'Revalidation failed'
+        );
         setStatus('idle');
       }
-    }
+    },
   });
 
   const retryUnknowns = useCallback(() => {
-    const unknownResults = results.filter(r => r.result === 'Unknown');
+    const unknownResults = results.filter((r) => r.result === 'Unknown');
     if (unknownResults.length === 0) return;
 
-    const items = unknownResults.map(r => ({
-      email: r.email
+    const items = unknownResults.map((r) => ({
+      email: r.email,
     }));
 
-    setResults(prev => prev.filter(r => r.result !== 'Unknown'));
-    setProgress(prev => Math.max(0, prev - unknownResults.length));
-    
+    setResults((prev) => prev.filter((r) => r.result !== 'Unknown'));
+    setProgress((prev) => Math.max(0, prev - unknownResults.length));
+
     setStatus('processing');
     statusRef.current = 'processing';
-    
+
     revalidationMutation.mutate({
-        items,
-        concurrency: currentConcurrencyRef.current,
-        mode: validationMode
+      items,
+      concurrency: currentConcurrencyRef.current,
+      mode: validationMode,
     });
   }, [results, validationMode, revalidationMutation]);
 
@@ -253,7 +308,7 @@ export function useEmailValidation() {
       clearInterval(waitingTimerRef.current);
       waitingTimerRef.current = null;
     }
-    await invoke("stop_validation");
+    await invoke('stop_validation');
     setStatus('idle');
     statusRef.current = 'idle';
     // Clear all proxy failure state so the modal closes
@@ -272,21 +327,25 @@ export function useEmailValidation() {
   const continueWithoutProxy = useCallback(async () => {
     try {
       // Set session-level proxy bypass (does NOT modify permanent settings)
-      await invoke("set_proxy_bypass_for_session", { bypass: true });
+      await invoke('set_proxy_bypass_for_session', { bypass: true });
       setAllProxiesFailedState(null);
       setUsingDirectConnection(true);
-      
+
       // Resume validation with remaining emails using direct connection
       setStatus('processing');
       statusRef.current = 'processing';
       mutation.mutate({
         emails: pendingEmailsRef.current,
         concurrency: currentConcurrencyRef.current,
-        mode: validationMode
+        mode: validationMode,
       });
     } catch (error) {
-      console.error("Failed to continue without proxy:", error);
-      notifyError(error instanceof Error ? error.message : "Failed to continue without proxy");
+      console.error('Failed to continue without proxy:', error);
+      notifyError(
+        error instanceof Error
+          ? error.message
+          : 'Failed to continue without proxy'
+      );
     }
   }, [mutation, validationMode]);
 
@@ -306,16 +365,19 @@ export function useEmailValidation() {
     setWaitingCooldownSecs(waitTimeSecs);
     setStatus('waiting');
     statusRef.current = 'waiting';
-    
+
     // Store the end time
     const now = Date.now();
-    cooldownEndTimeRef.current = now + (waitTimeSecs * 1000);
-    
+    cooldownEndTimeRef.current = now + waitTimeSecs * 1000;
+
     // Start countdown timer (update every second)
     waitingTimerRef.current = setInterval(() => {
-      const remaining = Math.max(0, Math.ceil((cooldownEndTimeRef.current - Date.now()) / 1000));
+      const remaining = Math.max(
+        0,
+        Math.ceil((cooldownEndTimeRef.current - Date.now()) / 1000)
+      );
       setWaitingCooldownSecs(remaining);
-      
+
       // When cooldown expires, resume validation
       if (remaining <= 0) {
         if (waitingTimerRef.current) {
@@ -327,12 +389,12 @@ export function useEmailValidation() {
         setAllProxiesFailedState(null);
         setStatus('processing');
         statusRef.current = 'processing';
-        
+
         // Resume validation
         mutation.mutate({
           emails: pendingEmailsRef.current,
           concurrency: currentConcurrencyRef.current,
-          mode: validationMode
+          mode: validationMode,
         });
       }
     }, 1000);

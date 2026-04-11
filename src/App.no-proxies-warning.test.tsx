@@ -4,7 +4,12 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Hoisted mock functions (needed because vi.mock factories are hoisted)
-const { mockShowWarning, mockStartValidation, getMockSettings, mockUseSettingsFn } = vi.hoisted(() => {
+const {
+  mockShowWarning,
+  mockStartValidation,
+  getMockSettings,
+  mockUseSettingsFn,
+} = vi.hoisted(() => {
   const mockSettingsState: any = {
     validationMode: 'standard',
     concurrency: 5,
@@ -83,7 +88,9 @@ vi.mock('@/lib/toast', () => ({
 vi.mock('@/hooks/use-settings', () => ({
   useSettings: mockUseSettingsFn,
   // Passthrough SettingsProvider — just renders children so App.tsx doesn't crash
-  SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SettingsProvider: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
   defaultProxySettings: {
     proxies: [],
     enabled: false,
@@ -124,7 +131,11 @@ vi.mock('@/hooks/use-email-validation', () => ({
 
 // Mock EmailInput to immediately trigger onEmailsLoaded with emails
 vi.mock('@/components/validation/email-input', () => ({
-  EmailInput: ({ onEmailsLoaded }: { onEmailsLoaded: (emails: string[]) => void }) => {
+  EmailInput: ({
+    onEmailsLoaded,
+  }: {
+    onEmailsLoaded: (emails: string[]) => void;
+  }) => {
     React.useEffect(() => {
       onEmailsLoaded(['test@example.com']);
     }, []);
@@ -169,12 +180,16 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
 
     render(<App />, { wrapper });
 
-    const startButton = screen.getByRole('button', { name: /start validation/i });
+    const startButton = screen.getByRole('button', {
+      name: /start validation/i,
+    });
     expect(startButton).toBeInTheDocument();
 
     fireEvent.click(startButton);
 
-    expect(mockShowWarning).toHaveBeenCalledWith('No proxies configured. Please add proxies in Settings or disable proxy.');
+    expect(mockShowWarning).toHaveBeenCalledWith(
+      'No proxies configured. Please add proxies in Settings or disable proxy.'
+    );
     expect(mockStartValidation).not.toHaveBeenCalled();
   });
 
@@ -185,7 +200,9 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
 
     render(<App />, { wrapper });
 
-    const startButton = screen.getByRole('button', { name: /start validation/i });
+    const startButton = screen.getByRole('button', {
+      name: /start validation/i,
+    });
     fireEvent.click(startButton);
 
     expect(mockShowWarning).not.toHaveBeenCalled();
@@ -199,7 +216,9 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
 
     render(<App />, { wrapper });
 
-    const startButton = screen.getByRole('button', { name: /start validation/i });
+    const startButton = screen.getByRole('button', {
+      name: /start validation/i,
+    });
     fireEvent.click(startButton);
 
     expect(mockShowWarning).not.toHaveBeenCalled();
@@ -215,11 +234,15 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
 
     render(<App />, { wrapper });
 
-    const startButton = screen.getByRole('button', { name: /start validation/i });
+    const startButton = screen.getByRole('button', {
+      name: /start validation/i,
+    });
     fireEvent.click(startButton);
 
     // Context-based state is always live — no stale state possible
-    expect(mockShowWarning).toHaveBeenCalledWith('No proxies configured. Please add proxies in Settings or disable proxy.');
+    expect(mockShowWarning).toHaveBeenCalledWith(
+      'No proxies configured. Please add proxies in Settings or disable proxy.'
+    );
     expect(mockStartValidation).not.toHaveBeenCalled();
   });
 });

@@ -5,7 +5,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
-// Mock Tauri
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
@@ -20,10 +19,10 @@ vi.mock('@/lib/notifications', () => ({
 }));
 
 const queryClient = new QueryClient({
-    defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-    }
+  defaultOptions: {
+    queries: { retry: false },
+    mutations: { retry: false },
+  },
 });
 
 const wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -32,39 +31,44 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
 
 describe('useEmailValidation retryUnknowns', () => {
   beforeEach(() => {
-      vi.clearAllMocks();
+    vi.clearAllMocks();
   });
 
-  it('should call revalidate_emails_bulk with unknown emails and their used proxies', async () => {
+  it('should call revalidate_emails_bulk with unknown emails', async () => {
     const { result } = renderHook(() => useEmailValidation(), { wrapper });
 
-    // 1. Setup initial results with some Unknowns
     const mockResults = [
-        { email: 'safe@test.com', result: 'Safe', proxyUsed: '1.1.1.1:80', validationDuration: 100 } as any,
-        { email: 'unknown@test.com', result: 'Unknown', proxyUsed: '2.2.2.2:80', validationDuration: 100 } as any,
+      {
+        email: 'safe@test.com',
+        result: 'Safe',
+        validationDuration: 100,
+      } as any,
+      {
+        email: 'unknown@test.com',
+        result: 'Unknown',
+        validationDuration: 100,
+      } as any,
     ];
 
     act(() => {
-        result.current.setResults(mockResults);
+      result.current.setResults(mockResults);
     });
 
-    // 2. Call retryUnknowns
-    // @ts-ignore - function not yet implemented
     await act(async () => {
-        if (result.current.retryUnknowns) {
-            await result.current.retryUnknowns();
-        } else {
-            throw new Error("retryUnknowns not implemented");
-        }
+      if (result.current.retryUnknowns) {
+        await result.current.retryUnknowns();
+      } else {
+        throw new Error('retryUnknowns not implemented');
+      }
     });
 
-    // 3. Verify invoke was called correctly
-    expect(invoke).toHaveBeenCalledWith('revalidate_emails_bulk', expect.objectContaining({
-        items: [
-            { email: 'unknown@test.com', excluded_proxy: '2.2.2.2:80' }
-        ],
+    expect(invoke).toHaveBeenCalledWith(
+      'revalidate_emails_bulk',
+      expect.objectContaining({
+        items: [{ email: 'unknown@test.com' }],
         concurrency: expect.any(Number),
-        mode: expect.any(String)
-    }));
+        mode: expect.any(String),
+      })
+    );
   });
 });

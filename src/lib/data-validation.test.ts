@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { validateSession, validateResult, validateResultsBatch } from './data-validation';
+import {
+  validateSession,
+  validateResult,
+  validateResultsBatch,
+} from './data-validation';
 import { ValidationResult } from './types';
 import { ValidationSession } from './session-manager';
 
@@ -24,7 +28,7 @@ describe('Data Validation', () => {
     isB2c: false,
     timestamp: new Date().toISOString(),
     validationMode: 'standard',
-    riskScore: 10
+    riskScore: 10,
   };
 
   const validSession: ValidationSession = {
@@ -38,7 +42,7 @@ describe('Data Validation', () => {
     createdAt: new Date().toISOString(),
     settings: {
       validationMode: 'standard',
-    }
+    },
   };
 
   describe('validateResult', () => {
@@ -85,9 +89,12 @@ describe('Data Validation', () => {
     });
 
     it('should reject invalid validation mode in settings', () => {
-      const invalid = { 
-        ...validSession, 
-        settings: { ...validSession.settings, validationMode: 'ultra-thorough' } 
+      const invalid = {
+        ...validSession,
+        settings: {
+          ...validSession.settings,
+          validationMode: 'ultra-thorough',
+        },
       };
       const report = validateSession(invalid);
       expect(report.valid).toBe(false);

@@ -1,11 +1,11 @@
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { 
-  calculateSuccessRate, 
-  getHealthStatus, 
+import {
+  calculateSuccessRate,
+  getHealthStatus,
   isProxyBad,
-  type ProxyStats, 
-  type HealthStatus 
+  type ProxyStats,
+  type HealthStatus,
 } from '@/hooks/use-settings';
 
 interface HealthIndicatorProps {
@@ -39,11 +39,11 @@ export function getHealthLabel(status: HealthStatus): string {
   }
 }
 
-export function HealthIndicator({ 
-  stats, 
-  showBadIndicator = false, 
+export function HealthIndicator({
+  stats,
+  showBadIndicator = false,
   compact = false,
-  className 
+  className,
 }: HealthIndicatorProps) {
   const successRate = calculateSuccessRate(stats);
   const healthStatus = getHealthStatus(stats);
@@ -52,28 +52,22 @@ export function HealthIndicator({
   return (
     <div className={cn('flex items-center gap-2', className)}>
       {/* Success rate */}
-      <span className={cn(
-        'font-mono text-sm',
-        compact && 'text-xs'
-      )}>
+      <span className={cn('font-mono text-sm', compact && 'text-xs')}>
         {successRate}%
       </span>
-      
+
       {/* Health status badge */}
-      <Badge 
-        variant="outline" 
-        className={cn(
-          'text-xs',
-          getHealthColor(healthStatus)
-        )}
+      <Badge
+        variant="outline"
+        className={cn('text-xs', getHealthColor(healthStatus))}
       >
         {getHealthLabel(healthStatus)}
       </Badge>
 
       {/* Bad proxy indicator */}
       {showBadIndicator && isBad && (
-        <Badge 
-          variant="outline" 
+        <Badge
+          variant="outline"
           className="text-xs bg-red-600/20 text-red-700 dark:text-red-400 border-red-600/30"
         >
           Bad

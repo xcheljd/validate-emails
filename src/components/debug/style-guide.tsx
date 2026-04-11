@@ -1,7 +1,13 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 
-const ColorSwatch = ({ name, className }: { name: string; className: string }) => (
+const ColorSwatch = ({
+  name,
+  className,
+}: {
+  name: string;
+  className: string;
+}) => (
   <div className="flex flex-col items-center gap-2">
     <div className={`h-16 w-16 rounded-md border shadow-sm ${className}`} />
     <span className="text-xs font-medium">{name}</span>
@@ -26,11 +32,20 @@ export const StyleGuide = () => {
               <ColorSwatch name="Background" className="bg-background" />
               <ColorSwatch name="Foreground" className="bg-foreground" />
               <ColorSwatch name="Primary" className="bg-primary" />
-              <ColorSwatch name="Primary Fg" className="bg-primary-foreground" />
+              <ColorSwatch
+                name="Primary Fg"
+                className="bg-primary-foreground"
+              />
               <ColorSwatch name="Secondary" className="bg-secondary" />
-              <ColorSwatch name="Secondary Fg" className="bg-secondary-foreground" />
+              <ColorSwatch
+                name="Secondary Fg"
+                className="bg-secondary-foreground"
+              />
               <ColorSwatch name="Destructive" className="bg-destructive" />
-              <ColorSwatch name="Destructive Fg" className="bg-destructive-foreground" />
+              <ColorSwatch
+                name="Destructive Fg"
+                className="bg-destructive-foreground"
+              />
               <ColorSwatch name="Muted" className="bg-muted" />
               <ColorSwatch name="Muted Fg" className="bg-muted-foreground" />
               <ColorSwatch name="Accent" className="bg-accent" />
@@ -56,8 +71,12 @@ export const StyleGuide = () => {
               <h2 className="text-3xl font-semibold tracking-tight first:mt-0">
                 Heading 2
               </h2>
-              <h3 className="text-2xl font-semibold tracking-tight">Heading 3</h3>
-              <h4 className="text-xl font-semibold tracking-tight">Heading 4</h4>
+              <h3 className="text-2xl font-semibold tracking-tight">
+                Heading 3
+              </h3>
+              <h4 className="text-xl font-semibold tracking-tight">
+                Heading 4
+              </h4>
               <p className="leading-7 [&:not(:first-child)]:mt-6">
                 The quick brown fox jumps over the lazy dog. (Body)
               </p>
