@@ -45,6 +45,9 @@ function AppContent() {
   );
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
+  // Read settings from shared context — no more stale independent useState
+  const { settings } = useSettings();
+
   const {
     results,
     isProcessing,
@@ -68,10 +71,7 @@ function AppContent() {
     usingDirectConnection,
     waitingForProxy,
     waitingCooldownSecs,
-  } = useEmailValidation();
-
-  // Read settings from shared context — no more stale independent useState
-  const { settings } = useSettings();
+  } = useEmailValidation(settings.validationMode);
 
   const handleNavigate = (view: SidebarView) => {
     setCurrentView(view);

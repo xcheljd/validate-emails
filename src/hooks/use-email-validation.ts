@@ -30,14 +30,14 @@ export interface AllProxiesFailedPayload {
   nearestCooldownSecs: number;
 }
 
-export function useEmailValidation() {
+export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough' = 'standard') {
   const [results, setResults] = useState<ValidationResult[]>([]);
   const [status, setStatus] = useState<ValidationStatus>('idle');
   const [progress, setProgress] = useState(0);
   const [total, setTotal] = useState(0);
   const [validationMode, setValidationMode] = useState<
     'quick' | 'standard' | 'thorough'
-  >('standard');
+  >(initialMode);
   const [validationSpeed, setValidationSpeed] = useState<number>(0);
   const [estimatedTimeRemaining, setEstimatedTimeRemaining] =
     useState<number>(0);

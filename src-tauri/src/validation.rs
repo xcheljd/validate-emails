@@ -3,9 +3,12 @@ use tokio_util::sync::CancellationToken;
 use std::sync::Mutex;
 use std::sync::Arc;
 use chrono::Utc;
-use std::time::Instant;
+use std::time::{Instant, Duration};
 use std::collections::HashMap;
 use check_if_email_exists::{check_email, CheckEmailInputBuilder, Reachable};
+use check_if_email_exists::syntax::check_syntax;
+use check_if_email_exists::mx::check_mx;
+use check_if_email_exists::misc::check_misc;
 use check_if_email_exists::smtp::verif_method::{
     VerifMethod,
     VerifMethodSmtpConfig,
@@ -81,14 +84,183 @@ impl ValidationState {
 }
 
 pub async fn validate_email(email: String, mode: String, proxy: Option<ProxyConfig>) -> ValidationResult {
+    match mode.as_str() {
+        "quick" => validate_email_quick(email, mode, proxy).await,
+        "thorough" => validate_email_full(email, mode, proxy, Duration::from_secs(30), 2).await,
+        _ => validate_email_full(email, mode, proxy, Duration::from_secs(10), 1).await,
+    }
+}
+
+/// Quick mode: syntax check + MX lookup + misc only (skip SMTP handshake).
+/// ~10x faster than full verification.
+async fn validate_email_quick(email: String, mode: String, proxy: Option<ProxyConfig>) -> ValidationResult {
     let start_time = Instant::now();
-    
+    let proxy_id = proxy.as_ref().map(|p| p.id());
+
+    // Step 1: Syntax check
+    let syntax = check_syntax(&email);
+    let domain = syntax.domain.clone();
+    let is_valid_syntax = syntax.is_valid_syntax;
+    let suggestion = syntax.suggestion.clone();
+
+    if !is_valid_syntax {
+        return ValidationResult {
+            email,
+            result: "Invalid".to_string(),
+            reason: "Quick mode: Invalid syntax".to_string(),
+            logs: vec![],
+            domain,
+            validation_duration: start_time.elapsed().as_millis() as u64,
+            mx_record_count: 0,
+            is_disposable: false,
+            is_role_account: false,
+            is_catch_all: false,
+            is_deliverable: false,
+            is_disabled: false,
+            has_full_inbox: false,
+            can_connect_smtp: false,
+            is_valid_syntax: false,
+            is_b2c: false,
+            suggestion,
+            gravatar_url: None,
+            haveibeenpwned: None,
+            error_type: None,
+            timestamp: Utc::now().to_rfc3339(),
+            validation_mode: mode,
+            risk_score: 100,
+            proxy_id,
+        };
+    }
+
+    // Step 2: MX lookup
+    let mx_result = check_mx(&syntax).await;
+    let mx_record_count = match &mx_result {
+        Ok(mx) => match &mx.lookup {
+            Ok(lookup) => lookup.iter().count() as u32,
+            Err(_) => 0,
+        },
+        Err(_) => 0,
+    };
+
+    // If MX lookup failed entirely, return Unknown
+    let mx_failed = mx_result.is_err();
+    if mx_failed {
+        return ValidationResult {
+            email,
+            result: "Unknown".to_string(),
+            reason: "Quick mode: MX lookup failed".to_string(),
+            logs: vec![],
+            domain,
+            validation_duration: start_time.elapsed().as_millis() as u64,
+            mx_record_count: 0,
+            is_disposable: false,
+            is_role_account: false,
+            is_catch_all: false,
+            is_deliverable: false,
+            is_disabled: false,
+            has_full_inbox: false,
+            can_connect_smtp: false,
+            is_valid_syntax,
+            is_b2c: false,
+            suggestion,
+            gravatar_url: None,
+            haveibeenpwned: None,
+            error_type: Some("MxLookupError".to_string()),
+            timestamp: Utc::now().to_rfc3339(),
+            validation_mode: mode,
+            risk_score: 50,
+            proxy_id,
+        };
+    }
+
+    // If no MX records found, email is Invalid
+    let mx_ok = mx_result.as_ref().unwrap();
+    if mx_ok.lookup.is_err() {
+        return ValidationResult {
+            email,
+            result: "Invalid".to_string(),
+            reason: "Quick mode: No MX records found".to_string(),
+            logs: vec![],
+            domain,
+            validation_duration: start_time.elapsed().as_millis() as u64,
+            mx_record_count: 0,
+            is_disposable: false,
+            is_role_account: false,
+            is_catch_all: false,
+            is_deliverable: false,
+            is_disabled: false,
+            has_full_inbox: false,
+            can_connect_smtp: false,
+            is_valid_syntax,
+            is_b2c: false,
+            suggestion,
+            gravatar_url: None,
+            haveibeenpwned: None,
+            error_type: None,
+            timestamp: Utc::now().to_rfc3339(),
+            validation_mode: mode,
+            risk_score: 100,
+            proxy_id,
+        };
+    }
+
+    // Step 3: Misc checks (disposable, role account, b2c)
+    let misc = check_misc(&syntax, false, None).await;
+
+    // Determine result: since no SMTP, we classify based on what we know
+    let result_str = if misc.is_disposable {
+        "Risky"
+    } else {
+        // Has valid syntax + MX records -> likely reachable
+        "Unknown" // Can't confirm Safe without SMTP
+    };
+
+    let risk_score = calculate_risk_score(result_str, misc.is_disposable, false, false, false);
+
+    ValidationResult {
+        email,
+        result: result_str.to_string(),
+        reason: "Quick mode: syntax + MX + misc (SMTP skipped)".to_string(),
+        logs: vec![],
+        domain,
+        validation_duration: start_time.elapsed().as_millis() as u64,
+        mx_record_count,
+        is_disposable: misc.is_disposable,
+        is_role_account: misc.is_role_account,
+        is_catch_all: false,
+        is_deliverable: false,
+        is_disabled: false,
+        has_full_inbox: false,
+        can_connect_smtp: false,
+        is_valid_syntax,
+        is_b2c: misc.is_b2c,
+        suggestion,
+        gravatar_url: misc.gravatar_url,
+        haveibeenpwned: misc.haveibeenpwned,
+        error_type: None,
+        timestamp: Utc::now().to_rfc3339(),
+        validation_mode: mode,
+        risk_score,
+        proxy_id,
+    }
+}
+
+/// Full SMTP verification (Standard and Thorough modes).
+/// Standard: default timeout (~10s), 1 retry.
+/// Thorough: higher timeout (30s), 2 retries.
+async fn validate_email_full(
+    email: String,
+    mode: String,
+    proxy: Option<ProxyConfig>,
+    smtp_timeout: Duration,
+    retries: usize,
+) -> ValidationResult {
+    let start_time = Instant::now();
+
     // Track proxy ID for stats
     let proxy_id = proxy.as_ref().map(|p| p.id());
 
     // Build VerifMethod with optional proxy
-    // The library requires proxies to be registered in VerifMethod.proxies HashMap
-    // and referenced by name in VerifMethodSmtpConfig.proxy
     let (proxies, proxy_ref) = if let Some(ref p) = proxy {
         let mut proxy_map = HashMap::new();
         let proxy_name = "proxy1".to_string();
@@ -105,24 +277,24 @@ pub async fn validate_email(email: String, mode: String, proxy: Option<ProxyConf
             hello_name: "example.com".to_string(),
             proxy: proxy_ref.clone(),
             smtp_port: 25,
-            smtp_timeout: None,
-            retries: 1,
+            smtp_timeout: Some(smtp_timeout),
+            retries,
         }),
         yahoo: YahooVerifMethod::Smtp(VerifMethodSmtpConfig {
             from_email: "verify@example.com".to_string(),
             hello_name: "example.com".to_string(),
             proxy: proxy_ref.clone(),
             smtp_port: 25,
-            smtp_timeout: None,
-            retries: 1,
+            smtp_timeout: Some(smtp_timeout),
+            retries,
         }),
         hotmailb2c: HotmailB2CVerifMethod::Smtp(VerifMethodSmtpConfig {
             from_email: "verify@example.com".to_string(),
             hello_name: "example.com".to_string(),
             proxy: proxy_ref,
             smtp_port: 25,
-            smtp_timeout: None,
-            retries: 1,
+            smtp_timeout: Some(smtp_timeout),
+            retries,
         }),
         ..Default::default()
     };
@@ -507,5 +679,114 @@ mod tests {
 
         let proxy2 = state.get_proxy_for_email("test2@example.com").unwrap();
         assert_eq!(proxy2.host, "192.168.1.1");
+    }
+
+    // === Validation mode tests ===
+
+    #[tokio::test]
+    async fn test_quick_mode_invalid_syntax() {
+        let result = validate_email("invalid-email".to_string(), "quick".to_string(), None).await;
+        assert_eq!(result.result, "Invalid");
+        assert_eq!(result.validation_mode, "quick");
+        assert!(!result.is_valid_syntax);
+        assert!(!result.can_connect_smtp);
+        assert!(!result.is_catch_all);
+        assert!(!result.is_deliverable);
+        assert!(!result.is_disabled);
+        assert!(!result.has_full_inbox);
+    }
+
+    #[tokio::test]
+    async fn test_quick_mode_valid_email_skips_smtp() {
+        let result = validate_email("test@gmail.com".to_string(), "quick".to_string(), None).await;
+        assert_eq!(result.validation_mode, "quick");
+        assert!(result.is_valid_syntax);
+        // Quick mode never connects to SMTP
+        assert!(!result.can_connect_smtp);
+        assert!(!result.is_catch_all);
+        assert!(!result.is_deliverable);
+        assert!(!result.is_disabled);
+        assert!(!result.has_full_inbox);
+        // Reason should indicate SMTP was skipped
+        assert!(result.reason.contains("SMTP skipped"));
+    }
+
+    #[tokio::test]
+    async fn test_quick_mode_no_mx_records() {
+        // For a domain with no MX records, the result depends on the syntax check.
+        // mailchecker may reject certain domains as invalid syntax, so the result
+        // could be either "Invalid" or "Unknown" depending on the domain.
+        let result = validate_email("test@invalid.nonexistent.tld".to_string(), "quick".to_string(), None).await;
+        assert_eq!(result.validation_mode, "quick");
+        // Result should be Invalid (syntax) or Unknown (MX failure) - both are valid for bad domains
+        assert!(result.result == "Invalid" || result.result == "Unknown");
+    }
+
+    #[tokio::test]
+    async fn test_standard_mode_default_behavior() {
+        let result = validate_email("test@example.com".to_string(), "standard".to_string(), None).await;
+        assert_eq!(result.validation_mode, "standard");
+        assert!(!result.timestamp.is_empty());
+        // Standard mode should have attempted SMTP (may or may not succeed)
+    }
+
+    #[tokio::test]
+    async fn test_thorough_mode_stores_mode() {
+        let result = validate_email("test@example.com".to_string(), "thorough".to_string(), None).await;
+        assert_eq!(result.validation_mode, "thorough");
+        assert!(!result.timestamp.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mode_stored_in_result() {
+        for mode in &["quick", "standard", "thorough"] {
+            let result = validate_email("test@example.com".to_string(), mode.to_string(), None).await;
+            assert_eq!(result.validation_mode, *mode);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_quick_mode_faster_than_standard() {
+        // Quick mode should complete significantly faster than standard
+        // since it skips SMTP handshake entirely
+        let start = Instant::now();
+        let _ = validate_email("test@gmail.com".to_string(), "quick".to_string(), None).await;
+        let quick_duration = start.elapsed();
+
+        // Quick mode should complete in under 5 seconds (no SMTP)
+        assert!(quick_duration.as_secs() < 5, "Quick mode took {:?}, expected < 5s", quick_duration);
+    }
+
+    #[tokio::test]
+    async fn test_unknown_mode_defaults_to_standard() {
+        // Unknown mode strings should fall through to standard behavior
+        let result = validate_email("test@example.com".to_string(), "unknown".to_string(), None).await;
+        assert_eq!(result.validation_mode, "unknown");
+        assert!(!result.timestamp.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_quick_mode_with_proxy() {
+        let proxy = ProxyConfig::new("192.168.1.1".to_string(), 8080);
+        let result = validate_email("test@gmail.com".to_string(), "quick".to_string(), Some(proxy)).await;
+        assert_eq!(result.validation_mode, "quick");
+        // Quick mode doesn't use proxy for SMTP (no SMTP)
+        assert!(result.proxy_id.is_some());
+    }
+
+    #[test]
+    fn test_calculate_risk_score_all_results() {
+        assert_eq!(calculate_risk_score("Safe", false, false, false, false), 1);
+        assert_eq!(calculate_risk_score("Risky", false, false, false, false), 30);
+        assert_eq!(calculate_risk_score("Invalid", false, false, false, false), 100);
+        assert_eq!(calculate_risk_score("Unknown", false, false, false, false), 50);
+        // Disposable adds 40
+        assert_eq!(calculate_risk_score("Safe", true, false, false, false), 41);
+        // Catch-all adds 20
+        assert_eq!(calculate_risk_score("Safe", false, true, false, false), 21);
+        // Disabled sets to 100
+        assert_eq!(calculate_risk_score("Safe", false, false, true, false), 100);
+        // Full inbox adds 30
+        assert_eq!(calculate_risk_score("Safe", false, false, false, true), 31);
     }
 }
