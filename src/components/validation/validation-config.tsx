@@ -3,12 +3,20 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Mail, ArrowRight, Trash2, ChevronLeft } from 'lucide-react';
 import { ValidationModeSelector } from './validation-modes';
 
+type ValidationMode = 'quick' | 'standard' | 'thorough';
+
+const modeLabels: Record<ValidationMode, string> = {
+  quick: 'Quick',
+  standard: 'Standard',
+  thorough: 'Thorough',
+};
+
 interface ValidationConfigProps {
   emails: string[];
   onClear: () => void;
   onStart: () => void;
-  validationMode: 'quick' | 'standard' | 'thorough';
-  onModeChange: (mode: 'quick' | 'standard' | 'thorough') => void;
+  validationMode: ValidationMode;
+  onModeChange: (mode: ValidationMode) => void;
   onBack: () => void;
 }
 
@@ -71,7 +79,7 @@ export function ValidationConfig({
                 </div>
               </div>
 
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <div className="flex items-center justify-between p-4 rounded-xl bg-background border shadow-sm">
                   <div className="flex items-center gap-3">
                     <div className="font-black text-2xl text-primary">
@@ -91,6 +99,16 @@ export function ValidationConfig({
                     Start Validation
                     <ArrowRight className="h-5 w-5" />
                   </Button>
+                </div>
+                <div className="flex items-center justify-between p-3 rounded-xl bg-background border shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="text-xs font-bold uppercase text-muted-foreground tracking-tighter">
+                      Validation Mode
+                    </div>
+                  </div>
+                  <div className="font-bold text-sm text-primary">
+                    {modeLabels[validationMode]}
+                  </div>
                 </div>
               </div>
             </CardContent>
