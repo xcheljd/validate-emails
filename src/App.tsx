@@ -11,9 +11,6 @@ import { useEmailValidation } from '@/hooks/use-email-validation';
 import { ValidationResult } from '@/lib/types';
 import { useSettings, SettingsProvider } from '@/hooks/use-settings';
 import { showWarning } from '@/lib/toast';
-import { formatAsCSV } from '@/lib/export-utils';
-import { save } from '@tauri-apps/plugin-dialog';
-import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { SettingsContent } from '@/components/settings/settings-content';
 import { StatisticsDashboard } from '@/components/analytics/statistics-dashboard';
 import { DomainAnalysis } from '@/components/analytics/domain-analysis';
@@ -23,6 +20,7 @@ import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { useKeyboardShortcuts } from '@/lib/keyboard-shortcuts';
 import { Badge } from '@/components/ui/badge';
 import { ValidationConfig } from '@/components/validation/validation-config';
+import { ExportDialog } from '@/components/validation/export-dialog';
 
 function App() {
   return (
@@ -44,6 +42,7 @@ function AppContent() {
     null
   );
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
 
   // Read settings from shared context — no more stale independent useState
   const { settings } = useSettings();
@@ -95,34 +94,9 @@ function AppContent() {
     startValidation(emails, 5, validationMode);
   };
 
-  const handleExport = async () => {
+  const handleExport = () => {
     if (results.length === 0) return;
-
-    const csvContent = formatAsCSV(results);
-
-    try {
-      const filePath = await save({
-        filters: [
-          {
-            name: 'CSV',
-            extensions: ['csv'],
-          },
-        ],
-        defaultPath: 'validation_results.csv',
-      });
-
-      if (filePath) {
-        await writeTextFile(filePath, csvContent);
-      }
-    } catch (err) {
-      console.error('Failed to save file:', err);
-      const blob = new Blob([csvContent], { type: 'text/csv' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'validation_results.csv';
-      a.click();
-    }
+    setIsExportDialogOpen(true);
   };
 
   useKeyboardShortcuts({
@@ -413,6 +387,12 @@ function AppContent() {
           )}
         </div>
       </MainLayout>
+
+      <ExportDialog
+        open={isExportDialogOpen}
+        onOpenChange={setIsExportDialogOpen}
+        results={results}
+      />
     </ErrorBoundary>
   );
 }
