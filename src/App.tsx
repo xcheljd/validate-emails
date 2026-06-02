@@ -22,6 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import { ValidationConfig } from '@/components/validation/validation-config';
 import { ExportDialog } from '@/components/validation/export-dialog';
 import { CleaningReport } from '@/components/validation/cleaning-report';
+import { CrashRecoveryDialog } from '@/components/validation/crash-recovery-dialog';
 import { cleanEmailList, type CleaningResult } from '@/lib/email-cleaner';
 
 function App() {
@@ -51,6 +52,8 @@ function AppContent() {
   const [originalEmails, setOriginalEmails] = useState<string[]>([]);
   /** Persists the dedup mapping for export even after cleaning report is dismissed */
   const [dedupMapping, setDedupMapping] = useState<Map<string, string[]> | null>(null);
+  /** Controls the crash recovery dialog visibility on startup */
+  const [showCrashRecovery, setShowCrashRecovery] = useState(true);
 
   // Read settings from shared context — no more stale independent useState
   const { settings } = useSettings();
@@ -173,6 +176,11 @@ function AppContent() {
     setCurrentView('validation');
     setShowDashboard(true);
     setStatusFilter('all');
+    setShowCrashRecovery(false);
+  };
+
+  const handleCrashRecoveryDismiss = () => {
+    setShowCrashRecovery(false);
   };
 
   const handleCleaningProceed = () => {
@@ -437,6 +445,13 @@ function AppContent() {
         results={results}
         canonicalToOriginals={dedupMapping}
       />
+
+      {showCrashRecovery && (
+        <CrashRecoveryDialog
+          onResume={handleResumeSession}
+          onDismiss={handleCrashRecoveryDismiss}
+        />
+      )}
     </ErrorBoundary>
   );
 }
