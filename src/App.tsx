@@ -21,6 +21,8 @@ import { useKeyboardShortcuts } from '@/lib/keyboard-shortcuts';
 import { Badge } from '@/components/ui/badge';
 import { ValidationConfig } from '@/components/validation/validation-config';
 import { ExportDialog } from '@/components/validation/export-dialog';
+import { CleaningReport } from '@/components/validation/cleaning-report';
+import { cleanEmailList, type CleaningResult } from '@/lib/email-cleaner';
 
 function App() {
   return (
@@ -43,6 +45,12 @@ function AppContent() {
   );
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
+  const [cleaningResult, setCleaningResult] = useState<CleaningResult | null>(
+    null
+  );
+  const [originalEmails, setOriginalEmails] = useState<string[]>([]);
+  /** Persists the dedup mapping for export even after cleaning report is dismissed */
+  const [dedupMapping, setDedupMapping] = useState<Map<string, string[]> | null>(null);
 
   // Read settings from shared context — no more stale independent useState
   const { settings } = useSettings();
@@ -117,7 +125,12 @@ function AppContent() {
   });
 
   const handleEmailsLoaded = (newEmails: string[]) => {
-    setEmails((prev) => [...new Set([...prev, ...newEmails])]);
+    const merged = [...new Set([...emails, ...newEmails])];
+    setOriginalEmails(merged);
+    const result = cleanEmailList(merged);
+    setCleaningResult(result);
+    setDedupMapping(result.canonicalToOriginals);
+    setEmails(result.cleanedEmails);
   };
 
   const handleClear = () => {
@@ -127,6 +140,9 @@ function AppContent() {
     setCurrentView('validation');
     setSelectedResult(null);
     setStatusFilter('all');
+    setCleaningResult(null);
+    setOriginalEmails([]);
+    setDedupMapping(null);
   };
 
   const handleViewDetails = (result: ValidationResult) => {
@@ -159,6 +175,24 @@ function AppContent() {
     setStatusFilter('all');
   };
 
+  const handleCleaningProceed = () => {
+    // Proceed with cleaned emails — already set via handleEmailsLoaded
+    setCleaningResult(null);
+  };
+
+  const handleCleaningBack = () => {
+    setEmails([]);
+    setCleaningResult(null);
+    setOriginalEmails([]);
+  };
+
+  const handleCleaningSkip = () => {
+    // Use original uncleaned emails
+    setEmails(originalEmails);
+    setCleaningResult(null);
+    setDedupMapping(null);
+  };
+
   const renderTitle = () => {
     switch (currentView) {
       case 'history':
@@ -171,6 +205,7 @@ function AppContent() {
         return 'Settings';
       case 'validation':
         if (showDashboard) return 'Validation Results';
+        if (cleaningResult) return 'Cleaning Report';
         if (emails.length > 0) return 'Configure Validation';
         return 'Email Validation';
       default:
@@ -190,6 +225,7 @@ function AppContent() {
         return 'Configure application preferences';
       case 'validation':
         if (showDashboard) return `Analyzed ${progress} of ${total} emails`;
+        if (cleaningResult) return `${cleaningResult.finalCount} clean emails from ${cleaningResult.originalCount} original`;
         if (emails.length > 0)
           return `Setup your options for ${emails.length} emails`;
         return 'Upload or paste your leads to verify deliverability';
@@ -296,7 +332,14 @@ function AppContent() {
         <div className="flex-1 p-4 sm:p-6 md:p-8">
           {currentView === 'validation' &&
             (!showDashboard ? (
-              emails.length === 0 ? (
+              cleaningResult ? (
+                <CleaningReport
+                  result={cleaningResult}
+                  onProceed={handleCleaningProceed}
+                  onBack={handleCleaningBack}
+                  onSkip={handleCleaningSkip}
+                />
+              ) : emails.length === 0 ? (
                 <div className="max-w-4xl mx-auto space-y-8">
                   <EmailInput onEmailsLoaded={handleEmailsLoaded} />
                 </div>
@@ -392,6 +435,7 @@ function AppContent() {
         open={isExportDialogOpen}
         onOpenChange={setIsExportDialogOpen}
         results={results}
+        canonicalToOriginals={dedupMapping}
       />
     </ErrorBoundary>
   );

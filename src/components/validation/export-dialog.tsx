@@ -28,6 +28,8 @@ interface ExportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   results: ValidationResult[];
+  /** Map from canonical email to originals, used to populate Original Emails column */
+  canonicalToOriginals?: Map<string, string[]> | null;
 }
 
 interface PersistedState {
@@ -70,6 +72,7 @@ export function ExportDialog({
   open,
   onOpenChange,
   results,
+  canonicalToOriginals,
 }: ExportDialogProps) {
   // Initialize state from localStorage or defaults
   const [columnState, setColumnState] = useState<Record<string, boolean>>(
@@ -195,7 +198,17 @@ export function ExportDialog({
       enabled: columnState[col.key] ?? col.enabled,
     }));
 
-    const dataToExport = filteredResults;
+    // Enrich results with originalEmails from dedup mapping
+    let dataToExport = filteredResults;
+    if (canonicalToOriginals && canonicalToOriginals.size > 0) {
+      dataToExport = filteredResults.map((r) => {
+        const originals = canonicalToOriginals.get(r.email);
+        if (originals && originals.length > 0) {
+          return { ...r, originalEmails: originals.join('; ') };
+        }
+        return r;
+      });
+    }
 
     if (format === 'csv') {
       const csvContent = exportToCSV(dataToExport, columns);
@@ -211,7 +224,7 @@ export function ExportDialog({
     }
 
     onOpenChange(false);
-  }, [columnState, format, filteredResults, enabledColumnCount, onOpenChange]);
+  }, [columnState, format, filteredResults, enabledColumnCount, onOpenChange, canonicalToOriginals]);
 
   const getFilterLabel = (): string | null => {
     switch (resultFilter) {

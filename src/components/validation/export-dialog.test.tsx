@@ -85,11 +85,15 @@ describe('ExportDialog', () => {
     expect(screen.queryByText('Export Results')).not.toBeInTheDocument();
   });
 
-  it('shows all 22 column toggles, all enabled by default', () => {
+  it('shows all 23 column toggles, all enabled by default', () => {
     render(<ExportDialog {...defaultProps} />);
     const checkboxes = screen.getAllByRole('checkbox');
-    expect(checkboxes).toHaveLength(22);
-    checkboxes.forEach((cb) => {
+    expect(checkboxes).toHaveLength(23);
+    // Original Emails column (last) should be unchecked by default
+    const lastCheckbox = checkboxes[checkboxes.length - 1];
+    expect(lastCheckbox).not.toBeChecked();
+    // All others should be checked
+    checkboxes.slice(0, -1).forEach((cb) => {
       expect(cb).toBeChecked();
     });
   });

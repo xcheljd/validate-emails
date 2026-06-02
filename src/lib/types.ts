@@ -30,4 +30,6 @@ export interface ValidationResult {
   riskScore: number;
   /** The proxy ID used for this validation (if any) */
   proxyId?: string;
+  /** Semicolon-separated original emails that collapsed to this canonical form (populated after dedup cleaning) */
+  originalEmails?: string;
 }

@@ -30,6 +30,7 @@ export const exportColumns: ExportColumn[] = [
   { key: 'timestamp', label: 'Validated At', enabled: true },
   { key: 'validationMode', label: 'Mode', enabled: true },
   { key: 'errorType', label: 'Error Type', enabled: true },
+  { key: 'originalEmails', label: 'Original Emails', enabled: false },
 ];
 
 export function exportToExcel(

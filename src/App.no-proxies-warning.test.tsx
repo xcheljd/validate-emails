@@ -181,6 +181,13 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
 
     render(<App />, { wrapper });
 
+    // EmailInput mock triggers onEmailsLoaded, which now shows cleaning report
+    // Click "Proceed" to advance to validation config
+    const proceedButton = screen.getByRole('button', {
+      name: /proceed with \d+ clean emails/i,
+    });
+    fireEvent.click(proceedButton);
+
     const startButton = screen.getByRole('button', {
       name: /start validation/i,
     });
@@ -201,6 +208,12 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
 
     render(<App />, { wrapper });
 
+    // Navigate past cleaning report
+    const proceedButton = screen.getByRole('button', {
+      name: /proceed with \d+ clean emails/i,
+    });
+    fireEvent.click(proceedButton);
+
     const startButton = screen.getByRole('button', {
       name: /start validation/i,
     });
@@ -216,6 +229,12 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
     settings.proxy.proxies = [{ host: '192.168.1.1', port: 8080 }];
 
     render(<App />, { wrapper });
+
+    // Navigate past cleaning report
+    const proceedButton = screen.getByRole('button', {
+      name: /proceed with \d+ clean emails/i,
+    });
+    fireEvent.click(proceedButton);
 
     const startButton = screen.getByRole('button', {
       name: /start validation/i,
@@ -234,6 +253,12 @@ describe('App - no proxies warning (VAL-FLR-007)', () => {
     settings.proxy.proxies = [];
 
     render(<App />, { wrapper });
+
+    // Navigate past cleaning report
+    const proceedButton = screen.getByRole('button', {
+      name: /proceed with \d+ clean emails/i,
+    });
+    fireEvent.click(proceedButton);
 
     const startButton = screen.getByRole('button', {
       name: /start validation/i,

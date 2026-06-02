@@ -59,7 +59,7 @@ describe('enhanced-export-utils', () => {
     const lines = csv.split('\n');
 
     expect(lines[0]).toBe(
-      'Email,Status,Verdict Reason,Domain,Risk Score,Valid Syntax,Deliverable,Disabled,Full Inbox,Catch-All,Disposable,Role Account,B2C Provider,SMTP Connected,Accepts Mail,MX Records,Breached,Suggestion,Duration (ms),Validated At,Mode,Error Type'
+      'Email,Status,Verdict Reason,Domain,Risk Score,Valid Syntax,Deliverable,Disabled,Full Inbox,Catch-All,Disposable,Role Account,B2C Provider,SMTP Connected,Accepts Mail,MX Records,Breached,Suggestion,Duration (ms),Validated At,Mode,Error Type,Original Emails'
     );
     expect(lines).toHaveLength(3);
     expect(lines[1]).toContain('test1@example.com');
@@ -112,7 +112,7 @@ describe('enhanced-export-utils', () => {
   });
 
   it('exportColumns should have all columns with correct labels', () => {
-    expect(exportColumns).toHaveLength(22);
+    expect(exportColumns).toHaveLength(23);
     expect(exportColumns[0]).toEqual({
       key: 'email',
       label: 'Email',
