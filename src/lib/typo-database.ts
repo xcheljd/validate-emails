@@ -16,11 +16,7 @@ export const typoMap: Record<string, string> = {
   'outlook.co': 'outlook.com',
   'outlooke.com': 'outlook.com',
   'outloo.com': 'outlook.com',
-  'gmx.com': 'gmail.com',
-  'gmx.net': 'gmail.com',
   'aol.co': 'aol.com',
-  'aol.com': 'aol.com',
-  'icloud.com': 'icloud.com',
 };
 
 export function suggestCorrection(email: string): string | null {

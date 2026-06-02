@@ -45,16 +45,16 @@ describe('typo-database', () => {
       );
     });
 
-    it('should suggest correction for icloud typos', () => {
-      expect(typoDatabase.suggestCorrection('test@icloud.com')).toBe(
-        'test@icloud.com'
-      );
-    });
-
     it('should return null for valid domains', () => {
       expect(typoDatabase.suggestCorrection('test@gmail.com')).toBeNull();
       expect(typoDatabase.suggestCorrection('user@yahoo.com')).toBeNull();
       expect(typoDatabase.suggestCorrection('admin@outlook.com')).toBeNull();
+      // GMX is a legitimate provider, not a typo of Gmail
+      expect(typoDatabase.suggestCorrection('user@gmx.com')).toBeNull();
+      expect(typoDatabase.suggestCorrection('user@gmx.net')).toBeNull();
+      // Self-mapping domains should not produce corrections
+      expect(typoDatabase.suggestCorrection('user@aol.com')).toBeNull();
+      expect(typoDatabase.suggestCorrection('user@icloud.com')).toBeNull();
     });
 
     it('should return null for unknown domains', () => {
