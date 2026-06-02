@@ -4,11 +4,52 @@ import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Upload, X, FileText } from 'lucide-react';
 import { parseEmails } from '@/lib/email-parser';
+import { showWarning } from '@/lib/toast';
 import Papa from 'papaparse';
 import { cn } from '@/lib/utils';
 
 interface EmailInputProps {
   onEmailsLoaded: (emails: string[]) => void;
+}
+
+/**
+ * Parse a single file and return extracted emails as a Promise.
+ * CSV files are parsed with PapaParse; TXT files are read as plain text.
+ */
+function extractEmailsFromFile(file: File): Promise<string[]> {
+  return new Promise((resolve) => {
+    if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
+      Papa.parse(file, {
+        complete: (results) => {
+          const emails: string[] = [];
+          results.data.forEach((row) => {
+            if (Array.isArray(row)) {
+              row.forEach((cell) => {
+                if (typeof cell === 'string' && cell.includes('@')) {
+                  emails.push(...parseEmails(cell));
+                }
+              });
+            } else if (typeof row === 'object' && row !== null) {
+              Object.values(row as Record<string, unknown>).forEach((val) => {
+                if (typeof val === 'string' && val.includes('@')) {
+                  emails.push(...parseEmails(val));
+                }
+              });
+            }
+          });
+          resolve(emails);
+        },
+        header: false,
+      });
+    } else {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result as string;
+        resolve(parseEmails(content));
+      };
+      reader.readAsText(file);
+    }
+  });
 }
 
 export function EmailInput({ onEmailsLoaded }: EmailInputProps) {
@@ -27,38 +68,36 @@ export function EmailInput({ onEmailsLoaded }: EmailInputProps) {
     }
   };
 
-  const processFile = useCallback(
-    (file: File) => {
-      if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
-        Papa.parse(file, {
-          complete: (results) => {
-            const emails: string[] = [];
-            results.data.forEach((row) => {
-              if (Array.isArray(row)) {
-                row.forEach((cell) => {
-                  if (typeof cell === 'string' && cell.includes('@')) {
-                    emails.push(...parseEmails(cell));
-                  }
-                });
-              } else if (typeof row === 'object' && row !== null) {
-                Object.values(row as Record<string, unknown>).forEach((val) => {
-                  if (typeof val === 'string' && val.includes('@')) {
-                    emails.push(...parseEmails(val));
-                  }
-                });
-              }
-            });
-            onEmailsLoaded([...new Set(emails)]);
-          },
-          header: false,
-        });
-      } else {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const content = e.target?.result as string;
-          onEmailsLoaded(parseEmails(content));
-        };
-        reader.readAsText(file);
+  /** Process multiple files: extract emails from each, merge, deduplicate, and report empty files. */
+  const processFiles = useCallback(
+    async (files: File[]) => {
+      const allEmails: string[] = [];
+      const emptyFileNames: string[] = [];
+
+      const results = await Promise.all(
+        files.map((file) => extractEmailsFromFile(file))
+      );
+
+      results.forEach((emails, i) => {
+        if (emails.length === 0) {
+          emptyFileNames.push(files[i].name);
+        }
+        allEmails.push(...emails);
+      });
+
+      // Show warning for files with zero emails
+      if (emptyFileNames.length > 0) {
+        const fileLabel =
+          emptyFileNames.length === 1
+            ? emptyFileNames[0]
+            : `${emptyFileNames.length} files`;
+        showWarning(
+          `No emails found in ${fileLabel}. ${allEmails.length > 0 ? `Loaded ${allEmails.length} email${allEmails.length > 1 ? 's' : ''} from other files.` : ''}`
+        );
+      }
+
+      if (allEmails.length > 0) {
+        onEmailsLoaded([...new Set(allEmails)]);
       }
     },
     [onEmailsLoaded]
@@ -68,7 +107,7 @@ export function EmailInput({ onEmailsLoaded }: EmailInputProps) {
     e.preventDefault();
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processFile(e.dataTransfer.files[0]);
+      processFiles(Array.from(e.dataTransfer.files));
     }
   };
 
@@ -102,9 +141,14 @@ export function EmailInput({ onEmailsLoaded }: EmailInputProps) {
           id="file-upload"
           className="hidden"
           accept=".csv,.txt"
-          onChange={(e) =>
-            e.target.files?.[0] && processFile(e.target.files[0])
-          }
+          multiple
+          onChange={(e) => {
+            if (e.target.files && e.target.files.length > 0) {
+              processFiles(Array.from(e.target.files));
+              // Reset input value so the same file(s) can be re-selected
+              e.target.value = '';
+            }
+          }}
         />
         <Button
           variant="secondary"
