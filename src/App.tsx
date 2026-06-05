@@ -75,6 +75,10 @@ function AppContent() {
     estimatedTimeRemaining,
     resumeSession,
     retryUnknowns,
+    retryWithEscalation,
+    isEscalating,
+    escalationTier,
+    escalationEmailCount,
     allProxiesFailedState,
     continueWithoutProxy,
     retryWithCooldown,
@@ -373,6 +377,16 @@ function AppContent() {
                   onStop={stopValidation}
                   onDiscard={handleDiscard}
                   onRetryUnknowns={retryUnknowns}
+                  onRetryWithEscalation={(tier) => {
+                    if (tier === 'auto-escalate') {
+                      retryWithEscalation('quick', true);
+                    } else {
+                      retryWithEscalation(tier, false);
+                    }
+                  }}
+                  isEscalating={isEscalating}
+                  escalationTier={escalationTier}
+                  escalationEmailCount={escalationEmailCount}
                   validationMode={validationMode}
                   onChangeValidationMode={onChangeValidationMode}
                   validationSpeed={validationSpeed}

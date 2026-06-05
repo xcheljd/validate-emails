@@ -49,6 +49,11 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
   const [waitingForProxy, setWaitingForProxy] = useState<boolean>(false);
   const [waitingCooldownSecs, setWaitingCooldownSecs] = useState<number>(0);
 
+  // Escalation state
+  const [isEscalating, setIsEscalating] = useState(false);
+  const [escalationTier, setEscalationTier] = useState(1);
+  const [escalationEmailCount, setEscalationEmailCount] = useState(0);
+
   const pendingEmailsRef = useRef<string[]>([]);
   const currentConcurrencyRef = useRef<number>(5);
   const statusRef = useRef<ValidationStatus>('idle');
@@ -303,6 +308,86 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
     });
   }, [results, validationMode, revalidationMutation]);
 
+  const retryWithEscalation = useCallback(
+    async (
+      tier: 'quick' | 'standard' | 'thorough',
+      autoEscalate: boolean
+    ) => {
+      const unknownResults = results.filter((r) => r.result === 'Unknown');
+      if (unknownResults.length === 0) return;
+
+      if (!autoEscalate) {
+        // Manual single-tier retry
+        const items = unknownResults.map((r) => ({ email: r.email }));
+        setResults((prev) => prev.filter((r) => r.result !== 'Unknown'));
+        setProgress((prev) => Math.max(0, prev - unknownResults.length));
+        setStatus('processing');
+        statusRef.current = 'processing';
+
+        revalidationMutation.mutate({
+          items,
+          concurrency: currentConcurrencyRef.current,
+          mode: tier,
+        });
+        return;
+      }
+
+      // Auto-escalation: go through quick → standard → thorough
+      const tiers: Array<'quick' | 'standard' | 'thorough'> = [
+        'quick',
+        'standard',
+        'thorough',
+      ];
+      let currentUnknowns = unknownResults.map((r) => r.email);
+
+      setIsEscalating(true);
+
+      for (let i = 0; i < tiers.length; i++) {
+        if (currentUnknowns.length === 0) break;
+
+        setEscalationTier(i + 1);
+        setEscalationEmailCount(currentUnknowns.length);
+
+        const items = currentUnknowns.map((email) => ({ email }));
+
+        // Remove unknowns being retried from results
+        setResults((prev) => prev.filter((r) => r.result !== 'Unknown' || !currentUnknowns.includes(r.email)));
+
+        setStatus('processing');
+        statusRef.current = 'processing';
+
+        // Call revalidate_emails_bulk directly via invoke
+        const revalResults = await invoke<ValidationResult[]>(
+          'revalidate_emails_bulk',
+          {
+            items,
+            concurrency: currentConcurrencyRef.current,
+            mode: tiers[i],
+          }
+        );
+
+        // Merge revalidated results back
+        setResults((prev) => [...prev, ...revalResults]);
+        setProgress((prev) => prev + revalResults.length);
+
+        // Determine remaining unknowns for next tier
+        currentUnknowns = revalResults
+          .filter((r) => r.result === 'Unknown')
+          .map((r) => r.email);
+      }
+
+      setIsEscalating(false);
+      setEscalationTier(1);
+      setEscalationEmailCount(0);
+
+      if (statusRef.current === 'processing') {
+        setStatus('idle');
+        statusRef.current = 'idle';
+      }
+    },
+    [results, revalidationMutation]
+  );
+
   const stopValidation = useCallback(async () => {
     setStatus('stopping');
     statusRef.current = 'stopping';
@@ -425,6 +510,11 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
     resumeSession,
     stopValidation,
     retryUnknowns,
+    retryWithEscalation,
+    // Escalation state
+    isEscalating,
+    escalationTier,
+    escalationEmailCount,
     setResults,
     validationMode,
     onChangeValidationMode: setValidationMode,

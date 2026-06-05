@@ -16,6 +16,7 @@ import {
   ValidationStatus,
   AllProxiesFailedPayload,
 } from '@/hooks/use-email-validation';
+import type { RetryTier } from './retry-modal';
 import { ValidationControls } from './validation-controls';
 import { RetryModal } from './retry-modal';
 import { ProxyFailureModal } from './proxy-failure-modal';
@@ -41,6 +42,10 @@ interface ValidationDashboardProps {
   onStop: () => void;
   onDiscard: () => void;
   onRetryUnknowns?: () => void;
+  onRetryWithEscalation?: (tier: RetryTier) => void;
+  isEscalating?: boolean;
+  escalationTier?: number;
+  escalationEmailCount?: number;
   validationMode: 'quick' | 'standard' | 'thorough';
   onChangeValidationMode: (mode: 'quick' | 'standard' | 'thorough') => void;
   validationSpeed?: number;
@@ -68,6 +73,10 @@ export function ValidationDashboard({
   onStop,
   onDiscard,
   onRetryUnknowns,
+  onRetryWithEscalation,
+  isEscalating = false,
+  escalationTier = 1,
+  escalationEmailCount = 0,
   validationMode,
   validationSpeed,
   estimatedTimeRemaining,
@@ -419,11 +428,18 @@ export function ValidationDashboard({
       <RetryModal
         open={showRetryModal}
         unknownCount={unknownCount}
-        onRetry={() => {
+        onRetry={(tier) => {
           setShowRetryModal(false);
-          onRetryUnknowns?.();
+          if (onRetryWithEscalation) {
+            onRetryWithEscalation(tier);
+          } else {
+            onRetryUnknowns?.();
+          }
         }}
         onCancel={() => setShowRetryModal(false)}
+        isEscalating={isEscalating}
+        escalationTier={escalationTier}
+        escalationEmailCount={escalationEmailCount}
       />
 
       {allProxiesFailedState && (
