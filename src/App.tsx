@@ -23,6 +23,8 @@ import { ValidationConfig } from '@/components/validation/validation-config';
 import { ExportDialog } from '@/components/validation/export-dialog';
 import { CleaningReport } from '@/components/validation/cleaning-report';
 import { CrashRecoveryDialog } from '@/components/validation/crash-recovery-dialog';
+import { RateLimitWarningDialog, estimateValidationTime } from '@/components/validation/rate-limit-warning-dialog';
+import { AutoPauseModal } from '@/components/validation/auto-pause-modal';
 import { cleanEmailList, type CleaningResult } from '@/lib/email-cleaner';
 
 function App() {
@@ -54,6 +56,10 @@ function AppContent() {
   const [dedupMapping, setDedupMapping] = useState<Map<string, string[]> | null>(null);
   /** Controls the crash recovery dialog visibility on startup */
   const [showCrashRecovery, setShowCrashRecovery] = useState(true);
+  /** Controls the rate limit warning dialog */
+  const [showRateLimitWarning, setShowRateLimitWarning] = useState(false);
+  /** Stores the estimated time for the rate limit warning */
+  const [rateLimitEstimatedTime, setRateLimitEstimatedTime] = useState('');
 
   // Read settings from shared context — no more stale independent useState
   const { settings } = useSettings();
@@ -85,6 +91,9 @@ function AppContent() {
     usingDirectConnection,
     waitingForProxy,
     waitingCooldownSecs,
+    rateLimitFailureState,
+    resumeFromAutoPause,
+    stopFromAutoPause,
   } = useEmailValidation(settings.validationMode);
 
   const handleNavigate = (view: SidebarView) => {
@@ -101,6 +110,19 @@ function AppContent() {
       showWarning(
         'No proxies configured. Please add proxies in Settings or disable proxy.'
       );
+      return;
+    }
+
+    // Check max emails per session
+    const maxEmails = settings.maxEmailsPerSession;
+    if (maxEmails > 0 && emails.length > maxEmails) {
+      const estTime = estimateValidationTime(
+        emails.length,
+        settings.rateLimitMaxPerSecond,
+        settings.rateLimitMaxPerMinute
+      );
+      setRateLimitEstimatedTime(estTime);
+      setShowRateLimitWarning(true);
       return;
     }
 
@@ -399,6 +421,7 @@ function AppContent() {
                   usingDirectConnection={usingDirectConnection}
                   waitingForProxy={waitingForProxy}
                   waitingCooldownSecs={waitingCooldownSecs}
+                  rateLimitFailureState={rateLimitFailureState}
                 />
                 <ResultsTable
                   results={results}
@@ -466,6 +489,33 @@ function AppContent() {
           onDismiss={handleCrashRecoveryDismiss}
         />
       )}
+
+      <RateLimitWarningDialog
+        open={showRateLimitWarning}
+        onOpenChange={setShowRateLimitWarning}
+        emailCount={emails.length}
+        maxEmails={settings.maxEmailsPerSession}
+        estimatedTime={rateLimitEstimatedTime}
+        onCancel={() => setShowRateLimitWarning(false)}
+        onProceed={() => {
+          setShowRateLimitWarning(false);
+          setShowDashboard(true);
+          setStatusFilter('all');
+          startValidation(emails, 5, validationMode);
+        }}
+      />
+
+      <AutoPauseModal
+        open={rateLimitFailureState.isAutoPaused && status === 'paused' && !allProxiesFailedState}
+        onOpenChange={(open) => {
+          if (!open) {
+            // Don't auto-resume on close
+          }
+        }}
+        failureCount={rateLimitFailureState.consecutiveFailures}
+        onResume={resumeFromAutoPause}
+        onStop={stopFromAutoPause}
+      />
     </ErrorBoundary>
   );
 }

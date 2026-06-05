@@ -877,6 +877,9 @@ pub struct Settings {
     pub rate_limiter: RateLimiterConfig,
     #[serde(default)]
     pub proxy_pool: ProxyPool,
+    /// Maximum emails per validation session. 0 = unlimited. Default: 0.
+    #[serde(default)]
+    pub max_emails_per_session: u32,
 }
 
 impl Default for Settings {
@@ -890,6 +893,7 @@ impl Default for Settings {
             history_retention_days: 90,
             rate_limiter: RateLimiterConfig::default(),
             proxy_pool: ProxyPool::default(),
+            max_emails_per_session: 0,
         }
     }
 }
@@ -1306,6 +1310,47 @@ pub async fn clear_proxy_bypass_for_session(
     let mut proxy_bypass = state.proxy_bypass_for_session.write().await;
     *proxy_bypass = false;
     Ok(())
+}
+
+// =====================
+// Rate Limiting Commands
+// =====================
+
+/// Get the max emails per session setting (0 = unlimited)
+#[tauri::command]
+pub async fn get_max_emails_per_session(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<u32, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.max_emails_per_session)
+}
+
+/// Set the max emails per session setting (0 = unlimited)
+#[tauri::command]
+pub async fn set_max_emails_per_session(
+    state: tauri::State<'_, SettingsState>,
+    max_emails: u32,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.max_emails_per_session = max_emails;
+    Ok(())
+}
+
+/// Check if an email count exceeds the max_emails_per_session limit.
+/// Returns Ok(true) if within limits, Ok(false) if exceeded (not an error per se),
+/// with the current max_emails_per_session value.
+#[tauri::command]
+pub async fn check_email_count_limit(
+    state: tauri::State<'_, SettingsState>,
+    email_count: u32,
+) -> Result<(bool, u32), String> {
+    let settings = state.settings.read().await;
+    let max = settings.max_emails_per_session;
+    if max > 0 && email_count > max {
+        Ok((false, max))
+    } else {
+        Ok((true, max))
+    }
 }
 
 #[cfg(test)]

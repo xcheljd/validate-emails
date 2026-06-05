@@ -27,6 +27,9 @@ const {
       proxyStats: {},
       cooldownDurationSecs: 60,
     },
+    rateLimitMaxPerSecond: 1,
+    rateLimitMaxPerMinute: 60,
+    maxEmailsPerSession: 0,
   };
   return {
     mockShowWarning: vi.fn(),
@@ -131,6 +134,14 @@ vi.mock('@/hooks/use-email-validation', () => ({
     usingDirectConnection: false,
     waitingForProxy: false,
     waitingCooldownSecs: 0,
+    rateLimitFailureState: {
+      consecutiveFailures: 0,
+      isSlowdownActive: false,
+      isAutoPaused: false,
+    },
+    resumeFromAutoPause: vi.fn(),
+    stopFromAutoPause: vi.fn(),
+    setAllProxiesFailedStateForTest: vi.fn(),
   }),
 }));
 

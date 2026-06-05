@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Trash2, Save, History, ShieldCheck, Shield } from 'lucide-react';
+import { Trash2, Save, History, ShieldCheck, Shield, Gauge } from 'lucide-react';
 import {
   useSettings,
   AppSettings,
@@ -381,6 +381,75 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                 <span className="text-xs text-muted-foreground whitespace-nowrap">
                   Saves results every 10 items
                 </span>
+              </div>
+            </div>
+
+            {/* Rate Limiting Section */}
+            <div className="pt-4 border-t">
+              <div className="flex items-center gap-2 mb-4">
+                <Gauge className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium">Rate Limiting</h3>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="max-per-second">Max Per Second</Label>
+                  <div className="flex items-center gap-4">
+                    <Input
+                      id="max-per-second"
+                      type="number"
+                      value={localSettings.rateLimitMaxPerSecond}
+                      onChange={(e) =>
+                        handleChange('rateLimitMaxPerSecond', parseInt(e.target.value) || 1)
+                      }
+                      min="1"
+                      max="100"
+                    />
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                      Default: 1
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="max-per-minute">Max Per Minute</Label>
+                  <div className="flex items-center gap-4">
+                    <Input
+                      id="max-per-minute"
+                      type="number"
+                      value={localSettings.rateLimitMaxPerMinute}
+                      onChange={(e) =>
+                        handleChange('rateLimitMaxPerMinute', parseInt(e.target.value) || 60)
+                      }
+                      min="1"
+                      max="6000"
+                    />
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                      Default: 60
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="max-emails-session">Max Emails Per Session</Label>
+                  <div className="flex items-center gap-4">
+                    <Input
+                      id="max-emails-session"
+                      type="number"
+                      value={localSettings.maxEmailsPerSession}
+                      onChange={(e) =>
+                        handleChange('maxEmailsPerSession', parseInt(e.target.value) || 0)
+                      }
+                      min="0"
+                    />
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                      0 = unlimited
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    Warns when batch exceeds this limit. Set to 0 for no limit.
+                  </p>
+                </div>
               </div>
             </div>
           </div>

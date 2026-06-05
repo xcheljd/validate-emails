@@ -30,6 +30,19 @@ export interface AllProxiesFailedPayload {
   nearestCooldownSecs: number;
 }
 
+/** Rate limit status for consecutive failure tracking */
+export interface RateLimitFailureState {
+  /** Number of consecutive failures */
+  consecutiveFailures: number;
+  /** Whether slowdown is active (>=3 consecutive failures) */
+  isSlowdownActive: boolean;
+  /** Whether auto-pause has been triggered (>=8 consecutive failures) */
+  isAutoPaused: boolean;
+}
+
+const SLOWDOWN_THRESHOLD = 3;
+const AUTO_PAUSE_THRESHOLD = 8;
+
 export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough' = 'standard') {
   const [results, setResults] = useState<ValidationResult[]>([]);
   const [status, setStatus] = useState<ValidationStatus>('idle');
@@ -54,6 +67,13 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
   const [escalationTier, setEscalationTier] = useState(1);
   const [escalationEmailCount, setEscalationEmailCount] = useState(0);
 
+  // Rate limit failure tracking (auto-slowdown / auto-pause)
+  const [rateLimitFailureState, setRateLimitFailureState] = useState<RateLimitFailureState>({
+    consecutiveFailures: 0,
+    isSlowdownActive: false,
+    isAutoPaused: false,
+  });
+
   const pendingEmailsRef = useRef<string[]>([]);
   const currentConcurrencyRef = useRef<number>(5);
   const statusRef = useRef<ValidationStatus>('idle');
@@ -64,6 +84,16 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  // Auto-pause effect: when rate limit failure state triggers auto-pause
+  useEffect(() => {
+    if (
+      rateLimitFailureState.isAutoPaused &&
+      statusRef.current === 'processing'
+    ) {
+      pauseValidation();
+    }
+  }, [rateLimitFailureState.isAutoPaused]);
 
   const isProcessing = status === 'processing';
 
@@ -108,11 +138,31 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
       const unlistenProgressFn = await listen<ValidationResult>(
         'validation-progress',
         (event) => {
-          setResults((prev) => [...prev, event.payload]);
+          const result = event.payload;
+          setResults((prev) => [...prev, result]);
           setProgress((prev) => prev + 1);
           pendingEmailsRef.current = pendingEmailsRef.current.filter(
-            (e) => e !== event.payload.email
+            (e) => e !== result.email
           );
+
+          // Track consecutive failures for rate limit auto-slowdown/auto-pause
+          const isFailure = result.result === 'Unknown' || !!result.errorType;
+          setRateLimitFailureState((prev) => {
+            if (isFailure) {
+              const newCount = prev.consecutiveFailures + 1;
+              return {
+                consecutiveFailures: newCount,
+                isSlowdownActive: newCount >= SLOWDOWN_THRESHOLD,
+                isAutoPaused: newCount >= AUTO_PAUSE_THRESHOLD,
+              };
+            } else {
+              // Success resets consecutive failures
+              return {
+                ...prev,
+                consecutiveFailures: 0,
+              };
+            }
+          });
         }
       );
 
@@ -189,6 +239,12 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
       statusRef.current = 'processing';
       setValidationMode(mode);
       setUsingDirectConnection(false);
+      // Reset rate limit failure state
+      setRateLimitFailureState({
+        consecutiveFailures: 0,
+        isSlowdownActive: false,
+        isAutoPaused: false,
+      });
       pendingEmailsRef.current = [...emails];
       currentConcurrencyRef.current = concurrency;
       // Clear any previous proxy bypass when starting a new validation
@@ -403,6 +459,12 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
     setAllProxiesFailedState(null);
     setWaitingForProxy(false);
     setWaitingCooldownSecs(0);
+    // Reset rate limit failure state
+    setRateLimitFailureState({
+      consecutiveFailures: 0,
+      isSlowdownActive: false,
+      isAutoPaused: false,
+    });
     // We don't reset progress/total here because the user might want to see the partial results
   }, []);
 
@@ -410,6 +472,27 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
   const clearAllProxiesFailedState = useCallback(() => {
     setAllProxiesFailedState(null);
   }, []);
+
+  // Resume from auto-pause: clears the auto-pause state and continues
+  const resumeFromAutoPause = useCallback(() => {
+    setRateLimitFailureState((prev) => ({
+      ...prev,
+      consecutiveFailures: 0,
+      isAutoPaused: false,
+      isSlowdownActive: false,
+    }));
+    resumeValidation();
+  }, [resumeValidation]);
+
+  // Stop from auto-pause: clears the auto-pause state and stops
+  const stopFromAutoPause = useCallback(() => {
+    setRateLimitFailureState({
+      consecutiveFailures: 0,
+      isSlowdownActive: false,
+      isAutoPaused: false,
+    });
+    stopValidation();
+  }, [stopValidation]);
 
   // Continue without proxy - temporarily disable proxy and resume
   const continueWithoutProxy = useCallback(async () => {
@@ -532,6 +615,10 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
     // Waiting for proxy cooldown state
     waitingForProxy,
     waitingCooldownSecs,
+    // Rate limit failure state (auto-slowdown / auto-pause)
+    rateLimitFailureState,
+    resumeFromAutoPause,
+    stopFromAutoPause,
     // Test helper - allows tests to set the all proxies failed state directly
     setAllProxiesFailedStateForTest: setAllProxiesFailedState,
   };

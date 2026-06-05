@@ -53,6 +53,8 @@ interface BackendSettings {
   max_retries: number;
   auto_save_interval: number;
   history_retention_days: number;
+  max_emails_per_session: number;
+  rate_limiter: { max_per_second: number; max_per_minute: number };
 }
 
 interface BackendProxyPool {
@@ -73,6 +75,9 @@ function backendToFrontend(backend: BackendSettings): Partial<AppSettings> {
     autoSaveInterval: backend.auto_save_interval,
     sessionRetentionDays: backend.history_retention_days,
     sidebarCollapsed: false,
+    maxEmailsPerSession: backend.max_emails_per_session ?? 0,
+    rateLimitMaxPerSecond: backend.rate_limiter?.max_per_second ?? 1,
+    rateLimitMaxPerMinute: backend.rate_limiter?.max_per_minute ?? 60,
   };
 }
 
@@ -84,6 +89,11 @@ function frontendToBackend(frontend: AppSettings): BackendSettings {
     max_retries: frontend.maxRetries,
     auto_save_interval: frontend.autoSaveInterval,
     history_retention_days: frontend.sessionRetentionDays,
+    max_emails_per_session: frontend.maxEmailsPerSession,
+    rate_limiter: {
+      max_per_second: frontend.rateLimitMaxPerSecond,
+      max_per_minute: frontend.rateLimitMaxPerMinute,
+    },
   };
 }
 

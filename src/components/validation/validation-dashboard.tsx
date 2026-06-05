@@ -10,11 +10,13 @@ import {
   Zap,
   Globe,
   Loader2,
+  Gauge,
 } from 'lucide-react';
 import { ValidationResult } from '@/lib/types';
 import {
   ValidationStatus,
   AllProxiesFailedPayload,
+  RateLimitFailureState,
 } from '@/hooks/use-email-validation';
 import type { RetryTier } from './retry-modal';
 import { ValidationControls } from './validation-controls';
@@ -61,6 +63,8 @@ interface ValidationDashboardProps {
   // Waiting for proxy cooldown
   waitingForProxy?: boolean;
   waitingCooldownSecs?: number;
+  // Rate limit failure state (auto-slowdown badge)
+  rateLimitFailureState?: RateLimitFailureState;
 }
 
 export function ValidationDashboard({
@@ -88,6 +92,7 @@ export function ValidationDashboard({
   usingDirectConnection = false,
   waitingForProxy = false,
   waitingCooldownSecs = 0,
+  rateLimitFailureState,
 }: ValidationDashboardProps) {
   const [showStopDialog, setShowStopDialog] = useState(false);
   const [showRetryModal, setShowRetryModal] = useState(false);
@@ -179,6 +184,18 @@ export function ValidationDashboard({
             <Globe className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
               Using direct connection (proxy bypassed)
+            </span>
+          </div>
+        )}
+
+      {/* Auto-Slowdown Badge */}
+      {rateLimitFailureState?.isSlowdownActive &&
+        !rateLimitFailureState.isAutoPaused &&
+        status === 'processing' && (
+          <div className="flex items-center gap-2 p-2 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg">
+            <Gauge className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+            <span className="text-sm font-medium text-amber-700 dark:text-amber-300">
+              Slowdown ({rateLimitFailureState.consecutiveFailures} consecutive failures)
             </span>
           </div>
         )}
