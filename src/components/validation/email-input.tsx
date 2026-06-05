@@ -87,13 +87,18 @@ export function EmailInput({ onEmailsLoaded }: EmailInputProps) {
 
       // Show warning for files with zero emails
       if (emptyFileNames.length > 0) {
-        const fileLabel =
-          emptyFileNames.length === 1
-            ? emptyFileNames[0]
-            : `${emptyFileNames.length} files`;
-        showWarning(
-          `No emails found in ${fileLabel}. ${allEmails.length > 0 ? `Loaded ${allEmails.length} email${allEmails.length > 1 ? 's' : ''} from other files.` : ''}`
-        );
+        if (allEmails.length === 0) {
+          // All files are empty — no valid emails found anywhere
+          showWarning('No valid emails found in the uploaded file(s)');
+        } else {
+          const fileLabel =
+            emptyFileNames.length === 1
+              ? emptyFileNames[0]
+              : `${emptyFileNames.length} files`;
+          showWarning(
+            `No emails found in ${fileLabel}. Loaded ${allEmails.length} email${allEmails.length > 1 ? 's' : ''} from other files.`
+          );
+        }
       }
 
       if (allEmails.length > 0) {

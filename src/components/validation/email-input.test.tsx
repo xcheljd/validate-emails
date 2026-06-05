@@ -159,7 +159,7 @@ describe('EmailInput - Multi-file upload', () => {
     expect(sharedCount).toBe(1);
   });
 
-  it('shows toast warning when a file has zero emails', async () => {
+  it('shows toast warning when a single file has zero emails', async () => {
     const { toast } = await import('sonner');
 
     render(<EmailInput onEmailsLoaded={onEmailsLoaded} />);
@@ -169,8 +169,43 @@ describe('EmailInput - Multi-file upload', () => {
     fireEvent.change(fileInput, { target: { files: [emptyFile] } });
 
     await waitFor(() => {
-      expect(toast.warning).toHaveBeenCalled();
+      expect(toast.warning).toHaveBeenCalledWith(
+        expect.stringContaining('No valid emails found')
+      );
     });
+
+    // Should NOT call onEmailsLoaded when no emails were found
+    expect(onEmailsLoaded).not.toHaveBeenCalled();
+  });
+
+  it('shows toast warning when ALL uploaded files have zero emails', async () => {
+    const { toast } = await import('sonner');
+
+    (Papa.parse as ReturnType<typeof vi.fn>).mockImplementation(
+      (_file: unknown, options: { complete: (result: unknown) => void }) => {
+        options.complete({
+          data: [['header-only']],
+          errors: [],
+          meta: {},
+        });
+      }
+    );
+
+    render(<EmailInput onEmailsLoaded={onEmailsLoaded} />);
+    const fileInput = document.getElementById('file-upload') as HTMLInputElement;
+
+    const emptyCsv = createCSVFile('email\n', 'empty1.csv');
+    const emptyCsv2 = createCSVFile('email\n', 'empty2.csv');
+    fireEvent.change(fileInput, { target: { files: [emptyCsv, emptyCsv2] } });
+
+    await waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith(
+        expect.stringContaining('No valid emails found')
+      );
+    });
+
+    // Should NOT call onEmailsLoaded when all files are empty
+    expect(onEmailsLoaded).not.toHaveBeenCalled();
   });
 
   it('shows toast warning for empty file among multiple files', async () => {
