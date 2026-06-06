@@ -154,14 +154,23 @@ export function ProxyHealthDashboard({
     }
   }, [localThreshold, onSetAutoDisableThreshold]);
 
-  // Re-enable proxy handler
+  // Re-enable proxy handler with explicit logging for debugging
   const handleReEnable = useCallback(
-    async (proxyId: string) => {
+    async (proxyId: string, event?: React.MouseEvent<HTMLButtonElement>) => {
+      // Explicit logging for debugging click issues in real browser
+      console.log('[ProxyHealthDashboard] Re-enable clicked for:', proxyId, event ? 'event:' + event.type : 'no event');
+      
+      // Prevent any potential event propagation issues
+      event?.stopPropagation();
+      
       try {
+        console.log('[ProxyHealthDashboard] Calling onReEnableProxy for:', proxyId);
         await onReEnableProxy(proxyId);
+        console.log('[ProxyHealthDashboard] onReEnableProxy succeeded for:', proxyId);
         toast.success(`Proxy ${proxyId} re-enabled`);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to re-enable proxy';
+        console.error('[ProxyHealthDashboard] Re-enable failed for:', proxyId, error);
         toast.error(message);
       }
     },
@@ -356,11 +365,15 @@ export function ProxyHealthDashboard({
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-7 text-xs"
-                        onClick={() => handleReEnable(entry.id)}
+                        className="h-7 text-xs relative z-10"
+                        onClick={(e) => handleReEnable(entry.id, e)}
                         disabled={disabled}
+                        // Explicit type="button" to prevent form submission issues
+                        type="button"
+                        // Ensure pointer events are not blocked
+                        style={{ pointerEvents: 'auto' }}
                       >
-                        <RefreshCw className="h-3 w-3 mr-1" />
+                        <RefreshCw className="h-3 w-3 mr-1 pointer-events-none" />
                         Re-enable
                       </Button>
                     )}
