@@ -16,6 +16,7 @@ import { StatisticsDashboard } from '@/components/analytics/statistics-dashboard
 import { DomainAnalysis } from '@/components/analytics/domain-analysis';
 import { SessionHistory } from '@/components/history/session-history';
 import { SessionDetails } from '@/components/history/session-details';
+import { SessionDiffView } from '@/components/history/session-diff';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { useKeyboardShortcuts } from '@/lib/keyboard-shortcuts';
 import { Badge } from '@/components/ui/badge';
@@ -26,6 +27,7 @@ import { CrashRecoveryDialog } from '@/components/validation/crash-recovery-dial
 import { RateLimitWarningDialog, estimateValidationTime } from '@/components/validation/rate-limit-warning-dialog';
 import { AutoPauseModal } from '@/components/validation/auto-pause-modal';
 import { cleanEmailList, type CleaningResult } from '@/lib/email-cleaner';
+import type { ValidationSession } from '@/lib/session-manager';
 
 function App() {
   return (
@@ -60,6 +62,9 @@ function AppContent() {
   const [showRateLimitWarning, setShowRateLimitWarning] = useState(false);
   /** Stores the estimated time for the rate limit warning */
   const [rateLimitEstimatedTime, setRateLimitEstimatedTime] = useState('');
+  /** Session diff state: two sessions to compare */
+  const [diffSessionA, setDiffSessionA] = useState<ValidationSession | null>(null);
+  const [diffSessionB, setDiffSessionB] = useState<ValidationSession | null>(null);
 
   // Read settings from shared context — no more stale independent useState
   const { settings } = useSettings();
@@ -209,6 +214,12 @@ function AppContent() {
     setShowCrashRecovery(false);
   };
 
+  const handleCompareSessions = (sessionA: ValidationSession, sessionB: ValidationSession) => {
+    setDiffSessionA(sessionA);
+    setDiffSessionB(sessionB);
+    setCurrentView('session-diff');
+  };
+
   const handleCleaningProceed = () => {
     // Proceed with cleaned emails — already set via handleEmailsLoaded
     setCleaningResult(null);
@@ -233,6 +244,8 @@ function AppContent() {
         return 'Validation History';
       case 'session-details':
         return 'Session Details';
+      case 'session-diff':
+        return 'Session Comparison';
       case 'analytics':
         return 'Analytics Dashboard';
       case 'settings':
@@ -253,6 +266,8 @@ function AppContent() {
         return 'View past validation sessions';
       case 'session-details':
         return 'Detailed session information';
+      case 'session-diff':
+        return 'Compare results between two sessions';
       case 'analytics':
         return 'Statistics and domain analysis';
       case 'settings':
@@ -310,6 +325,15 @@ function AppContent() {
         <header className="border-b px-4 sm:px-6 md:px-8 py-4 md:py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-card sticky top-0 z-50">
           <div className="flex items-center gap-2 sm:gap-4">
             {currentView === 'session-details' && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setCurrentView('history')}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+            )}
+            {currentView === 'session-diff' && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -449,6 +473,7 @@ function AppContent() {
                 onViewDetails={handleViewSessionDetails}
                 onResume={handleResumeSession}
                 onSessionSelected={() => {}}
+                onCompareSessions={handleCompareSessions}
               />
             </div>
           )}
@@ -456,6 +481,16 @@ function AppContent() {
           {currentView === 'session-details' && selectedSessionId && (
             <div className="max-w-6xl mx-auto">
               <SessionDetails sessionId={selectedSessionId} />
+            </div>
+          )}
+
+          {currentView === 'session-diff' && diffSessionA && diffSessionB && (
+            <div className="max-w-6xl mx-auto">
+              <SessionDiffView
+                sessionA={diffSessionA}
+                sessionB={diffSessionB}
+                onBack={() => setCurrentView('history')}
+              />
             </div>
           )}
 

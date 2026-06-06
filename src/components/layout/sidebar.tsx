@@ -16,6 +16,7 @@ export type SidebarView =
   | 'validation'
   | 'history'
   | 'session-details'
+  | 'session-diff'
   | 'analytics'
   | 'settings';
 
@@ -98,7 +99,9 @@ export function Sidebar({
           />
           <NavButton
             active={
-              currentView === 'history' || currentView === 'session-details'
+              currentView === 'history' ||
+              currentView === 'session-details' ||
+              currentView === 'session-diff'
             }
             onClick={() => onNavigate('history')}
             icon={<History className="h-4 w-4" />}
