@@ -26,6 +26,10 @@ const {
       domainAssignments: {},
       proxyStats: {},
       cooldownDurationSecs: 60,
+      autoDisableThreshold: {
+        successRatePercent: 20,
+        minAttempts: 10,
+      },
     },
     rateLimitMaxPerSecond: 1,
     rateLimitMaxPerMinute: 60,
@@ -51,12 +55,16 @@ const {
         failures: 0,
         consecutiveFailures: 0,
         cooldownUntil: null,
+        avgDurationMs: 0,
+        autoDisabled: false,
       })),
       recordProxySuccess: vi.fn(),
       recordProxyFailure: vi.fn(),
       resetProxyStats: vi.fn(),
       bypassProxyCooldown: vi.fn(),
       setCooldownDuration: vi.fn(),
+      reEnableProxy: vi.fn(),
+      setAutoDisableThreshold: vi.fn(),
     })),
   };
 });

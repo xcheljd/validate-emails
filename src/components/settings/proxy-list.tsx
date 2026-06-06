@@ -102,6 +102,8 @@ const defaultStats: ProxyStats = {
   failures: 0,
   consecutiveFailures: 0,
   cooldownUntil: null,
+  avgDurationMs: 0,
+  autoDisabled: false,
 };
 
 export function ProxyList({

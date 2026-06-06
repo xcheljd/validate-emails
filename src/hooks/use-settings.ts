@@ -82,6 +82,18 @@ export interface ProxyStats {
   consecutiveFailures: number;
   /** Timestamp (Unix epoch seconds) when cooldown ends. null if not in cooldown. */
   cooldownUntil: number | null;
+  /** Rolling average validation duration in milliseconds */
+  avgDurationMs: number;
+  /** Whether this proxy has been auto-disabled due to low success rate */
+  autoDisabled: boolean;
+}
+
+/** Auto-disable threshold configuration */
+export interface AutoDisableThreshold {
+  /** Success rate percentage below which proxy is auto-disabled (default: 20) */
+  successRatePercent: number;
+  /** Minimum attempts before auto-disable kicks in (default: 10) */
+  minAttempts: number;
 }
 
 /** Configuration for a single SOCKS5 proxy */
@@ -110,6 +122,8 @@ export interface ProxySettings {
   proxyStats: Record<string, ProxyStats>;
   /** Cooldown duration in seconds when proxy fails (default: 60, range: 30-300) */
   cooldownDurationSecs: number;
+  /** Auto-disable threshold configuration */
+  autoDisableThreshold: AutoDisableThreshold;
 }
 
 export interface AppSettings {
@@ -137,6 +151,10 @@ export const defaultProxySettings: ProxySettings = {
   domainAssignments: {},
   proxyStats: {},
   cooldownDurationSecs: 60,
+  autoDisableThreshold: {
+    successRatePercent: 20,
+    minAttempts: 10,
+  },
 };
 
 export const defaultSettings: AppSettings = {

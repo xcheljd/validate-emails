@@ -13,6 +13,7 @@ import type {
   ProxyConfig,
   ProxyStats,
   RotationMode,
+  AutoDisableThreshold,
 } from './use-settings';
 import {
   defaultSettings,
@@ -64,6 +65,7 @@ interface BackendProxyPool {
   domain_assignments: Record<string, string>;
   proxy_stats?: Record<string, ProxyStats>;
   cooldown_duration_secs?: number;
+  auto_disable_threshold?: AutoDisableThreshold;
 }
 
 function backendToFrontend(backend: BackendSettings): Partial<AppSettings> {
@@ -105,6 +107,10 @@ function backendProxyPoolToFrontend(backend: BackendProxyPool): ProxySettings {
     domainAssignments: backend.domain_assignments,
     proxyStats: backend.proxy_stats || {},
     cooldownDurationSecs: backend.cooldown_duration_secs ?? 60,
+    autoDisableThreshold: backend.auto_disable_threshold ?? {
+      successRatePercent: 20,
+      minAttempts: 10,
+    },
   };
 }
 
@@ -131,6 +137,8 @@ export interface SettingsContextValue {
   resetProxyStats: (proxyId: string) => Promise<void>;
   bypassProxyCooldown: (proxyId: string) => Promise<void>;
   setCooldownDuration: (durationSecs: number) => Promise<void>;
+  reEnableProxy: (proxyId: string) => Promise<void>;
+  setAutoDisableThreshold: (threshold: AutoDisableThreshold) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +449,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
           failures: 0,
           consecutiveFailures: 0,
           cooldownUntil: null,
+          avgDurationMs: 0,
+          autoDisabled: false,
         }
       );
     },
@@ -465,6 +475,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
           successes: 0,
           failures: 0,
           consecutiveFailures: 0,
+          cooldownUntil: null as number | null,
+          avgDurationMs: 0,
+          autoDisabled: false,
         };
         const updatedStats: ProxyStats = {
           ...currentStats,
@@ -501,6 +514,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
           successes: 0,
           failures: 0,
           consecutiveFailures: 0,
+          cooldownUntil: null as number | null,
+          avgDurationMs: 0,
+          autoDisabled: false,
         };
         const updatedStats: ProxyStats = {
           ...currentStats,
@@ -542,6 +558,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
               failures: 0,
               consecutiveFailures: 0,
               cooldownUntil: null,
+              avgDurationMs: 0,
+              autoDisabled: false,
             },
           },
         };
@@ -571,6 +589,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
           failures: 0,
           consecutiveFailures: 0,
           cooldownUntil: null,
+          avgDurationMs: 0,
+          autoDisabled: false,
         };
         const updated: ProxySettings = {
           ...currentProxy,
@@ -618,6 +638,72 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  const reEnableProxy = useCallback(
+    async (proxyId: string): Promise<void> => {
+      try {
+        await invoke('re_enable_proxy', { proxyId });
+        const pool = await invoke<BackendProxyPool>('get_proxy_pool');
+        const proxySettings = backendProxyPoolToFrontend(pool);
+        setSettings((prev) => ({ ...prev, proxy: proxySettings }));
+      } catch (err) {
+        console.warn(
+          'Failed to re-enable proxy via Tauri, using localStorage fallback:',
+          err
+        );
+        const currentProxy = getProxyFromStorage();
+        const currentStats = currentProxy.proxyStats[proxyId] || {
+          attempts: 0,
+          successes: 0,
+          failures: 0,
+          consecutiveFailures: 0,
+          cooldownUntil: null,
+          avgDurationMs: 0,
+          autoDisabled: false,
+        };
+        const updated: ProxySettings = {
+          ...currentProxy,
+          proxyStats: {
+            ...currentProxy.proxyStats,
+            [proxyId]: {
+              ...currentStats,
+              autoDisabled: false,
+              consecutiveFailures: 0,
+              cooldownUntil: null,
+            },
+          },
+        };
+        saveProxyToStorage(updated);
+        setSettings((prev) => ({ ...prev, proxy: updated }));
+      }
+    },
+    []
+  );
+
+  const setAutoDisableThreshold = useCallback(
+    async (threshold: AutoDisableThreshold): Promise<void> => {
+      try {
+        await invoke('set_auto_disable_threshold', { threshold });
+        setSettings((prev) => ({
+          ...prev,
+          proxy: { ...prev.proxy, autoDisableThreshold: threshold },
+        }));
+      } catch (err) {
+        console.warn(
+          'Failed to set auto-disable threshold via Tauri, using localStorage fallback:',
+          err
+        );
+        const currentProxy = getProxyFromStorage();
+        const updated: ProxySettings = {
+          ...currentProxy,
+          autoDisableThreshold: threshold,
+        };
+        saveProxyToStorage(updated);
+        setSettings((prev) => ({ ...prev, proxy: updated }));
+      }
+    },
+    []
+  );
+
   // --- Context value -------------------------------------------------------
 
   const value: SettingsContextValue = {
@@ -636,6 +722,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     resetProxyStats,
     bypassProxyCooldown,
     setCooldownDuration,
+    reEnableProxy,
+    setAutoDisableThreshold,
   };
 
   return (

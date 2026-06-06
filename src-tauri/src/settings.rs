@@ -230,7 +230,7 @@ pub enum HealthStatus {
 }
 
 /// Statistics tracking for a single proxy
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct ProxyStats {
@@ -245,7 +245,27 @@ pub struct ProxyStats {
     /// Timestamp (Unix epoch seconds) when cooldown ends. None if not in cooldown.
     #[serde(default)]
     pub cooldown_until: Option<i64>,
+    /// Rolling average validation duration in milliseconds (only updated on success)
+    #[serde(default)]
+    pub avg_duration_ms: f64,
+    /// Whether this proxy has been auto-disabled due to low success rate
+    #[serde(default)]
+    pub auto_disabled: bool,
 }
+
+impl PartialEq for ProxyStats {
+    fn eq(&self, other: &Self) -> bool {
+        self.attempts == other.attempts
+            && self.successes == other.successes
+            && self.failures == other.failures
+            && self.consecutive_failures == other.consecutive_failures
+            && self.cooldown_until == other.cooldown_until
+            && (self.avg_duration_ms - other.avg_duration_ms).abs() < f64::EPSILON
+            && self.auto_disabled == other.auto_disabled
+    }
+}
+
+impl Eq for ProxyStats {}
 
 impl ProxyStats {
     /// Create new empty stats
@@ -255,9 +275,23 @@ impl ProxyStats {
 
     /// Record a successful validation
     pub fn record_success(&mut self) {
+        self.record_success_with_duration(0.0);
+    }
+
+    /// Record a successful validation with duration tracking
+    pub fn record_success_with_duration(&mut self, duration_ms: f64) {
         self.attempts += 1;
         self.successes += 1;
         self.consecutive_failures = 0;
+
+        // Update rolling average duration
+        if self.successes == 1 {
+            self.avg_duration_ms = duration_ms;
+        } else {
+            let old_avg = self.avg_duration_ms;
+            let n = self.successes as f64;
+            self.avg_duration_ms = ((old_avg * (n - 1.0)) + duration_ms) / n;
+        }
     }
 
     /// Record a failed validation
@@ -377,6 +411,9 @@ pub struct ProxyPool {
     /// Cooldown duration in seconds when proxy fails (default: 60, range: 30-300)
     #[serde(default = "default_cooldown_duration")]
     pub cooldown_duration_secs: u64,
+    /// Auto-disable threshold configuration
+    #[serde(default)]
+    pub auto_disable_threshold: AutoDisableThreshold,
 }
 
 impl Default for ProxyPool {
@@ -388,6 +425,7 @@ impl Default for ProxyPool {
             domain_assignments: std::collections::HashMap::new(),
             proxy_stats: std::collections::HashMap::new(),
             cooldown_duration_secs: default_cooldown_duration(),
+            auto_disable_threshold: AutoDisableThreshold::default(),
         }
     }
 }
@@ -395,6 +433,25 @@ impl Default for ProxyPool {
 /// Default cooldown duration (60 seconds)
 fn default_cooldown_duration() -> u64 {
     60
+}
+
+/// Configuration for auto-disabling proxies based on success rate
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDisableThreshold {
+    /// Success rate percentage below which a proxy is auto-disabled (default: 20)
+    pub success_rate_percent: u32,
+    /// Minimum number of attempts before auto-disable kicks in (default: 10)
+    pub min_attempts: u32,
+}
+
+impl Default for AutoDisableThreshold {
+    fn default() -> Self {
+        Self {
+            success_rate_percent: 20,
+            min_attempts: 10,
+        }
+    }
 }
 
 /// Information about a failed proxy for the all-proxies-failed state
@@ -544,8 +601,17 @@ impl ProxyPool {
         stats.clear_cooldown();  // Clear cooldown on success
     }
 
+    /// Record a successful validation for a proxy with duration tracking
+    /// Also clears cooldown if proxy was in cooldown
+    pub fn record_success_with_duration(&mut self, proxy_id: &str, duration_ms: f64) {
+        let stats = self.get_stats_mut(proxy_id);
+        stats.record_success_with_duration(duration_ms);
+        stats.clear_cooldown();  // Clear cooldown on success
+    }
+
     /// Record a failed validation for a proxy
     /// Automatically enters cooldown if proxy becomes "bad" (3 consecutive failures)
+    /// Checks auto-disable threshold after recording failure
     pub fn record_failure(&mut self, proxy_id: &str) {
         // Get cooldown duration first to avoid borrow issues
         let cooldown_duration = self.cooldown_duration_secs;
@@ -555,6 +621,9 @@ impl ProxyPool {
         if stats.is_bad() {
             stats.enter_cooldown(cooldown_duration);
         }
+
+        // Check auto-disable threshold
+        self.check_auto_disable(proxy_id);
     }
 
     /// Get all proxy stats
@@ -612,12 +681,21 @@ impl ProxyPool {
     }
 
     /// Check if a proxy is available for use.
-    /// A proxy is unavailable only while in cooldown.
+    /// A proxy is unavailable if in cooldown or auto-disabled.
     /// After cooldown expires, the proxy is given another chance to succeed,
     /// even if its consecutive failure count is still high. If it fails again,
     /// it will re-enter cooldown automatically via record_failure.
     pub fn is_proxy_available(&self, proxy_id: &str) -> bool {
-        !self.is_proxy_in_cooldown(proxy_id)
+        if self.is_proxy_in_cooldown(proxy_id) {
+            return false;
+        }
+        // Auto-disabled proxies are excluded from rotation
+        if let Some(stats) = self.proxy_stats.get(proxy_id) {
+            if stats.auto_disabled {
+                return false;
+            }
+        }
+        true
     }
 
     /// Get remaining cooldown time for a proxy in seconds
@@ -635,6 +713,48 @@ impl ProxyPool {
             // Also reset consecutive failures to give the proxy a fresh start
             stats.consecutive_failures = 0;
         }
+    }
+
+    /// Check if a proxy should be auto-disabled based on threshold
+    fn check_auto_disable(&mut self, proxy_id: &str) {
+        let threshold = self.auto_disable_threshold.clone();
+        if let Some(stats) = self.proxy_stats.get(proxy_id) {
+            if stats.auto_disabled {
+                return; // Already disabled
+            }
+            if stats.attempts >= threshold.min_attempts {
+                let success_rate = if stats.attempts > 0 {
+                    (stats.successes as f64 / stats.attempts as f64) * 100.0
+                } else {
+                    0.0
+                };
+                if success_rate < threshold.success_rate_percent as f64 {
+                    if let Some(s) = self.proxy_stats.get_mut(proxy_id) {
+                        s.auto_disabled = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Re-enable an auto-disabled proxy
+    /// Clears the auto_disabled flag and resets consecutive failures
+    pub fn re_enable_proxy(&mut self, proxy_id: &str) {
+        if let Some(stats) = self.proxy_stats.get_mut(proxy_id) {
+            stats.auto_disabled = false;
+            stats.consecutive_failures = 0;
+            stats.clear_cooldown();
+        }
+    }
+
+    /// Update the auto-disable threshold configuration
+    pub fn set_auto_disable_threshold(&mut self, threshold: AutoDisableThreshold) {
+        self.auto_disable_threshold = threshold;
+    }
+
+    /// Get the current auto-disable threshold configuration
+    pub fn get_auto_disable_threshold(&self) -> &AutoDisableThreshold {
+        &self.auto_disable_threshold
     }
 
     /// Set the cooldown duration (clamped to 30-300 seconds)
@@ -1156,6 +1276,53 @@ pub async fn reset_all_proxy_stats(
 ) -> Result<(), String> {
     let mut settings = state.settings.write().await;
     settings.proxy_pool.reset_all_stats();
+    Ok(())
+}
+
+// =====================
+// Auto-Disable Commands
+// =====================
+
+/// Get the auto-disable threshold configuration
+#[tauri::command]
+pub async fn get_auto_disable_threshold(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<AutoDisableThreshold, String> {
+    let settings = state.settings.read().await;
+    Ok(settings.proxy_pool.auto_disable_threshold.clone())
+}
+
+/// Update the auto-disable threshold configuration
+#[tauri::command]
+pub async fn set_auto_disable_threshold(
+    state: tauri::State<'_, SettingsState>,
+    threshold: AutoDisableThreshold,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.set_auto_disable_threshold(threshold);
+    Ok(())
+}
+
+/// Re-enable an auto-disabled proxy
+#[tauri::command]
+pub async fn re_enable_proxy(
+    state: tauri::State<'_, SettingsState>,
+    proxy_id: String,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.re_enable_proxy(&proxy_id);
+    Ok(())
+}
+
+/// Record a successful validation for a proxy with duration tracking
+#[tauri::command]
+pub async fn record_proxy_success_with_duration(
+    state: tauri::State<'_, SettingsState>,
+    proxy_id: String,
+    duration_ms: f64,
+) -> Result<(), String> {
+    let mut settings = state.settings.write().await;
+    settings.proxy_pool.record_success_with_duration(&proxy_id, duration_ms);
     Ok(())
 }
 
@@ -3806,5 +3973,234 @@ mod tests {
         let state = pool.get_all_proxies_failed_state().unwrap();
         // Nearest cooldown should be from proxy 2 (30s)
         assert!(state.nearest_cooldown_secs <= 30);
+    }
+
+    // =====================
+    // ProxyStats Duration Tracking Tests (VAL-PROXY-005, VAL-PROXY-006, VAL-PROXY-007)
+    // =====================
+
+    #[test]
+    fn test_proxy_stats_default_includes_avg_duration_ms() {
+        let stats = ProxyStats::default();
+        assert_eq!(stats.avg_duration_ms, 0.0);
+        assert!(!stats.auto_disabled);
+    }
+
+    #[test]
+    fn test_proxy_stats_record_success_with_duration_first() {
+        let mut stats = ProxyStats::new();
+        stats.record_success_with_duration(150.0);
+        assert_eq!(stats.avg_duration_ms, 150.0);
+        assert_eq!(stats.successes, 1);
+    }
+
+    #[test]
+    fn test_proxy_stats_record_success_with_duration_rolling_average() {
+        let mut stats = ProxyStats::new();
+        stats.record_success_with_duration(100.0);
+        stats.record_success_with_duration(200.0);
+        stats.record_success_with_duration(300.0);
+
+        // Rolling average: ((100 * 1) + 200) / 2 = 150, then ((150 * 2) + 300) / 3 = 200
+        assert!((stats.avg_duration_ms - 200.0).abs() < f64::EPSILON);
+        assert_eq!(stats.successes, 3);
+    }
+
+    #[test]
+    fn test_proxy_stats_failure_does_not_change_avg_duration() {
+        let mut stats = ProxyStats::new();
+        stats.record_success_with_duration(100.0);
+        assert_eq!(stats.avg_duration_ms, 100.0);
+
+        stats.record_failure();
+        // avg_duration_ms should be unchanged after failure
+        assert_eq!(stats.avg_duration_ms, 100.0);
+        assert_eq!(stats.failures, 1);
+    }
+
+    #[test]
+    fn test_proxy_stats_record_success_without_duration_keeps_zero() {
+        let mut stats = ProxyStats::new();
+        stats.record_success(); // duration defaults to 0.0
+        assert_eq!(stats.avg_duration_ms, 0.0);
+    }
+
+    #[test]
+    fn test_proxy_stats_serialization_includes_new_fields() {
+        let mut stats = ProxyStats::new();
+        stats.record_success_with_duration(123.5);
+        stats.auto_disabled = true;
+
+        let json = serde_json::to_string(&stats).unwrap();
+        assert!(json.contains("avgDurationMs"));
+        assert!(json.contains("autoDisabled"));
+
+        let deserialized: ProxyStats = serde_json::from_str(&json).unwrap();
+        assert!((deserialized.avg_duration_ms - 123.5).abs() < f64::EPSILON);
+        assert!(deserialized.auto_disabled);
+    }
+
+    // =====================
+    // Auto-Disable Threshold Tests (VAL-PROXY-011, VAL-PROXY-012)
+    // =====================
+
+    #[test]
+    fn test_auto_disable_threshold_default() {
+        let threshold = AutoDisableThreshold::default();
+        assert_eq!(threshold.success_rate_percent, 20);
+        assert_eq!(threshold.min_attempts, 10);
+    }
+
+    #[test]
+    fn test_auto_disable_threshold_serialization() {
+        let threshold = AutoDisableThreshold {
+            success_rate_percent: 30,
+            min_attempts: 5,
+        };
+        let json = serde_json::to_string(&threshold).unwrap();
+        assert!(json.contains("successRatePercent"));
+        assert!(json.contains("minAttempts"));
+
+        let deserialized: AutoDisableThreshold = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.success_rate_percent, 30);
+        assert_eq!(deserialized.min_attempts, 5);
+    }
+
+    #[test]
+    fn test_auto_disable_triggers_when_below_threshold() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.auto_disable_threshold = AutoDisableThreshold {
+            success_rate_percent: 30,
+            min_attempts: 5,
+        };
+
+        // Record 1 success then 4 failures = 20% success rate (below 30%), total 5 attempts
+        pool.record_success("192.168.1.1:8080");
+        for _ in 0..4 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+
+        // 5 attempts, 20% success rate, threshold is 30% → should be auto-disabled
+        let stats = pool.get_stats("192.168.1.1:8080");
+        assert!(stats.auto_disabled, "Proxy should be auto-disabled when success rate is below threshold");
+    }
+
+    #[test]
+    fn test_auto_disable_does_not_trigger_above_threshold() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.auto_disable_threshold = AutoDisableThreshold {
+            success_rate_percent: 20,
+            min_attempts: 10,
+        };
+
+        // Record 8 successes and 2 failures = 80% success rate (above 20%)
+        for _ in 0..8 {
+            pool.record_success("192.168.1.1:8080");
+        }
+        for _ in 0..2 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+
+        let stats = pool.get_stats("192.168.1.1:8080");
+        assert!(!stats.auto_disabled, "Proxy should not be auto-disabled when success rate is above threshold");
+    }
+
+    #[test]
+    fn test_auto_disable_does_not_trigger_below_min_attempts() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.auto_disable_threshold = AutoDisableThreshold {
+            success_rate_percent: 80,
+            min_attempts: 10,
+        };
+
+        // Record 2 failures = 0% success rate, but only 2 attempts (below min 10)
+        pool.record_failure("192.168.1.1:8080");
+        pool.record_failure("192.168.1.1:8080");
+
+        let stats = pool.get_stats("192.168.1.1:8080");
+        assert!(!stats.auto_disabled, "Proxy should not be auto-disabled below min_attempts threshold");
+    }
+
+    #[test]
+    fn test_auto_disabled_proxy_excluded_from_rotation() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
+        pool.auto_disable_threshold = AutoDisableThreshold {
+            success_rate_percent: 50,
+            min_attempts: 3,
+        };
+
+        // Make first proxy fail enough to be auto-disabled
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+
+        let stats = pool.get_stats("192.168.1.1:8080");
+        assert!(stats.auto_disabled);
+
+        // Auto-disabled proxy should not be available
+        assert!(!pool.is_proxy_available("192.168.1.1:8080"));
+        // Second proxy should still be available
+        assert!(pool.is_proxy_available("192.168.1.2:8080"));
+    }
+
+    #[test]
+    fn test_re_enable_proxy() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.auto_disable_threshold = AutoDisableThreshold {
+            success_rate_percent: 50,
+            min_attempts: 3,
+        };
+
+        // Auto-disable the proxy
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        assert!(pool.get_stats("192.168.1.1:8080").auto_disabled);
+        assert!(!pool.is_proxy_available("192.168.1.1:8080"));
+
+        // Re-enable
+        pool.re_enable_proxy("192.168.1.1:8080");
+        let stats = pool.get_stats("192.168.1.1:8080");
+        assert!(!stats.auto_disabled);
+        assert_eq!(stats.consecutive_failures, 0);
+        assert!(pool.is_proxy_available("192.168.1.1:8080"));
+    }
+
+    #[test]
+    fn test_set_auto_disable_threshold() {
+        let mut pool = ProxyPool::new();
+        let new_threshold = AutoDisableThreshold {
+            success_rate_percent: 40,
+            min_attempts: 15,
+        };
+        pool.set_auto_disable_threshold(new_threshold.clone());
+        assert_eq!(pool.auto_disable_threshold, new_threshold);
+    }
+
+    #[test]
+    fn test_proxy_pool_default_includes_auto_disable_threshold() {
+        let pool = ProxyPool::default();
+        assert_eq!(pool.auto_disable_threshold.success_rate_percent, 20);
+        assert_eq!(pool.auto_disable_threshold.min_attempts, 10);
+    }
+
+    #[test]
+    fn test_proxy_pool_serialization_includes_auto_disable_threshold() {
+        let pool = ProxyPool::default();
+        let json = serde_json::to_string(&pool).unwrap();
+        assert!(json.contains("autoDisableThreshold"));
+        assert!(json.contains("successRatePercent"));
+        assert!(json.contains("minAttempts"));
     }
 }

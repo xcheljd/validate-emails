@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Trash2, Save, History, ShieldCheck, Shield, Gauge } from 'lucide-react';
+import { Trash2, Save, History, ShieldCheck, Shield, Gauge, Activity } from 'lucide-react';
 import {
   useSettings,
   AppSettings,
@@ -13,6 +13,7 @@ import {
 import { toast } from 'sonner';
 import { ProxyList } from './proxy-list';
 import { PerDomainAssignment } from './per-domain-assignment';
+import { ProxyHealthDashboard } from './proxy-health-dashboard';
 
 interface SettingsContentProps {
   onClose?: () => void;
@@ -30,6 +31,8 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
     unassignDomainProxy,
     bypassProxyCooldown,
     setCooldownDuration,
+    reEnableProxy,
+    setAutoDisableThreshold,
   } = useSettings();
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings);
   const [activeTab, setActiveTab] = useState('validation');
@@ -283,6 +286,15 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
         >
           <Shield className="h-4 w-4" />
           Proxy
+        </Button>
+
+        <Button
+          variant={activeTab === 'health' ? 'secondary' : 'ghost'}
+          onClick={() => setActiveTab('health')}
+          className="gap-2"
+        >
+          <Activity className="h-4 w-4" />
+          Health
         </Button>
       </div>
 
@@ -601,6 +613,17 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
               </div>
             )}
           </div>
+        )}
+
+        {activeTab === 'health' && (
+          <ProxyHealthDashboard
+            proxies={localSettings.proxy.proxies}
+            proxyStats={localSettings.proxy.proxyStats}
+            autoDisableThreshold={localSettings.proxy.autoDisableThreshold}
+            onReEnableProxy={reEnableProxy}
+            onSetAutoDisableThreshold={setAutoDisableThreshold}
+            disabled={false}
+          />
         )}
       </div>
 

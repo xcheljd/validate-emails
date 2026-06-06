@@ -93,7 +93,7 @@ async fn validate_emails_bulk(
             if let Some(ref proxy_id) = result.proxy_id {
                 // Consider "Safe" and "Risky" as success, "Invalid" and "Unknown" as failure
                 if result.result == "Safe" || result.result == "Risky" {
-                    settings.proxy_pool.record_success(proxy_id);
+                    settings.proxy_pool.record_success_with_duration(proxy_id, result.validation_duration as f64);
                 } else {
                     settings.proxy_pool.record_failure(proxy_id);
                 }
@@ -188,7 +188,7 @@ async fn revalidate_emails_bulk(
             if let Some(ref proxy_id) = result.proxy_id {
                 // Consider "Safe" and "Risky" as success, "Invalid" and "Unknown" as failure
                 if result.result == "Safe" || result.result == "Risky" {
-                    settings.proxy_pool.record_success(proxy_id);
+                    settings.proxy_pool.record_success_with_duration(proxy_id, result.validation_duration as f64);
                 } else {
                     settings.proxy_pool.record_failure(proxy_id);
                 }
@@ -279,6 +279,10 @@ pub fn run() {
             settings::get_max_emails_per_session,
             settings::set_max_emails_per_session,
             settings::check_email_count_limit,
+            settings::get_auto_disable_threshold,
+            settings::set_auto_disable_threshold,
+            settings::re_enable_proxy,
+            settings::record_proxy_success_with_duration,
             session::create_validation_session,
             session::update_validation_session,
             session::load_validation_session,
