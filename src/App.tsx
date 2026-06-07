@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { MainLayout } from '@/components/layout/main-layout';
 import { SidebarView } from '@/components/layout/sidebar';
 import { EmailInput } from '@/components/validation/email-input';
@@ -99,7 +99,21 @@ function AppContent() {
     rateLimitFailureState,
     resumeFromAutoPause,
     stopFromAutoPause,
+    setValidationStateForTest,
   } = useEmailValidation(settings.validationMode);
+
+  // Expose test helper globally for E2E tests
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development') {
+      (window as any).__VALIDATION_TEST_HELPER__ = {
+        setValidationState: setValidationStateForTest,
+        setShowDashboard: (value: boolean) => setShowDashboard(value),
+      };
+    }
+    return () => {
+      delete (window as any).__VALIDATION_TEST_HELPER__;
+    };
+  }, [setValidationStateForTest, setShowDashboard]);
 
   const handleNavigate = (view: SidebarView) => {
     setCurrentView(view);
