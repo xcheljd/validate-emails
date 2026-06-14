@@ -10,14 +10,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { AlertTriangle, Clock, XCircle, Timer } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { FailedProxyInfo } from '@/hooks/validation-types';
 
-export interface FailedProxyInfo {
-  id: string;
-  isBad: boolean;
-  remainingCooldownSecs: number;
-  consecutiveFailures: number;
-  successRate: number;
-}
+export type { FailedProxyInfo };
 
 export interface ProxyFailureModalProps {
   open: boolean;

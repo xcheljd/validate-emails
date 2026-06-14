@@ -352,7 +352,7 @@ async fn validate_email_full(
     };
 
     let mut builder = CheckEmailInputBuilder::default();
-    builder.to_email(email.clone()).verif_method(verif_method);
+    builder.to_email(email.clone()).verif_method(verif_method).check_gravatar(true);
 
     let input = builder.build();
 
@@ -492,47 +492,6 @@ impl ProxyRotationState {
     }
 }
 
-/// Rate limit enforcement state for validation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RateLimitStatus {
-    /// Number of consecutive failures detected
-    pub consecutive_failures: u32,
-    /// Whether auto-slowdown is active
-    pub is_slowed_down: bool,
-    /// Whether auto-pause has been triggered
-    pub is_auto_paused: bool,
-    /// Slowdown threshold (consecutive failures to trigger slowdown)
-    pub slowdown_threshold: u32,
-    /// Pause threshold (consecutive failures after slowdown to trigger pause)
-    pub pause_threshold: u32,
-}
-
-impl Default for RateLimitStatus {
-    fn default() -> Self {
-        Self {
-            consecutive_failures: 0,
-            is_slowed_down: false,
-            is_auto_paused: false,
-            slowdown_threshold: 3,
-            pause_threshold: 8,
-        }
-    }
-}
-
-/// Check if an email count exceeds the max_emails_per_session limit.
-/// Returns Ok(()) if allowed, Err with message if rejected.
-pub fn check_max_emails(emails: &[String], max_emails_per_session: u32) -> Result<(), String> {
-    if max_emails_per_session > 0 && emails.len() as u32 > max_emails_per_session {
-        return Err(format!(
-            "Email count ({}) exceeds max_emails_per_session ({})",
-            emails.len(),
-            max_emails_per_session
-        ));
-    }
-    Ok(())
-}
-
 /// Calculate the minimum interval between dispatches based on rate limiter config.
 /// Returns the minimum Duration between consecutive email validations.
 pub fn calculate_rate_interval(config: &RateLimiterConfig) -> Duration {
@@ -540,36 +499,6 @@ pub fn calculate_rate_interval(config: &RateLimiterConfig) -> Duration {
         return Duration::from_millis(0);
     }
     Duration::from_millis(1000 / config.max_per_second as u64)
-}
-
-/// Check rate limit status based on consecutive failures.
-/// Updates the rate limit status based on the latest result.
-pub fn update_rate_limit_status(
-    status: &mut RateLimitStatus,
-    result_str: &str,
-) {
-    // Consider Unknown and errors as failures for rate limit tracking
-    let is_failure = result_str == "Unknown" || result_str == "Error";
-    
-    if is_failure {
-        status.consecutive_failures += 1;
-        
-        // Trigger slowdown after threshold consecutive failures
-        if status.consecutive_failures >= status.slowdown_threshold {
-            status.is_slowed_down = true;
-        }
-        
-        // Trigger auto-pause after pause threshold
-        if status.consecutive_failures >= status.pause_threshold {
-            status.is_auto_paused = true;
-        }
-    } else {
-        // Success resets consecutive failures but not slowdown state
-        status.consecutive_failures = 0;
-        if status.is_slowed_down && !status.is_auto_paused {
-            // Keep slowdown active until explicitly cleared
-        }
-    }
 }
 
 pub async fn validate_emails_bulk_core<F>(
@@ -625,20 +554,21 @@ where
     // Otherwise, we use the existing concurrent approach.
     if rate_interval > Duration::from_millis(0) {
         // Rate-limited sequential processing
-        for email in emails.iter() {
+        let mut iter = emails.iter().peekable();
+        while let Some(email) = iter.next() {
             if token.is_cancelled() {
                 break;
             }
-
-            // Enforce rate limit interval before dispatching
-            let min_interval = rate_interval;
-            sleep(min_interval).await;
 
             let mode = mode_clone.clone();
             let proxy = proxy_state.as_ref().and_then(|state| state.get_proxy_for_email(email));
             let result = validate_email(email.clone(), mode, proxy).await;
             on_progress(result.clone());
             results.push(result);
+
+            if iter.peek().is_some() {
+                sleep(rate_interval).await;
+            }
         }
     } else {
         // Original concurrent processing (no rate limiting)
@@ -980,131 +910,5 @@ mod tests {
         let config = RateLimiterConfig { max_per_second: 0, max_per_minute: 60 };
         let interval = calculate_rate_interval(&config);
         assert_eq!(interval, Duration::from_millis(0));
-    }
-
-    #[test]
-    fn test_check_max_emails_allows_within_limit() {
-        let emails: Vec<String> = (0..5).map(|i| format!("test{}@example.com", i)).collect();
-        assert!(check_max_emails(&emails, 10).is_ok());
-    }
-
-    #[test]
-    fn test_check_max_emails_allows_exact_limit() {
-        let emails: Vec<String> = (0..5).map(|i| format!("test{}@example.com", i)).collect();
-        assert!(check_max_emails(&emails, 5).is_ok());
-    }
-
-    #[test]
-    fn test_check_max_emails_rejects_oversized() {
-        let emails: Vec<String> = (0..10).map(|i| format!("test{}@example.com", i)).collect();
-        let result = check_max_emails(&emails, 5);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("exceeds max_emails_per_session"));
-    }
-
-    #[test]
-    fn test_check_max_emails_unlimited() {
-        let emails: Vec<String> = (0..1000).map(|i| format!("test{}@example.com", i)).collect();
-        assert!(check_max_emails(&emails, 0).is_ok());
-    }
-
-    #[test]
-    fn test_rate_limit_status_default() {
-        let status = RateLimitStatus::default();
-        assert_eq!(status.consecutive_failures, 0);
-        assert!(!status.is_slowed_down);
-        assert!(!status.is_auto_paused);
-        assert_eq!(status.slowdown_threshold, 3);
-        assert_eq!(status.pause_threshold, 8);
-    }
-
-    #[test]
-    fn test_rate_limit_status_triggers_slowdown() {
-        let mut status = RateLimitStatus::default();
-        
-        // 2 failures - no slowdown yet
-        update_rate_limit_status(&mut status, "Unknown");
-        update_rate_limit_status(&mut status, "Unknown");
-        assert!(!status.is_slowed_down);
-        assert_eq!(status.consecutive_failures, 2);
-        
-        // 3rd failure triggers slowdown
-        update_rate_limit_status(&mut status, "Unknown");
-        assert!(status.is_slowed_down);
-        assert_eq!(status.consecutive_failures, 3);
-    }
-
-    #[test]
-    fn test_rate_limit_status_triggers_auto_pause() {
-        let mut status = RateLimitStatus::default();
-        
-        // 7 failures - slowdown but not auto-pause
-        for _ in 0..7 {
-            update_rate_limit_status(&mut status, "Unknown");
-        }
-        assert!(status.is_slowed_down);
-        assert!(!status.is_auto_paused);
-        
-        // 8th failure triggers auto-pause
-        update_rate_limit_status(&mut status, "Unknown");
-        assert!(status.is_auto_paused);
-        assert_eq!(status.consecutive_failures, 8);
-    }
-
-    #[test]
-    fn test_rate_limit_status_success_resets_failures() {
-        let mut status = RateLimitStatus::default();
-        
-        // 3 failures triggers slowdown
-        for _ in 0..3 {
-            update_rate_limit_status(&mut status, "Unknown");
-        }
-        assert!(status.is_slowed_down);
-        assert_eq!(status.consecutive_failures, 3);
-        
-        // Success resets consecutive failures
-        update_rate_limit_status(&mut status, "Safe");
-        assert_eq!(status.consecutive_failures, 0);
-        // Slowdown stays active
-        assert!(status.is_slowed_down);
-    }
-
-    #[test]
-    fn test_rate_limit_status_error_triggers_slowdown() {
-        let mut status = RateLimitStatus::default();
-        
-        // "Error" results are treated as failures
-        for _ in 0..3 {
-            update_rate_limit_status(&mut status, "Error");
-        }
-        assert!(status.is_slowed_down);
-    }
-
-    #[test]
-    fn test_rate_limit_status_safe_no_failure() {
-        let mut status = RateLimitStatus::default();
-        
-        // Safe results don't count as failures
-        update_rate_limit_status(&mut status, "Safe");
-        assert_eq!(status.consecutive_failures, 0);
-        assert!(!status.is_slowed_down);
-    }
-
-    #[test]
-    fn test_rate_limit_status_risky_no_failure() {
-        let mut status = RateLimitStatus::default();
-        
-        // Risky results don't count as failures
-        update_rate_limit_status(&mut status, "Risky");
-        assert_eq!(status.consecutive_failures, 0);
-    }
-
-    #[test]
-    fn test_rate_limit_status_invalid_no_failure() {
-        let mut status = RateLimitStatus::default();
-        
-        // Invalid results don't count as failures (they're definitive results)
-        update_rate_limit_status(&mut status, "Invalid");
-        assert_eq!(status.consecutive_failures, 0);
     }
 }

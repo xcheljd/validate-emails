@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Progress } from '@/components/ui/progress';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -109,9 +109,22 @@ export function ValidationDashboard({
   // Use a latch to prevent repeatedly showing the retry modal.
   const [hasPromptedRetry, setHasPromptedRetry] = useState(false);
 
+  // When forceShowRetryModal transitions true → false, close the modal and reset the
+  // latch so the normal idle-path can re-prompt after a test run.
+  const prevForceShowRef = useRef(forceShowRetryModal);
+  useEffect(() => {
+    const wasForced = prevForceShowRef.current;
+    prevForceShowRef.current = forceShowRetryModal;
+    if (wasForced && !forceShowRetryModal) {
+      setShowRetryModal(false);
+      setHasPromptedRetry(false);
+    }
+  }, [forceShowRetryModal]);
+
   useEffect(() => {
     if (status === 'processing') {
       setHasPromptedRetry(false);
+      return;
     }
 
     // Allow forceShowRetryModal to override the latch for testing
@@ -119,13 +132,6 @@ export function ValidationDashboard({
       setShowRetryModal(true);
       setHasPromptedRetry(true);
       return;
-    }
-
-    // Close retry modal when forceShowRetryModal becomes false
-    if (showRetryModal && !forceShowRetryModal) {
-      setShowRetryModal(false);
-      // Reset latch so normal retry prompt can work after forceShowRetryModal is disabled
-      setHasPromptedRetry(false);
     }
 
     if (
@@ -147,7 +153,6 @@ export function ValidationDashboard({
     hasPromptedRetry,
     onRetryUnknowns,
     forceShowRetryModal,
-    showRetryModal,
   ]);
 
   const percentage = total > 0 ? Math.round((progress / total) * 100) : 0;

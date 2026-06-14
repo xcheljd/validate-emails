@@ -4,8 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Mail, ArrowRight, Trash2, ChevronLeft } from 'lucide-react';
 import { ValidationModeSelector } from './validation-modes';
 import { useVirtualizer } from '@tanstack/react-virtual';
-
-type ValidationMode = 'quick' | 'standard' | 'thorough';
+import type { ValidationMode } from '@/hooks/validation-types';
 
 const modeLabels: Record<ValidationMode, string> = {
   quick: 'Quick',

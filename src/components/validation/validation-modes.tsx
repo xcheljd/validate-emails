@@ -1,7 +1,6 @@
 import { Zap, ShieldCheck, ShieldAlert, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-type ValidationMode = 'quick' | 'standard' | 'thorough';
+import type { ValidationMode } from '@/hooks/validation-types';
 
 interface ValidationModesProps {
   selected: ValidationMode;

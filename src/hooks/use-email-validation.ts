@@ -5,46 +5,27 @@ import { listen } from '@tauri-apps/api/event';
 import { notifyValidationComplete, notifyError } from '@/lib/notifications';
 import { loadSession, createSession, updateSessionProgress, ValidationSession } from '@/lib/session-manager';
 import { ValidationResult } from '@/lib/types';
+import {
+  type ValidationStatus,
+  type ValidationMode,
+  type AllProxiesFailedPayload,
+  type RateLimitFailureState,
+  type ValidationStateForTest,
+  SLOWDOWN_THRESHOLD,
+  AUTO_PAUSE_THRESHOLD,
+} from './validation-types';
 
-export type ValidationStatus =
-  | 'idle'
-  | 'processing'
-  | 'paused'
-  | 'stopping'
-  | 'waiting';
-
-export interface FailedProxyInfo {
-  id: string;
-  isBad: boolean;
-  remainingCooldownSecs: number;
-  consecutiveFailures: number;
-  successRate: number;
-}
-
-export interface AllProxiesFailedPayload {
-  failedProxies: FailedProxyInfo[];
-  proxyEnabled: boolean;
-  totalProxies: number;
-  badCount: number;
-  cooldownCount: number;
-  nearestCooldownSecs: number;
-}
-
-/** Rate limit status for consecutive failure tracking */
-export interface RateLimitFailureState {
-  /** Number of consecutive failures */
-  consecutiveFailures: number;
-  /** Whether slowdown is active (>=3 consecutive failures) */
-  isSlowdownActive: boolean;
-  /** Whether auto-pause has been triggered (>=8 consecutive failures) */
-  isAutoPaused: boolean;
-}
-
-const SLOWDOWN_THRESHOLD = 3;
-const AUTO_PAUSE_THRESHOLD = 8;
+// Re-export types for backward compatibility with existing consumers.
+export type {
+  ValidationStatus,
+  ValidationMode,
+  FailedProxyInfo,
+  AllProxiesFailedPayload,
+  RateLimitFailureState,
+} from './validation-types';
 
 export function useEmailValidation(
-  initialMode: 'quick' | 'standard' | 'thorough' = 'standard',
+  initialMode: ValidationMode = 'standard',
   autoSaveInterval: number = 10
 ) {
   const [results, setResults] = useState<ValidationResult[]>([]);
@@ -52,7 +33,7 @@ export function useEmailValidation(
   const [progress, setProgress] = useState(0);
   const [total, setTotal] = useState(0);
   const [validationMode, setValidationMode] = useState<
-    'quick' | 'standard' | 'thorough'
+    ValidationMode
   >(initialMode);
   const [validationSpeed, setValidationSpeed] = useState<number>(0);
   const [estimatedTimeRemaining, setEstimatedTimeRemaining] =
@@ -86,7 +67,6 @@ export function useEmailValidation(
   const resultsRef = useRef<ValidationResult[]>([]);
   const progressRef = useRef(0);
   const totalRef = useRef(0);
-  const allEmailsRef = useRef<string[]>([]);
 
   // Keep refs in sync for use in callbacks and effects
   useEffect(() => {
@@ -260,7 +240,7 @@ export function useEmailValidation(
       }
     };
 
-    setupListeners();
+    setupListeners().catch((err) => console.error('Failed to set up validation listeners:', err));
 
     return () => {
       isActive = false;
@@ -277,7 +257,7 @@ export function useEmailValidation(
     }: {
       emails: string[];
       concurrency: number;
-      mode: 'quick' | 'standard' | 'thorough';
+      mode: ValidationMode;
     }) => {
       return invoke<ValidationResult[]>('validate_emails_bulk', {
         emails,
@@ -306,7 +286,7 @@ export function useEmailValidation(
     (
       emails: string[],
       concurrency: number = 5,
-      mode: 'quick' | 'standard' | 'thorough' = 'standard'
+      mode: ValidationMode = 'standard'
     ) => {
       setResults([]);
       setProgress(0);
@@ -317,7 +297,6 @@ export function useEmailValidation(
       setUsingDirectConnection(false);
       setSessionId(null);
       sessionIdRef.current = null;
-      allEmailsRef.current = [...emails];
       // Reset rate limit failure state
       setRateLimitFailureState({
         consecutiveFailures: 0,
@@ -396,7 +375,6 @@ export function useEmailValidation(
         setTotal(session.total);
         setSessionId(sessionIdToResume);
         sessionIdRef.current = sessionIdToResume;
-        allEmailsRef.current = session.emails;
         setValidationMode(session.settings.validationMode);
         currentConcurrencyRef.current = resolvedConcurrency;
         pendingEmailsRef.current = emailsToRevalidate;
@@ -424,7 +402,7 @@ export function useEmailValidation(
     }: {
       items: { email: string }[];
       concurrency: number;
-      mode: 'quick' | 'standard' | 'thorough';
+      mode: ValidationMode;
     }) => {
       return invoke<ValidationResult[]>('revalidate_emails_bulk', {
         items,
@@ -471,7 +449,7 @@ export function useEmailValidation(
 
   const retryWithEscalation = useCallback(
     async (
-      tier: 'quick' | 'standard' | 'thorough',
+      tier: ValidationMode,
       autoEscalate: boolean
     ) => {
       const unknownResults = results.filter((r) => r.result === 'Unknown');
@@ -494,7 +472,7 @@ export function useEmailValidation(
       }
 
       // Auto-escalation: go through quick → standard → thorough
-      const tiers: Array<'quick' | 'standard' | 'thorough'> = [
+      const tiers: ValidationMode[] = [
         'quick',
         'standard',
         'thorough',
@@ -513,7 +491,9 @@ export function useEmailValidation(
           const items = currentUnknowns.map((email) => ({ email }));
 
           // Remove unknowns being retried from results
-          setResults((prev) => prev.filter((r) => r.result !== 'Unknown' || !currentUnknowns.includes(r.email)));
+          setProgress((prev) => Math.max(0, prev - currentUnknowns.length));
+          const currentUnknownsSet = new Set(currentUnknowns);
+          setResults((prev) => prev.filter((r) => r.result !== 'Unknown' || !currentUnknownsSet.has(r.email)));
 
           setStatus('processing');
           statusRef.current = 'processing';
@@ -708,13 +688,7 @@ export function useEmailValidation(
 
   // Test helper - allows tests to set validation state directly
   const setValidationStateForTest = useCallback((
-    newState: Partial<{
-      results: ValidationResult[];
-      status: ValidationStatus;
-      progress: number;
-      total: number;
-      validationMode: 'quick' | 'standard' | 'thorough';
-    }>
+    newState: Partial<Pick<ValidationStateForTest, 'results' | 'status' | 'progress' | 'total' | 'validationMode'>>
   ) => {
     if (newState.results !== undefined) setResults(newState.results);
     if (newState.status !== undefined) setStatus(newState.status);
@@ -724,7 +698,7 @@ export function useEmailValidation(
   }, []);
 
   // Test helper - allows tests to get validation state directly
-  const getValidationStateForTest = useCallback(() => ({
+  const getValidationStateForTest = useCallback((): ValidationStateForTest => ({
     results,
     status,
     progress,
