@@ -10,6 +10,14 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Play, Trash2, Eye, RotateCcw, GitCompareArrows } from 'lucide-react';
 import {
   listSessions,
@@ -34,6 +42,7 @@ export function SessionHistory({
 }: SessionHistoryProps) {
   const [sessions, setSessions] = useState<ValidationSession[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
 
   useEffect(() => {
     loadSessions();
@@ -76,15 +85,19 @@ export function SessionHistory({
   };
 
   const handleDelete = async (sessionId: string) => {
-    if (confirm('Delete this session? This action cannot be undone.')) {
-      await deleteSession(sessionId);
-      setSessions((s) => s.filter((session) => session.id !== sessionId));
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(sessionId);
-        return next;
-      });
-    }
+    setSessionToDelete(sessionId);
+  };
+
+  const confirmDelete = async () => {
+    if (!sessionToDelete) return;
+    await deleteSession(sessionToDelete);
+    setSessions((s) => s.filter((session) => session.id !== sessionToDelete));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(sessionToDelete);
+      return next;
+    });
+    setSessionToDelete(null);
   };
 
   const handleViewDetails = (sessionId: string) => {
@@ -252,6 +265,26 @@ export function SessionHistory({
           </TableBody>
         </Table>
       </div>
+
+      <Dialog open={!!sessionToDelete} onOpenChange={(open) => !open && setSessionToDelete(null)}>
+        <DialogContent className="max-w-[90vw] sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Session?</DialogTitle>
+            <DialogDescription>
+              This will permanently delete this validation session and all its
+              results. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="ghost" onClick={() => setSessionToDelete(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDelete}>
+              Delete Session
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -24,31 +24,28 @@ pub struct NoProxiesConfiguredPayload {
     pub message: String,
 }
 
-#[tauri::command]
-async fn validate_emails_bulk(
-    window: tauri::Window,
-    validation_state: tauri::State<'_, validation::ValidationState>,
-    settings_state: tauri::State<'_, settings::SettingsState>,
-    emails: Vec<String>,
-    concurrency: usize,
-    mode: String,
-) -> Result<Vec<validation::ValidationResult>, String> {
-    // Get the current proxy pool configuration and bypass flag
+/// Check proxy preconditions and create a proxy rotation state if applicable.
+/// Emits the appropriate event and returns `Err` if validation should abort.
+async fn prepare_proxy_state(
+    window: &tauri::Window,
+    settings_state: &tauri::State<'_, settings::SettingsState>,
+) -> Result<Option<Arc<validation::ProxyRotationState>>, String> {
     let settings = settings_state.settings.read().await;
     let proxy_pool = settings.proxy_pool.clone();
     drop(settings);
-    
+
     let proxy_bypass = *settings_state.proxy_bypass_for_session.read().await;
 
-    // Check for no proxies configured (if proxy is enabled and not bypassed)
     if !proxy_bypass && proxy_pool.no_proxies_configured() {
-        let _ = window.emit("no-proxies-configured", NoProxiesConfiguredPayload {
-            message: "No proxies configured. Please add at least one proxy or disable proxy support.".to_string(),
-        });
+        let _ = window.emit(
+            "no-proxies-configured",
+            NoProxiesConfiguredPayload {
+                message: "No proxies configured. Please add at least one proxy or disable proxy support.".to_string(),
+            },
+        );
         return Err("No proxies configured".to_string());
     }
 
-    // Check for all proxies failed (if proxy is enabled and not bypassed)
     if !proxy_bypass && proxy_pool.all_proxies_failed() {
         if let Some(failed_state) = proxy_pool.get_all_proxies_failed_state() {
             let payload = AllProxiesFailedPayload {
@@ -64,17 +61,110 @@ async fn validate_emails_bulk(
         }
     }
 
-    // Create proxy rotation state if proxy is enabled, has proxies, and is not bypassed
     let proxy_state = if !proxy_bypass && proxy_pool.enabled && !proxy_pool.proxies.is_empty() {
         Some(Arc::new(validation::ProxyRotationState::new(proxy_pool)))
     } else {
         None
     };
 
-    // Clone window for use in the progress callback
-    let window_for_progress = window.clone();
-    let window_for_completion = window.clone();
+    Ok(proxy_state)
+}
 
+/// Update proxy pool stats after validation completes.
+/// Also emits `all-proxies-failed` if proxies became unavailable during validation.
+async fn update_proxy_stats(
+    window: &tauri::Window,
+    settings_state: &tauri::State<'_, settings::SettingsState>,
+    results: &[validation::ValidationResult],
+) {
+    let proxy_bypass = *settings_state.proxy_bypass_for_session.read().await;
+    if proxy_bypass {
+        return;
+    }
+
+    let mut settings = settings_state.settings.write().await;
+    for result in results {
+        if let Some(ref proxy_id) = result.proxy_id {
+            if result.result == "Safe" || result.result == "Risky" {
+                settings
+                    .proxy_pool
+                    .record_success_with_duration(proxy_id, result.validation_duration as f64);
+            } else {
+                settings.proxy_pool.record_failure(proxy_id);
+            }
+        }
+    }
+
+    if settings.proxy_pool.all_proxies_failed() {
+        if let Some(failed_state) = settings.proxy_pool.get_all_proxies_failed_state() {
+            let payload = AllProxiesFailedPayload {
+                failed_proxies: failed_state.failed_proxies.clone(),
+                proxy_enabled: failed_state.proxy_enabled,
+                total_proxies: failed_state.total_proxies,
+                bad_count: failed_state.bad_count,
+                cooldown_count: failed_state.cooldown_count,
+                nearest_cooldown_secs: failed_state.nearest_cooldown_secs,
+            };
+            let _ = window.emit("all-proxies-failed", payload);
+        }
+    }
+}
+
+/// Test-only: Emit a validation-progress event for E2E testing
+#[cfg(feature = "e2e-testing")]
+#[tauri::command]
+async fn test_emit_validation_progress(
+    window: tauri::Window,
+    result: serde_json::Value,
+) -> Result<(), String> {
+    let validation_result: validation::ValidationResult = serde_json::from_value(result)
+        .map_err(|e| format!("Failed to deserialize ValidationResult: {}", e))?;
+    window.emit("validation-progress", validation_result).map_err(|e| e.to_string())
+}
+
+/// Test-only: Emit a validation-complete event for E2E testing
+#[cfg(feature = "e2e-testing")]
+#[tauri::command]
+async fn test_emit_validation_complete(
+    window: tauri::Window,
+    total: usize,
+    safe: usize,
+    risky: usize,
+    invalid: usize,
+    unknown: usize,
+    session_id: String,
+) -> Result<(), String> {
+    #[derive(serde::Serialize, Clone)]
+    struct ValidationCompletePayload {
+        total: usize,
+        safe: usize,
+        risky: usize,
+        invalid: usize,
+        unknown: usize,
+        session_id: String,
+    }
+    window.emit("validation-complete", ValidationCompletePayload {
+        total,
+        safe,
+        risky,
+        invalid,
+        unknown,
+        session_id,
+    }).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn validate_emails_bulk(
+    window: tauri::Window,
+    validation_state: tauri::State<'_, validation::ValidationState>,
+    settings_state: tauri::State<'_, settings::SettingsState>,
+    emails: Vec<String>,
+    concurrency: usize,
+    mode: String,
+) -> Result<Vec<validation::ValidationResult>, String> {
+    let proxy_state = prepare_proxy_state(&window, &settings_state).await?;
+
+    let window_for_progress = window.clone();
     let results = validation::validate_emails_bulk_core(
         emails,
         concurrency,
@@ -84,37 +174,10 @@ async fn validate_emails_bulk(
         move |res| {
             let _ = window_for_progress.emit("validation-progress", res);
         },
-    ).await;
+    )
+    .await;
 
-    // Update proxy stats based on results (only if proxy was used)
-    if !proxy_bypass {
-        let mut settings = settings_state.settings.write().await;
-        for result in &results {
-            if let Some(ref proxy_id) = result.proxy_id {
-                // Consider "Safe" and "Risky" as success, "Invalid" and "Unknown" as failure
-                if result.result == "Safe" || result.result == "Risky" {
-                    settings.proxy_pool.record_success_with_duration(proxy_id, result.validation_duration as f64);
-                } else {
-                    settings.proxy_pool.record_failure(proxy_id);
-                }
-            }
-        }
-
-        // Check if all proxies have become unavailable during validation
-        if settings.proxy_pool.all_proxies_failed() {
-            if let Some(failed_state) = settings.proxy_pool.get_all_proxies_failed_state() {
-                let payload = AllProxiesFailedPayload {
-                    failed_proxies: failed_state.failed_proxies.clone(),
-                    proxy_enabled: failed_state.proxy_enabled,
-                    total_proxies: failed_state.total_proxies,
-                    bad_count: failed_state.bad_count,
-                    cooldown_count: failed_state.cooldown_count,
-                    nearest_cooldown_secs: failed_state.nearest_cooldown_secs,
-                };
-                let _ = window_for_completion.emit("all-proxies-failed", payload);
-            }
-        }
-    }
+    update_proxy_stats(&window, &settings_state, &results).await;
 
     Ok(results)
 }
@@ -128,48 +191,9 @@ async fn revalidate_emails_bulk(
     concurrency: usize,
     mode: String,
 ) -> Result<Vec<validation::ValidationResult>, String> {
-    // Get the current proxy pool configuration and bypass flag
-    let settings = settings_state.settings.read().await;
-    let proxy_pool = settings.proxy_pool.clone();
-    drop(settings);
-    
-    let proxy_bypass = *settings_state.proxy_bypass_for_session.read().await;
+    let proxy_state = prepare_proxy_state(&window, &settings_state).await?;
 
-    // Check for no proxies configured (if proxy is enabled and not bypassed)
-    if !proxy_bypass && proxy_pool.no_proxies_configured() {
-        let _ = window.emit("no-proxies-configured", NoProxiesConfiguredPayload {
-            message: "No proxies configured. Please add at least one proxy or disable proxy support.".to_string(),
-        });
-        return Err("No proxies configured".to_string());
-    }
-
-    // Check for all proxies failed (if proxy is enabled and not bypassed)
-    if !proxy_bypass && proxy_pool.all_proxies_failed() {
-        if let Some(failed_state) = proxy_pool.get_all_proxies_failed_state() {
-            let payload = AllProxiesFailedPayload {
-                failed_proxies: failed_state.failed_proxies.clone(),
-                proxy_enabled: failed_state.proxy_enabled,
-                total_proxies: failed_state.total_proxies,
-                bad_count: failed_state.bad_count,
-                cooldown_count: failed_state.cooldown_count,
-                nearest_cooldown_secs: failed_state.nearest_cooldown_secs,
-            };
-            let _ = window.emit("all-proxies-failed", payload);
-            return Err("All proxies are unavailable".to_string());
-        }
-    }
-
-    // Create proxy rotation state if proxy is enabled, has proxies, and is not bypassed
-    let proxy_state = if !proxy_bypass && proxy_pool.enabled && !proxy_pool.proxies.is_empty() {
-        Some(Arc::new(validation::ProxyRotationState::new(proxy_pool)))
-    } else {
-        None
-    };
-
-    // Clone window for use in the progress callback
     let window_for_progress = window.clone();
-    let window_for_completion = window.clone();
-
     let results = validation::revalidate_emails_bulk_core(
         items,
         concurrency,
@@ -179,37 +203,10 @@ async fn revalidate_emails_bulk(
         move |res| {
             let _ = window_for_progress.emit("validation-progress", res);
         },
-    ).await;
+    )
+    .await;
 
-    // Update proxy stats based on results (only if proxy was used)
-    if !proxy_bypass {
-        let mut settings = settings_state.settings.write().await;
-        for result in &results {
-            if let Some(ref proxy_id) = result.proxy_id {
-                // Consider "Safe" and "Risky" as success, "Invalid" and "Unknown" as failure
-                if result.result == "Safe" || result.result == "Risky" {
-                    settings.proxy_pool.record_success_with_duration(proxy_id, result.validation_duration as f64);
-                } else {
-                    settings.proxy_pool.record_failure(proxy_id);
-                }
-            }
-        }
-
-        // Check if all proxies have become unavailable during validation
-        if settings.proxy_pool.all_proxies_failed() {
-            if let Some(failed_state) = settings.proxy_pool.get_all_proxies_failed_state() {
-                let payload = AllProxiesFailedPayload {
-                    failed_proxies: failed_state.failed_proxies.clone(),
-                    proxy_enabled: failed_state.proxy_enabled,
-                    total_proxies: failed_state.total_proxies,
-                    bad_count: failed_state.bad_count,
-                    cooldown_count: failed_state.cooldown_count,
-                    nearest_cooldown_secs: failed_state.nearest_cooldown_secs,
-                };
-                let _ = window_for_completion.emit("all-proxies-failed", payload);
-            }
-        }
-    }
+    update_proxy_stats(&window, &settings_state, &results).await;
 
     Ok(results)
 }
@@ -233,17 +230,26 @@ fn stop_validation(state: tauri::State<'_, validation::ValidationState>) {
 pub fn run() {
     let settings_state = settings::SettingsState::default();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .manage(validation::ValidationState::default())
-        .manage(settings_state)
+        .manage(settings_state);
+
+    #[cfg(feature = "e2e-testing")]
+    let builder = builder.plugin(tauri_plugin_playwright::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             validate_emails_bulk,
             revalidate_emails_bulk,
             pause_validation,
             resume_validation,
             stop_validation,
+            #[cfg(feature = "e2e-testing")]
+            test_emit_validation_progress,
+            #[cfg(feature = "e2e-testing")]
+            test_emit_validation_complete,
             settings::load_settings,
             settings::save_settings,
             settings::reset_settings,

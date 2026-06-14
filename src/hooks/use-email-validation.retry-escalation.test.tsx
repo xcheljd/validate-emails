@@ -260,4 +260,114 @@ describe('useEmailValidation retryWithEscalation', () => {
     // After completion, escalation state should be reset
     expect(result.current.isEscalating).toBe(false);
   });
+
+  it('should catch invoke errors during auto-escalation and not throw unhandled rejection', async () => {
+    const { result } = renderHook(() => useEmailValidation(), { wrapper });
+
+    const mockResults = [
+      makeResult('unknown1@test.com', 'Unknown'),
+      makeResult('unknown2@test.com', 'Unknown'),
+    ];
+
+    act(() => {
+      result.current.setResults(mockResults);
+    });
+
+    // Mock invoke to reject on first call
+    (invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Network error'));
+
+    // Should not throw - error should be caught internally
+    await act(async () => {
+      await expect(result.current.retryWithEscalation('quick', true)).resolves.not.toThrow();
+    });
+  });
+
+  it('should reset escalation state on invoke error during auto-escalation', async () => {
+    const { result } = renderHook(() => useEmailValidation(), { wrapper });
+
+    const mockResults = [
+      makeResult('unknown1@test.com', 'Unknown'),
+      makeResult('unknown2@test.com', 'Unknown'),
+    ];
+
+    act(() => {
+      result.current.setResults(mockResults);
+    });
+
+    // Mock invoke to reject on first call
+    (invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Network error'));
+
+    await act(async () => {
+      await result.current.retryWithEscalation('quick', true);
+    });
+
+    // After error, escalation state should be reset
+    expect(result.current.isEscalating).toBe(false);
+    expect(result.current.escalationTier).toBe(1); // Reset to initial value
+    expect(result.current.escalationEmailCount).toBe(0);
+  });
+
+  it('should reset escalation state on invoke error during manual retry (autoEscalate=false)', async () => {
+    const { result } = renderHook(() => useEmailValidation(), { wrapper });
+
+    const mockResults = [
+      makeResult('unknown1@test.com', 'Unknown'),
+    ];
+
+    act(() => {
+      result.current.setResults(mockResults);
+    });
+
+    // Mock invoke to reject
+    (invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Network error'));
+
+    await act(async () => {
+      await result.current.retryWithEscalation('quick', false);
+    });
+
+    // After error, escalation state should be reset (should already be false for manual)
+    expect(result.current.isEscalating).toBe(false);
+    expect(result.current.escalationTier).toBe(1);
+    expect(result.current.escalationEmailCount).toBe(0);
+  });
+
+  it('should allow manual retry after auto-escalation fails', async () => {
+    const { result } = renderHook(() => useEmailValidation(), { wrapper });
+
+    const mockResults = [
+      makeResult('unknown1@test.com', 'Unknown'),
+      makeResult('unknown2@test.com', 'Unknown'),
+    ];
+
+    act(() => {
+      result.current.setResults(mockResults);
+    });
+
+    // First auto-escalation fails
+    (invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Network error'));
+
+    await act(async () => {
+      await result.current.retryWithEscalation('quick', true);
+    });
+
+    // Escalation state should be reset
+    expect(result.current.isEscalating).toBe(false);
+    expect(result.current.escalationTier).toBe(1);
+    expect(result.current.escalationEmailCount).toBe(0);
+
+    // Now try manual retry - should not throw and should not leave UI in broken state
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      makeResult('unknown1@test.com', 'Safe'),
+      makeResult('unknown2@test.com', 'Safe'),
+    ]);
+
+    await act(async () => {
+      await result.current.retryWithEscalation('standard', false);
+    });
+
+    // Manual retry should not throw and escalation state should remain reset
+    expect(result.current.isEscalating).toBe(false);
+    expect(result.current.escalationTier).toBe(1);
+    expect(result.current.escalationEmailCount).toBe(0);
+  });
 });

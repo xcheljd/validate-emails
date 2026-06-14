@@ -1,30 +1,15 @@
 import { createTauriTest } from '@srsholmes/tauri-playwright';
 import { createRetryModalPage } from '../pages/retry-modal';
-import { simulateValidationFlowDirect } from '../helpers/events';
+import { simulateValidationFlowTauri } from '../helpers/events';
 
 const { test, expect } = createTauriTest({
-  mode: 'browser',
-  devUrl: 'http://localhost:1420',
+  mode: 'tauri',
   ipcMocks: {
-    // Return immediately since we use simulateValidationFlowDirect for state updates
-    validate_emails_bulk: async () => {
-      return [];
-    },
-    // NOTE: revalidate_emails_bulk is mocked manually in test.beforeEach to avoid
-    // tauri-playwright async mock issue
-    // Mock test-only Tauri commands for emitting events in browser mode
+    // Mock test-only Tauri commands for emitting events in Tauri mode
     test_emit_validation_progress: async ({ result }) => {
-      // Emit via the Tauri mock event system
-      if (typeof window !== 'undefined' && window.__TAURI_EMIT_MOCK_EVENT__) {
-        window.__TAURI_EMIT_MOCK_EVENT__('validation-progress', result);
-      }
       return true;
     },
     test_emit_validation_complete: async ({ total, safe, risky, invalid, unknown, sessionId }) => {
-      // Emit via the Tauri mock event system
-      if (typeof window !== 'undefined' && window.__TAURI_EMIT_MOCK_EVENT__) {
-        window.__TAURI_EMIT_MOCK_EVENT__('validation-complete', { total, safe, risky, invalid, unknown, sessionId });
-      }
       return true;
     },
     pause_validation: async () => {},
@@ -90,6 +75,26 @@ test.beforeEach(async ({ tauriPage }) => {
       return window.__ORIGINAL_INVOKE__(cmd, args);
     };
   });
+
+  // Enable forceShowRetryModal for browser-only tests
+  // This forces the retry modal to appear after validation completes with Unknown results
+  await tauriPage.evaluate(() => {
+    if (window.__VALIDATION_TEST_HELPER__) {
+      window.__VALIDATION_TEST_HELPER__.setForceShowRetryModal(true);
+    }
+  });
+});
+
+test.afterEach(async ({ tauriPage }) => {
+  // Restore original invoke mock to prevent test pollution
+  await tauriPage.evaluate(() => {
+    if (window.__ORIGINAL_INVOKE__) {
+      window.__TAURI_INTERNALS__.invoke = window.__ORIGINAL_INVOKE__;
+    }
+    if (window.__VALIDATION_TEST_HELPER__) {
+      window.__VALIDATION_TEST_HELPER__.setForceShowRetryModal(false);
+    }
+  });
 });
 
 // Helper to start validation via Tauri IPC (bypasses UI textarea issues in Tauri mode)
@@ -138,8 +143,8 @@ test.describe('Retry Modal - VAL-PW-005', () => {
       'test5@example.com',
     ]);
 
-    // Use direct state simulation for browser-only mode
-    await simulateValidationFlowDirect(tauriPage, [
+    // Use Tauri event simulation for Tauri mode
+    await simulateValidationFlowTauri(tauriPage, [
       'test1@example.com',
       'test2@example.com',
       'test3@example.com',
@@ -149,6 +154,13 @@ test.describe('Retry Modal - VAL-PW-005', () => {
 
     await retryModal.waitForVisible(15000);
 
+    // Disable forceShowRetryModal so the modal can close naturally after retry
+    await tauriPage.evaluate(() => {
+      if (window.__VALIDATION_TEST_HELPER__) {
+        window.__VALIDATION_TEST_HELPER__.setForceShowRetryModal(false);
+      }
+    });
+
     await expect(retryModal.title).toBeVisible();
     await expect(retryModal.description).toContainText('3 emails have unknown status');
     await expect(retryModal.quickTierButton).toBeVisible();
@@ -157,6 +169,65 @@ test.describe('Retry Modal - VAL-PW-005', () => {
     await expect(retryModal.autoEscalateCheckbox).toBeVisible();
     // Check that standard tier is selected by default (checkmark circle)
     await expect(retryModal.standardTierButton.locator('.h-5.w-5.bg-primary.rounded-full')).toBeVisible();
+  });
+
+  test('retry modal can be dismissed by clicking Cancel', async ({ tauriPage }) => {
+    const retryModal = createRetryModalPage(tauriPage);
+
+    await startValidationViaIPC(tauriPage, [
+      'test1@example.com',
+      'test2@example.com',
+      'test3@example.com',
+    ]);
+
+    await simulateValidationFlowTauri(tauriPage, [
+      'test1@example.com',
+      'test2@example.com',
+      'test3@example.com',
+    ], { unknownCount: 3 });
+
+    await retryModal.waitForVisible(15000);
+
+    await tauriPage.evaluate(() => {
+      if (window.__VALIDATION_TEST_HELPER__) {
+        window.__VALIDATION_TEST_HELPER__.setForceShowRetryModal(false);
+      }
+    });
+
+    await expect(retryModal.title).toBeVisible();
+    await retryModal.clickCancel();
+    await retryModal.waitForHidden(5000);
+  });
+
+  test('retry modal can be dismissed by clicking Retry', async ({ tauriPage }) => {
+    const retryModal = createRetryModalPage(tauriPage);
+
+    await startValidationViaIPC(tauriPage, [
+      'test1@example.com',
+      'test2@example.com',
+    ]);
+
+    await simulateValidationFlowTauri(tauriPage, [
+      'test1@example.com',
+      'test2@example.com',
+    ], { unknownCount: 2 });
+
+    await retryModal.waitForVisible(15000);
+
+    await tauriPage.evaluate(() => {
+      if (window.__VALIDATION_TEST_HELPER__) {
+        window.__VALIDATION_TEST_HELPER__.setForceShowRetryModal(false);
+      }
+    });
+
+    // Configure mock to return Safe immediately for manual retry
+    await tauriPage.evaluate(() => {
+      window.__REVALIDATE_CONFIG__ = { unknownTiers: 0, delayMs: 300 };
+      window.__REVALIDATE_CALL_COUNT__ = 0;
+    });
+
+    await retryModal.clickRetry();
+    await retryModal.waitForHidden(5000);
   });
 });
 
@@ -170,14 +241,17 @@ test.describe('Retry Modal - VAL-PW-006', () => {
       'test3@example.com',
     ]);
 
-    // Use direct state simulation for browser-only mode
-    await simulateValidationFlowDirect(tauriPage, [
+    // Use Tauri event simulation for Tauri mode
+    await simulateValidationFlowTauri(tauriPage, [
       'test1@example.com',
       'test2@example.com',
       'test3@example.com',
     ], { unknownCount: 3 });
 
     await retryModal.waitForVisible(15000);
+
+    // Keep forceShowRetryModal enabled for auto-escalation test
+    // so the modal stays open during tier progression
 
     // Ensure React has processed the state update with Unknown results
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -211,8 +285,8 @@ test.describe('Retry Modal - VAL-PW-007', () => {
       'test2@example.com',
     ]);
 
-    // Use direct state simulation for browser-only mode
-    await simulateValidationFlowDirect(tauriPage, [
+    // Use Tauri event simulation for Tauri mode
+    await simulateValidationFlowTauri(tauriPage, [
       'test1@example.com',
       'test2@example.com',
     ], { unknownCount: 2 });
@@ -228,7 +302,21 @@ test.describe('Retry Modal - VAL-PW-007', () => {
     await retryModal.selectTier('thorough');
     expect(await retryModal.getSelectedTier()).toBe('thorough');
 
+    // Configure mock to return Safe immediately for manual retry (not auto-escalation)
+    await tauriPage.evaluate(() => {
+      window.__REVALIDATE_CONFIG__ = { unknownTiers: 0, delayMs: 300 };
+      window.__REVALIDATE_CALL_COUNT__ = 0;
+    });
+
     await retryModal.clickRetry();
+
+    // Now disable forceShowRetryModal so the modal can close naturally after retry completes
+    await tauriPage.evaluate(() => {
+      if (window.__VALIDATION_TEST_HELPER__) {
+        window.__VALIDATION_TEST_HELPER__.setForceShowRetryModal(false);
+      }
+    });
+
     await retryModal.waitForHidden(5005);
   });
 });
@@ -248,8 +336,8 @@ test.describe('Retry Modal - VAL-PW-008', () => {
       'test2@example.com',
     ]);
 
-    // Use direct state simulation for browser-only mode
-    await simulateValidationFlowDirect(tauriPage, [
+    // Use Tauri event simulation for Tauri mode
+    await simulateValidationFlowTauri(tauriPage, [
       'test1@example.com',
       'test2@example.com',
     ], { unknownCount: 2 });
@@ -285,8 +373,16 @@ test.describe('Retry Modal - VAL-PW-008', () => {
       status: 'idle',
     });
 
-    // Reset the mock counter for the manual retry
+    // Re-enable forceShowRetryModal to force the modal to appear again after auto-escalation error
     await tauriPage.evaluate(() => {
+      if (window.__VALIDATION_TEST_HELPER__) {
+        window.__VALIDATION_TEST_HELPER__.setForceShowRetryModal(true);
+      }
+    });
+
+    // Reset the mock counter for the manual retry and configure to return Safe immediately
+    await tauriPage.evaluate(() => {
+      window.__REVALIDATE_CONFIG__ = { unknownTiers: 0, delayMs: 300 };
       window.__REVALIDATE_CALL_COUNT__ = 0;
     });
 
@@ -298,6 +394,14 @@ test.describe('Retry Modal - VAL-PW-008', () => {
     expect(await retryModal.isAutoEscalateEnabled()).toBe(false);
 
     await retryModal.clickRetry();
+
+    // Now disable forceShowRetryModal so the modal can close naturally after manual retry completes
+    await tauriPage.evaluate(() => {
+      if (window.__VALIDATION_TEST_HELPER__) {
+        window.__VALIDATION_TEST_HELPER__.setForceShowRetryModal(false);
+      }
+    });
+
     await retryModal.waitForHidden(5000);
   });
 });

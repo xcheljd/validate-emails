@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -24,8 +25,32 @@ export function AutoPauseModal({
   onResume,
   onStop,
 }: AutoPauseModalProps) {
+  const [userAction, setUserAction] = useState<'none' | 'resume' | 'stop'>('none');
+
+  const handleOpenChange = (newOpen: boolean) => {
+    // Call the original onOpenChange handler
+    onOpenChange(newOpen);
+    // If modal is closing (open becomes false) and user didn't explicitly click Resume,
+    // call onStop to halt validation (e.g., Escape key, click outside)
+    if (!newOpen && userAction !== 'resume') {
+      onStop();
+    }
+    // Reset user action after handling
+    setUserAction('none');
+  };
+
+  const handleResume = () => {
+    setUserAction('resume');
+    onResume();
+  };
+
+  const handleStop = () => {
+    setUserAction('stop');
+    onStop();
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -47,10 +72,10 @@ export function AutoPauseModal({
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button variant="outline" onClick={onStop}>
+          <Button variant="outline" onClick={handleStop}>
             Stop Validation
           </Button>
-          <Button onClick={onResume}>
+          <Button onClick={handleResume}>
             Resume
           </Button>
         </DialogFooter>

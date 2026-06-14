@@ -1,6 +1,6 @@
 ---
 name: frontend-worker
-description: React/TypeScript frontend implementation for proxy features
+description: React/TypeScript frontend implementation for UI features
 ---
 
 # Frontend Worker
@@ -10,56 +10,93 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 ## When to Use This Skill
 
 Use for features that require:
-- React components (proxy list, failure modal, settings UI)
-- TypeScript interfaces (ProxySettings, ProxyConfig)
-- State management via use-settings.ts hook
+- React components (new or modified)
+- TypeScript logic modules (pure functions, hooks, utilities)
+- State management changes in App.tsx or hooks
 - UI interactions and form validation
+- No Rust backend changes
 
 ## Required Skills
 
-- `agent-browser` - For manual verification of UI flows in Tauri app
+- `agent-browser` — For manual verification of UI flows at http://localhost:1420
 
 ## Work Procedure
 
-1. **Read existing code** - Understand settings-content.tsx, use-settings.ts patterns
+1. **Read existing code thoroughly**:
+   - Read `src/App.tsx` for app state flow and navigation
+   - Read relevant component files in `src/components/`
+   - Read relevant library files in `src/lib/`
+   - Read `src/lib/types.ts` for interfaces
+   - Read `src/hooks/` for existing hooks and patterns
+   - Read PRD if applicable (`PRD-email-deduplication.md`)
+
 2. **Write failing tests first** (red):
-   - Create test file `*.test.tsx` if not exists
-   - Write test cases for component behavior
-   - Run `npm test -- --grep <pattern>` to verify tests fail
+   - Create test file `*.test.ts` or `*.test.tsx` as appropriate
+   - For pure logic: unit tests with vitest
+   - For components: `@testing-library/react` render + assertions
+   - For hooks: `renderHook()` with `QueryClientProvider` wrapper
+   - Follow existing patterns: `vi.mock('@tauri-apps/api/core')` for Tauri mocks, `createMockResult()` for test data
+   - Run `npx vitest run <path>` to verify tests fail
+
 3. **Implement to make tests pass** (green):
-   - Update TypeScript interfaces in use-settings.ts
-   - Create/update components
-   - Wire to backend via `invoke()` calls
-4. **Run verification**:
-   - `npm run typecheck`
+   - Create/modify TypeScript files
+   - Create/modify React components using Shadcn UI primitives + Radix
+   - Use `cn()` for class merging, Lucide icons for iconography
+   - Wire into App.tsx state flow if adding new app states or screens
+   - If adding new app state: update the state type union and add rendering logic in App.tsx
+
+4. **Run full verification**:
+   - `npm run typecheck` (or `npm run build`)
    - `npm test`
-   - `npm run lint`
+   - `npx eslint src/`
+
 5. **Manual verification with agent-browser**:
-   - Start app with `npm run tauri dev`
-   - Use agent-browser to navigate to Settings > Proxy tab
-   - Verify UI renders, interactions work
-6. **Cleanup**: Stop any running dev servers
+   - Start dev server: `npm run dev` (runs on port 1420)
+   - Wait for it: `sleep 3 && curl -sf http://localhost:1420`
+   - Use agent-browser to navigate to http://localhost:1420
+   - Test the complete user flow for the feature
+   - Take screenshots at key points
+   - **Stop the dev server when done**: `lsof -ti :1420 | xargs kill`
+
+6. **Each manual check must produce an interactiveChecks entry** with `{action, observed}`.
+
+7. **Cleanup**: Ensure no dev server or test runner is left running.
 
 ## Example Handoff
 
 ```json
 {
-  "salientSummary": "Added Proxy tab to settings with enable toggle and rotation mode selector. Created ProxyList component with add/edit/delete. All tests passing, manual verification complete.",
-  "whatWasImplemented": "ProxySettings interface in use-settings.ts with proxies array, enabled, rotationMode. ProxyTab component in settings-content.tsx. ProxyList sub-component with add form. Wired to backend via invoke('get_proxies'), invoke('add_proxy').",
+  "salientSummary": "Implemented email cleaner module with 10 provider rules and cleaning report UI. 47 unit tests passing for core logic. Agent-browser verified: cleaning report shows correct stats, Proceed/Back/Skip buttons work.",
+  "whatWasImplemented": "Created src/lib/email-cleaner.ts with cleanEmailList(), toCanonical(), provider rules table for 10 providers, syntax cleaning, and typo correction integration. Created src/components/validation/cleaning-report.tsx with summary cards, expandable details, and Proceed/Back/Skip actions. Added 'cleaning_report' state to App.tsx between loaded and config.",
   "whatWasLeftUndone": "",
   "verification": {
     "commandsRun": [
       {"command": "npm run typecheck", "exitCode": 0, "observation": "No errors"},
-      {"command": "npm test -- --grep proxy", "exitCode": 0, "observation": "8 tests passed"}
+      {"command": "npm test", "exitCode": 0, "observation": "All tests passing (253 total, 47 new)"},
+      {"command": "npx eslint src/", "exitCode": 0, "observation": "No warnings"}
     ],
     "interactiveChecks": [
-      {"action": "Navigated to Settings > Proxy tab, added proxy 192.168.1.1:8080", "observed": "Proxy appeared in list with correct host:port"},
-      {"action": "Clicked enable toggle", "observed": "Toggle switched to ON state, setting persisted"}
+      {"action": "Pasted 10 emails with duplicates and typos, submitted", "observed": "Cleaning report appeared showing Original: 10, Clean: 7, Duplicates: 2, Typos: 1"},
+      {"action": "Expanded 'Duplicates Removed' section", "observed": "Showed john.doe@gmail.com <- johndoe@gmail.com mapping"},
+      {"action": "Clicked 'Proceed with 7 Clean Emails'", "observed": "Transitioned to validation config showing 7 emails"},
+      {"action": "Clicked 'Go Back'", "observed": "Returned to email input screen"},
+      {"action": "Clicked 'Skip Cleaning'", "observed": "Proceeded to config with original 10 emails"}
     ]
   },
   "tests": {
     "added": [
-      {"file": "src/components/settings/proxy-list.test.tsx", "cases": [{"name": "renders proxy list", "verifies": "Component renders without crashing"}, {"name": "adds valid proxy", "verifies": "Valid proxy added to list"}]}
+      {"file": "src/lib/email-cleaner.test.ts", "cases": [
+        {"name": "gmail dot removal", "verifies": "john.doe@gmail.com -> johndoe@gmail.com"},
+        {"name": "gmail plus stripping", "verifies": "user+tag@gmail.com -> user@gmail.com"},
+        {"name": "outlook dots significant", "verifies": "john.doe@outlook.com != johndoe@outlook.com"},
+        {"name": "hotmail not aliased to outlook", "verifies": "user@hotmail.com != user@outlook.com"},
+        {"name": "full pipeline mixed list", "verifies": "Correct stats for mixed input"}
+      ]},
+      {"file": "src/components/validation/cleaning-report.test.tsx", "cases": [
+        {"name": "renders summary cards", "verifies": "All 6 cards present with correct values"},
+        {"name": "expandable sections work", "verifies": "Sections expand to show details"},
+        {"name": "proceed button transitions", "verifies": "Calls onProceed with cleaned emails"}
+      ]}
     ]
   },
   "discoveredIssues": []
@@ -71,3 +108,4 @@ Use for features that require:
 - Backend Tauri commands don't exist yet (feature blocked)
 - Cannot wire UI without backend changes
 - Existing UI patterns incompatible with required changes
+- Feature requires new npm dependencies

@@ -1,0 +1,110 @@
+name: QA
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: qa-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install ImageMagick
+        run: sudo apt-get install -y -qq imagemagick
+
+      - name: Install droid CLI
+        run: curl -fsSL https://app.factory.ai/cli | sh
+
+      - name: Start dev server
+        run: |
+          npm run dev &
+          # Wait for server to be ready
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:1420 > /dev/null 2>&1; then
+              echo "Dev server is ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run QA
+        id: qa
+        continue-on-error: true
+        timeout-minutes: 18
+        env:
+          CI: true
+        run: |
+          mkdir -p qa-results
+          droid exec --auto high "You are running in a non-interactive CI environment. There is NO human available. Do NOT use AskUser, do NOT wait for confirmations, do NOT pause for input. Run the qa skill. The dev server is already running at http://localhost:1420. Write the final report to qa-results/report.md" 2>&1 | tee qa-results/qa-output.txt
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-results
+          path: qa-results/
+          retention-days: 14
+
+      - name: Post QA report as PR comment
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPORT=""
+          if [ -f qa-results/report.md ]; then
+            REPORT=$(cat qa-results/report.md)
+          else
+            REPORT=$(cat qa-results/qa-output.txt | tail -100)
+          fi
+
+          # Ensure report starts with heading
+          if ! echo "$REPORT" | head -1 | grep -q "## QA Report"; then
+            REPORT="## QA Report
+
+          $REPORT"
+          fi
+
+          # Add footer
+          REPORT="$REPORT
+
+          ---
+          [Download full QA artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) | [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+          # Check for existing comment
+          COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
+            --jq '.[] | select(.body | startswith("<!-- qa-report -->")) | .id' | head -1)
+
+          BODY="<!-- qa-report -->
+          $REPORT"
+
+          if [ -n "$COMMENT_ID" ]; then
+            # Update existing comment
+            gh api repos/${{ github.repository }}/issues/comments/$COMMENT_ID \
+              --method PATCH \
+              -f body="$BODY"
+          else
+            # Create new comment
+            gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
+              --method POST \
+              -f body="$BODY"
+          fi

@@ -78,5 +78,8 @@ export function getRiskReasons(result: ValidationResult): string[] {
   if (result.errorType === 'network_error')
     reasons.push('Network or connection error');
 
+  if (result.haveibeenpwned)
+    reasons.push('Email found in known data breach');
+
   return reasons;
 }

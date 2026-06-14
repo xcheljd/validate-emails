@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Progress } from '@/components/ui/progress';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -65,6 +65,8 @@ interface ValidationDashboardProps {
   waitingCooldownSecs?: number;
   // Rate limit failure state (auto-slowdown badge)
   rateLimitFailureState?: RateLimitFailureState;
+  // Test helper: force show retry modal for E2E testing
+  forceShowRetryModal?: boolean;
 }
 
 export function ValidationDashboard({
@@ -93,6 +95,8 @@ export function ValidationDashboard({
   waitingForProxy = false,
   waitingCooldownSecs = 0,
   rateLimitFailureState,
+  // Test helper: force show retry modal for E2E testing
+  forceShowRetryModal = false,
 }: ValidationDashboardProps) {
   const [showStopDialog, setShowStopDialog] = useState(false);
   const [showRetryModal, setShowRetryModal] = useState(false);
@@ -100,13 +104,27 @@ export function ValidationDashboard({
   const safeCount = results.filter((r) => r.result === 'Safe').length;
   const riskyCount = results.filter((r) => r.result === 'Risky').length;
   const invalidCount = results.filter((r) => r.result === 'Invalid').length;
-  const unknownCount = results.filter((r) => r.result === 'Unknown').length;
+  const unknownCount = useMemo(() => results.filter((r) => r.result === 'Unknown').length, [results]);
 
   // Use a latch to prevent repeatedly showing the retry modal.
   const [hasPromptedRetry, setHasPromptedRetry] = useState(false);
 
   useEffect(() => {
     if (status === 'processing') {
+      setHasPromptedRetry(false);
+    }
+
+    // Allow forceShowRetryModal to override the latch for testing
+    if (forceShowRetryModal) {
+      setShowRetryModal(true);
+      setHasPromptedRetry(true);
+      return;
+    }
+
+    // Close retry modal when forceShowRetryModal becomes false
+    if (showRetryModal && !forceShowRetryModal) {
+      setShowRetryModal(false);
+      // Reset latch so normal retry prompt can work after forceShowRetryModal is disabled
       setHasPromptedRetry(false);
     }
 
@@ -128,10 +146,13 @@ export function ValidationDashboard({
     unknownCount,
     hasPromptedRetry,
     onRetryUnknowns,
+    forceShowRetryModal,
+    showRetryModal,
   ]);
 
   const percentage = total > 0 ? Math.round((progress / total) * 100) : 0;
 
+  // Debug indicator for forceShowRetryModal
   const formatTime = (seconds: number): string => {
     if (seconds < 60) return `${Math.round(seconds)}s`;
     if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
@@ -446,7 +467,10 @@ export function ValidationDashboard({
         open={showRetryModal}
         unknownCount={unknownCount}
         onRetry={(tier) => {
-          setShowRetryModal(false);
+          // For auto-escalate, keep the modal open to show escalation progress
+          if (tier !== 'auto-escalate') {
+            setShowRetryModal(false);
+          }
           if (onRetryWithEscalation) {
             onRetryWithEscalation(tier);
           } else {
@@ -457,6 +481,7 @@ export function ValidationDashboard({
         isEscalating={isEscalating}
         escalationTier={escalationTier}
         escalationEmailCount={escalationEmailCount}
+        testMode={forceShowRetryModal}
       />
 
       {allProxiesFailedState && (

@@ -29,7 +29,6 @@ import {
   Building2,
 } from 'lucide-react';
 import {
-  calculateRiskScore,
   getRiskLevel,
   getRiskColor,
   getRiskReasons,
@@ -51,7 +50,7 @@ export function ResultDetails({
 }: ResultDetailsProps) {
   if (!result) return null;
 
-  const riskScore = calculateRiskScore(result);
+  const riskScore = result.riskScore;
   const riskLevel = getRiskLevel(riskScore);
   const riskColorClass = getRiskColor(riskScore);
   const riskReasons = getRiskReasons(result);

@@ -8,6 +8,67 @@ import { Page } from '@playwright/test';
  */
 
 /**
+ * Determine validation result for a given index based on counters.
+ */
+function determineResult(
+  index: number,
+  unknownCount: number,
+  unknownCountActual: number,
+  failCount: number
+): { result: 'Safe' | 'Risky' | 'Invalid' | 'Unknown'; errorType?: string; unknownCountActual: number; failCount: number } {
+  let result: 'Safe' | 'Risky' | 'Invalid' | 'Unknown' = 'Safe';
+  let errorType: string | undefined;
+  if (unknownCountActual < unknownCount) {
+    result = 'Unknown';
+    errorType = 'Timeout';
+    unknownCountActual++;
+  } else if (failCount > 0 && index < failCount) {
+    result = 'Invalid';
+    errorType = 'ConnectionFailed';
+    failCount--;
+  } else if (index % 7 === 0) {
+    result = 'Risky';
+  }
+  return { result, errorType, unknownCountActual, failCount };
+}
+
+/**
+ * Create a test ValidationResult with sensible defaults.
+ */
+function createTestValidationResult(
+  email: string,
+  result: 'Safe' | 'Risky' | 'Invalid' | 'Unknown',
+  errorType?: string
+): ValidationResult {
+  return {
+    email,
+    result,
+    reason: result === 'Unknown' ? 'Timeout' : result === 'Invalid' ? 'Connection failed' : 'OK',
+    logs: [],
+    domain: email.split('@')[1],
+    validationDuration: 100,
+    mxRecordCount: 1,
+    isDisposable: false,
+    isRoleAccount: false,
+    isCatchAll: false,
+    isDeliverable: result === 'Safe',
+    isDisabled: false,
+    hasFullInbox: false,
+    canConnectSmtp: result !== 'Invalid',
+    acceptsMail: result !== 'Invalid',
+    isValidSyntax: true,
+    isB2c: false,
+    suggestion: null,
+    gravatarUrl: null,
+    haveibeenpwned: null,
+    errorType,
+    timestamp: new Date().toISOString(),
+    validationMode: 'standard',
+    riskScore: result === 'Safe' ? 0 : result === 'Risky' ? 50 : 100,
+  };
+}
+
+/**
  * Check if the page is a BrowserPageAdapter (browser mode) vs TauriPage (tauri mode)
  */
 function isBrowserMode(page: Page & { playwrightPage?: Page }): boolean {
@@ -16,6 +77,9 @@ function isBrowserMode(page: Page & { playwrightPage?: Page }): boolean {
 
 /**
  * Evaluate a script in the page, handling both browser mode (function) and tauri mode (string).
+ * WARNING: In Tauri mode, the function is converted to a string via toString().
+ * Any variables from the outer closure will NOT be available when the script executes.
+ * The scriptFn must be self-contained and only use its parameter (eventData).
  */
 async function evaluateInPage(
   page: Page & { playwrightPage?: Page },
@@ -28,6 +92,7 @@ async function evaluateInPage(
     await evalPage.evaluate(scriptFn, eventData);
   } else {
     // Tauri mode: convert function to string script
+    // Note: closure variables are lost; scriptFn must be self-contained
     const script = `(${scriptFn.toString()})(${JSON.stringify(eventData)})`;
     await evalPage.evaluate(script);
   }
@@ -100,13 +165,10 @@ export async function emitValidationProgress(
   page: Page & { playwrightPage?: Page },
   result: ValidationResult
 ): Promise<void> {
-  // Use the test-only Tauri command to emit the event
-  // Tauri invoke expects named arguments as an object
-  const script = 
-    'window.__TAURI_INTERNALS__.invoke(\'test_emit_validation_progress\', { result: ' +
-    JSON.stringify(result) + ' })';
-  const evalPage = page.playwrightPage || page;
-  await evalPage.evaluate(script);
+  // Use evaluateInPage for safe parameter passing in both browser and Tauri modes
+  await evaluateInPage(page, (evt) => {
+    window.__TAURI_INTERNALS__.invoke('test_emit_validation_progress', { result: evt });
+  }, result);
 }
 
 /**
@@ -218,19 +280,10 @@ export async function emitValidationComplete(
     sessionId: string;
   }
 ): Promise<void> {
-  // Use the test-only Tauri command to emit the event
-  // Tauri invoke expects named arguments as an object (camelCase for JS)
-  const script = 
-    'window.__TAURI_INTERNALS__.invoke(\'test_emit_validation_complete\', { ' +
-    'total: ' + results.total + ',' +
-    'safe: ' + results.safe + ',' +
-    'risky: ' + results.risky + ',' +
-    'invalid: ' + results.invalid + ',' +
-    'unknown: ' + results.unknown + ',' +
-    'sessionId: ' + JSON.stringify(results.sessionId) +
-    ' })';
-  const evalPage = page.playwrightPage || page;
-  await evalPage.evaluate(script);
+  // Use evaluateInPage for safe parameter passing in both browser and Tauri modes
+  await evaluateInPage(page, (evt) => {
+    window.__TAURI_INTERNALS__.invoke('test_emit_validation_complete', evt);
+  }, results);
 }
 
 /**
@@ -302,7 +355,7 @@ export async function waitForTauriEvent<T = unknown>(
  * @param options - Configuration options
  */
 export async function simulateValidationFlow(
-  page: Page,
+  page: Page & { playwrightPage?: Page },
   emails: string[],
   options: {
     delayBetweenEmails?: number;
@@ -319,7 +372,7 @@ export async function simulateValidationFlow(
   const total = emails.length;
   let safeCount = 0;
   let riskyCount = 0;
-  const invalidCount = 0;
+  let invalidCount = 0;
   let unknownCountActual = 0;
 
   for (let i = 0; i < total; i++) {
@@ -329,50 +382,16 @@ export async function simulateValidationFlow(
     await new Promise((resolve) => setTimeout(resolve, delayBetweenEmails));
 
     // Determine result
-    let result: 'Safe' | 'Risky' | 'Invalid' | 'Unknown' = 'Safe';
-    let errorType: string | undefined;
-    if (unknownCountActual < unknownCount) {
-      result = 'Unknown';
-      errorType = 'Timeout';
-      unknownCountActual++;
-    } else if (failCount > 0 && i < failCount) {
-      result = 'Invalid';
-      errorType = 'ConnectionFailed';
-      failCount--;
-    } else if (i % 7 === 0) {
-      result = 'Risky';
-      riskyCount++;
-    } else {
-      safeCount++;
-    }
+    const determined = determineResult(i, unknownCount, unknownCountActual, failCount);
+    unknownCountActual = determined.unknownCountActual;
+    failCount = determined.failCount;
 
-    // Create a minimal ValidationResult object that matches the frontend's expected type
-    const validationResult: ValidationResult = {
-      email,
-      result,
-      reason: result === 'Unknown' ? 'Timeout' : result === 'Invalid' ? 'Connection failed' : 'OK',
-      logs: [],
-      domain: email.split('@')[1],
-      validationDuration: 100,
-      mxRecordCount: 1,
-      isDisposable: false,
-      isRoleAccount: false,
-      isCatchAll: false,
-      isDeliverable: result === 'Safe',
-      isDisabled: false,
-      hasFullInbox: false,
-      canConnectSmtp: result !== 'Invalid',
-      acceptsMail: result !== 'Invalid',
-      isValidSyntax: true,
-      isB2c: false,
-      suggestion: null,
-      gravatarUrl: null,
-      haveibeenpwned: null,
-      errorType,
-      timestamp: new Date().toISOString(),
-      validationMode: 'standard',
-      riskScore: result === 'Safe' ? 0 : result === 'Risky' ? 50 : 100,
-    };
+    if (determined.result === 'Unknown') unknownCountActual = determined.unknownCountActual;
+    if (determined.result === 'Invalid') invalidCount++;
+    else if (determined.result === 'Risky') riskyCount++;
+    else if (determined.result === 'Safe') safeCount++;
+
+    const validationResult = createTestValidationResult(email, determined.result, determined.errorType);
 
     // Emit validation result
     await emitValidationProgress(page, validationResult);
@@ -424,48 +443,11 @@ export async function simulateValidationFlowDirect(
 
     await new Promise((resolve) => setTimeout(resolve, delayBetweenEmails));
 
-    let result: 'Safe' | 'Risky' | 'Invalid' | 'Unknown';
-    let errorType: string | undefined;
-    if (unknownCountActual < unknownCount) {
-      result = 'Unknown';
-      errorType = 'Timeout';
-      unknownCountActual++;
-    } else if (failCount > 0 && i < failCount) {
-      result = 'Invalid';
-      errorType = 'ConnectionFailed';
-      failCount--;
-    } else if (i % 7 === 0) {
-      result = 'Risky';
-    } else {
-      result = 'Safe';
-    }
+    const determined = determineResult(i, unknownCount, unknownCountActual, failCount);
+    unknownCountActual = determined.unknownCountActual;
+    failCount = determined.failCount;
 
-    const validationResult: ValidationResult = {
-      email,
-      result,
-      reason: result === 'Unknown' ? 'Timeout' : result === 'Invalid' ? 'Connection failed' : 'OK',
-      logs: [],
-      domain: email.split('@')[1],
-      validationDuration: 100,
-      mxRecordCount: 1,
-      isDisposable: false,
-      isRoleAccount: false,
-      isCatchAll: false,
-      isDeliverable: result === 'Safe',
-      isDisabled: false,
-      hasFullInbox: false,
-      canConnectSmtp: result !== 'Invalid',
-      acceptsMail: result !== 'Invalid',
-      isValidSyntax: true,
-      isB2c: false,
-      suggestion: null,
-      gravatarUrl: null,
-      haveibeenpwned: null,
-      errorType,
-      timestamp: new Date().toISOString(),
-      validationMode: 'standard',
-      riskScore: result === 'Safe' ? 0 : result === 'Risky' ? 50 : 100,
-    };
+    const validationResult = createTestValidationResult(email, determined.result, determined.errorType);
 
     results.push(validationResult);
 
@@ -503,6 +485,94 @@ export async function simulateValidationFlowDirect(
     total,
     status: 'idle',
   });
+
+  // Allow React to process the state update and trigger the retry modal
+  await new Promise((resolve) => setTimeout(resolve, 500));
+}
+
+/**
+ * Simulate validation flow for Tauri mode by directly setting validation state via test helper.
+ * This bypasses the Tauri event system which may not work correctly in test environment.
+ * Uses string-based evaluate() calls compatible with TauriPage.
+ *
+ * @param page - Playwright page connected to the Tauri WebView (or BrowserPageAdapter)
+ * @param emails - Array of email addresses to simulate validation for
+ * @param options - Configuration options
+ */
+export async function simulateValidationFlowTauriDirect(
+  page: Page & { playwrightPage?: Page },
+  emails: string[],
+  options: {
+    delayBetweenEmails?: number;
+    unknownCount?: number;
+    failCount?: number;
+  } = {}
+): Promise<void> {
+  const {
+    delayBetweenEmails = 50,
+    unknownCount = 0,
+    failCount = 0,
+  } = options;
+
+  const total = emails.length;
+  let unknownCountActual = 0;
+  const results: ValidationResult[] = [];
+
+  const evalPage = page.playwrightPage || page;
+
+  for (let i = 0; i < total; i++) {
+    const email = emails[i];
+
+    await new Promise((resolve) => setTimeout(resolve, delayBetweenEmails));
+
+    const determined = determineResult(i, unknownCount, unknownCountActual, failCount);
+    unknownCountActual = determined.unknownCountActual;
+    failCount = determined.failCount;
+
+    const validationResult = createTestValidationResult(email, determined.result, determined.errorType);
+
+    results.push(validationResult);
+
+    // Update frontend state directly via test helper (string-based for Tauri mode)
+    const stateScript = `
+      (function(state) {
+        if (window.__VALIDATION_TEST_HELPER__) {
+          window.__VALIDATION_TEST_HELPER__.setValidationState({
+            results: state.results,
+            progress: state.progress,
+            total: state.total,
+            status: state.status,
+          });
+        }
+      })(${JSON.stringify({
+        results: [...results],
+        progress: i + 1,
+        total,
+        status: 'processing',
+      })})
+    `;
+    await evalPage.evaluate(stateScript);
+  }
+
+  // Set final state to idle to trigger retry modal
+  const finalStateScript = `
+    (function(state) {
+      if (window.__VALIDATION_TEST_HELPER__) {
+        window.__VALIDATION_TEST_HELPER__.setValidationState({
+          results: state.results,
+          progress: state.progress,
+          total: state.total,
+          status: state.status,
+        });
+      }
+    })(${JSON.stringify({
+      results,
+      progress: total,
+      total,
+      status: 'idle',
+    })})
+  `;
+  await evalPage.evaluate(finalStateScript);
 
   // Allow React to process the state update and trigger the retry modal
   await new Promise((resolve) => setTimeout(resolve, 500));
@@ -615,9 +685,114 @@ export function createRevalidateMock(_unknownTiers = 2, _delayMs = 300) {
 
 /**
  * Reset the call count for a mock created by createRevalidateMock.
- * Useful for test isolation.
+/**
+ * Initialize validation state for Tauri-mode tests.
+ * Sets up the initial state (status: processing, total, progress: 0, results: [])
+ * and invokes validate_emails_bulk via Tauri IPC (which is mocked to return immediately).
+ *
+ * @param page - Playwright page connected to the Tauri WebView (or BrowserPageAdapter)
+ * @param emails - Array of email addresses to validate
  */
-export function resetRevalidateMock(_mock: ReturnType<typeof createRevalidateMock>): void {
-  // The mock is a closure, we can't directly reset it.
-  // Instead, create a new mock for each test.
+export async function initValidationStateTauri(
+  page: Page & { playwrightPage?: Page },
+  emails: string[]
+): Promise<void> {
+  const evalPage = page.playwrightPage || page;
+  
+  // Set initial validation state via test helper using string-based evaluate for Tauri mode
+  const initScript = `
+    (function(emailsList) {
+      if (window.__VALIDATION_TEST_HELPER__) {
+        window.__VALIDATION_TEST_HELPER__.setValidationState({
+          total: emailsList.length,
+          progress: 0,
+          status: 'processing',
+          results: [],
+          validationMode: 'standard',
+        });
+        window.__VALIDATION_TEST_HELPER__.setShowDashboard(true);
+      }
+    })(${JSON.stringify(emails)})
+  `;
+  await evalPage.evaluate(initScript);
+  
+  // Invoke validate_emails_bulk via Tauri IPC (mocked to return immediately)
+  const invokeScript = 
+    'window.__TAURI_INTERNALS__.invoke(\'validate_emails_bulk\', {' +
+    '  emails: ' + JSON.stringify(emails) + ',' +
+    '  concurrency: 5,' +
+    '  mode: \'standard\'' +
+    '})';
+  await evalPage.evaluate(invokeScript);
+}
+
+/**
+ * Simulate a full validation flow using Tauri's native event system.
+ * This emits validation-progress events via test_emit_validation_progress
+ * and validation-complete via test_emit_validation_complete.
+ * This is the proper way to test in Tauri mode as it uses the actual
+ * Tauri event system that the frontend listens to.
+ *
+ * @param page - Playwright page connected to the Tauri WebView (or BrowserPageAdapter)
+ * @param emails - Array of email addresses to simulate validation for
+ * @param options - Configuration options
+ */
+export async function simulateValidationFlowTauri(
+  page: Page & { playwrightPage?: Page },
+  emails: string[],
+  options: {
+    delayBetweenEmails?: number;
+    unknownCount?: number;
+    failCount?: number;
+    initialDelay?: number;
+  } = {}
+): Promise<void> {
+  const {
+    delayBetweenEmails = 100,
+    unknownCount = 0,
+    failCount = 0,
+    initialDelay = 500,
+  } = options;
+
+  // Wait for event listeners to be ready
+  await new Promise((resolve) => setTimeout(resolve, initialDelay));
+
+  const total = emails.length;
+  let unknownCountActual = 0;
+  let safeCount = 0;
+  let riskyCount = 0;
+  let invalidCount = 0;
+
+  for (let i = 0; i < total; i++) {
+    const email = emails[i];
+
+    await new Promise((resolve) => setTimeout(resolve, delayBetweenEmails));
+
+    // Determine result
+    const determined = determineResult(i, unknownCount, unknownCountActual, failCount);
+    unknownCountActual = determined.unknownCountActual;
+    failCount = determined.failCount;
+
+    if (determined.result === 'Invalid') invalidCount++;
+    else if (determined.result === 'Risky') riskyCount++;
+    else if (determined.result === 'Safe') safeCount++;
+
+    const validationResult = createTestValidationResult(email, determined.result, determined.errorType);
+
+    // Emit validation result via Tauri event system
+    await emitValidationProgress(page, validationResult);
+  }
+
+  // Emit completion event via Tauri event system
+  await emitValidationComplete(page, {
+    total,
+    safe: safeCount,
+    risky: riskyCount,
+    invalid: invalidCount,
+    unknown: unknownCountActual,
+    sessionId: `test-session-${Date.now()}`,
+  });
+
+  // Allow React to process the state update and trigger the retry modal
+  await new Promise((resolve) => setTimeout(resolve, 500));
 }

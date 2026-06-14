@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PieChart, ResponsiveContainer, Cell, Pie } from 'recharts';
+import { ShieldAlert, BarChart3 } from 'lucide-react';
 import { ValidationResult } from '@/lib/types';
 
 interface StatusDataEntry {
@@ -20,6 +21,7 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
     const risky = results.filter((r) => r.result === 'Risky').length;
     const invalid = results.filter((r) => r.result === 'Invalid').length;
     const unknown = results.filter((r) => r.result === 'Unknown').length;
+    const breached = results.filter((r) => r.haveibeenpwned === true).length;
 
     const durations = results
       .map((r) => r.validationDuration)
@@ -35,6 +37,7 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
       risky,
       invalid,
       unknown,
+      breached,
       avgDuration,
       validationSpeed: avgDuration > 0 ? Math.round(60000 / avgDuration) : 0,
     };
@@ -47,7 +50,7 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
       { name: 'Invalid', value: stats.invalid, color: '#ef4444' },
       { name: 'Unknown', value: stats.unknown, color: '#64748b' },
     ];
-  }, [results]);
+  }, [stats]);
 
   const riskCounts = useMemo(() => {
     const veryLow = results.filter(
@@ -74,6 +77,21 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
       veryHigh,
     };
   }, [results]);
+
+  if (results.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="bg-muted p-6 rounded-full mb-4">
+          <BarChart3 className="h-10 w-10 text-muted-foreground" />
+        </div>
+        <h3 className="text-lg font-semibold mb-2">No analytics data yet</h3>
+        <p className="text-sm text-muted-foreground max-w-md">
+          Run a validation to see statistics, risk distribution, domain
+          analysis, and breach reports here.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 w-full max-w-6xl mx-auto">
@@ -135,6 +153,28 @@ export function StatisticsDashboard({ results }: StatisticsDashboardProps) {
           </CardContent>
         </Card>
       </div>
+
+      {stats.breached > 0 && (
+        <Card className="p-6 border-2 border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-950/20">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="h-8 w-8 text-red-500" />
+                <div>
+                  <div className="text-2xl font-bold text-red-600 dark:text-red-400">
+                    {stats.breached}
+                  </div>
+                  <div className="text-xs text-muted-foreground font-medium">
+                    {stats.total > 0
+                      ? `${((stats.breached / stats.total) * 100).toFixed(1)}% of emails found in known data breaches`
+                      : 'Emails found in known data breaches'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="p-6">

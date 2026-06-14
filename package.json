@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -39,18 +40,22 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@crabnebula/tauri-driver": "^2.0.9",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.60.0",
+    "@srsholmes/tauri-playwright": "~0.2.2",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
     "@types/node": "^25.0.3",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19.1.8",
-    "@types/xlsx": "^0.0.35",
     "@types/react-dom": "^19.1.6",
+    "@types/xlsx": "^0.0.35",
     "@vitejs/plugin-react": "^5.1.2",
     "autoprefixer": "^10.4.23",
     "eslint": "^10.2.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "jsdom": "^27.3.0",
     "postcss": "^8.5.6",
     "prettier": "^3.8.2",

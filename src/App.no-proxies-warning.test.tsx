@@ -162,7 +162,7 @@ vi.mock('@/components/validation/email-input', () => ({
   }) => {
     React.useEffect(() => {
       onEmailsLoaded(['test@example.com']);
-    }, []);
+    }, [onEmailsLoaded]);
     return <div data-testid="email-input-mock">Email Input Mock</div>;
   },
 }));

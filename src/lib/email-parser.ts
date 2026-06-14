@@ -3,12 +3,13 @@ export function parseEmails(input: string): string[] {
     return [];
   }
 
-  // Split by comma or newline, then trim whitespace
-  const rawEmails = input.split(/[,\n]/);
+  // Split by comma, semicolon, or newline, then trim whitespace
+  const rawEmails = input.split(/[,\n;]+/);
 
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
+  // Loose validation: must contain @ with something on each side.
+  // Strict validation (RFC-compliant regex, disposable checks, etc.)
+  // is handled by the email-cleaner pipeline downstream.
   return rawEmails
     .map((email) => email.trim())
-    .filter((email) => email.length > 0 && emailRegex.test(email));
+    .filter((email) => email.length > 0 && email.includes('@'));
 }

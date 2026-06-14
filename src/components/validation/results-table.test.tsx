@@ -1,4 +1,9 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+} from '@testing-library/react';
 import { ResultsTable } from './results-table';
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import { ValidationResult } from '@/lib/types';
@@ -113,9 +118,8 @@ describe('ResultsTable Logic', () => {
 });
 
 describe('ResultsTable Delete Selected', () => {
-  it('calls onDeleteResults with selected emails when delete is confirmed', () => {
+  it('calls onDeleteResults with selected emails when delete is confirmed', async () => {
     const onDeleteResults = vi.fn();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     const currentResults = [...mockResults];
 
@@ -131,15 +135,15 @@ describe('ResultsTable Delete Selected', () => {
 
     // Select all rows via "select all" checkbox
     const checkboxes = screen.getAllByRole('checkbox');
-    // The first checkbox is "select all"
     fireEvent.click(checkboxes[0]);
 
-    // Click the Delete button
+    // Click the Delete button (opens dialog)
     const deleteButton = screen.getByText('Delete');
     fireEvent.click(deleteButton);
 
-    // Confirm was shown
-    expect(confirmSpy).toHaveBeenCalledWith('Delete 3 selected results?');
+    // Click the confirm button in the dialog
+    const confirmButton = await screen.findByText('Delete 3 Results');
+    fireEvent.click(confirmButton);
 
     // onDeleteResults was called with a Set containing all 3 emails
     expect(onDeleteResults).toHaveBeenCalledTimes(1);
@@ -148,13 +152,10 @@ describe('ResultsTable Delete Selected', () => {
     expect(deletedEmails.has('a@example.com')).toBe(true);
     expect(deletedEmails.has('b@example.com')).toBe(true);
     expect(deletedEmails.has('c@example.com')).toBe(true);
-
-    confirmSpy.mockRestore();
   });
 
-  it('does not call onDeleteResults when delete is cancelled', () => {
+  it('does not call onDeleteResults when delete is cancelled', async () => {
     const onDeleteResults = vi.fn();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     render(
       <ResultsTable
@@ -170,19 +171,19 @@ describe('ResultsTable Delete Selected', () => {
     const checkboxes = screen.getAllByRole('checkbox');
     fireEvent.click(checkboxes[0]);
 
-    // Click the Delete button
+    // Click the Delete button (opens dialog)
     const deleteButton = screen.getByText('Delete');
     fireEvent.click(deleteButton);
 
+    // Click Cancel in the dialog
+    const cancelButton = await screen.findByText('Cancel');
+    fireEvent.click(cancelButton);
+
     // onDeleteResults should NOT be called when user cancels
     expect(onDeleteResults).not.toHaveBeenCalled();
-
-    confirmSpy.mockRestore();
   });
 
-  it('onDeleteResults filters out deleted results when wired to state', () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
+  it('onDeleteResults filters out deleted results when wired to state', async () => {
     let currentResults = [...mockResults];
     const setResults = (
       updaterOrValue:
@@ -217,9 +218,13 @@ describe('ResultsTable Delete Selected', () => {
     const deleteButton = screen.getByText('Delete');
     fireEvent.click(deleteButton);
 
-    // After delete, results should be empty (all 3 were selected)
-    expect(currentResults).toHaveLength(0);
+    // Click confirm in the dialog
+    const confirmButton = await screen.findByText('Delete 3 Results');
+    fireEvent.click(confirmButton);
 
-    confirmSpy.mockRestore();
+    // Wait for state update to process
+    await waitFor(() => {
+      expect(currentResults).toHaveLength(0);
+    });
   });
 });

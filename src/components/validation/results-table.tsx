@@ -21,10 +21,19 @@ import {
   Columns,
   Smartphone,
   X,
+  ShieldAlert,
 } from 'lucide-react';
 import { ValidationResult } from '@/lib/types';
 import { RiskScoreBadge } from './risk-score-badge';
 import { TypoWarning } from './typo-warning';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import * as typoDatabase from '@/lib/typo-database';
 import { exportColumns, ExportColumn } from '@/lib/enhanced-export-utils';
 import { formatAsCSV } from '@/lib/export-utils';
@@ -178,13 +187,16 @@ export function ResultsTable({
     }
   };
 
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const handleDeleteSelected = () => {
-    if (confirm(`Delete ${selectedRows.size} selected results?`)) {
-      if (onDeleteResults) {
-        onDeleteResults(new Set(selectedRows));
-      }
-      setSelectedRows(new Set());
+    setShowDeleteConfirm(true);
+  };
+  const confirmDelete = () => {
+    if (onDeleteResults) {
+      onDeleteResults(new Set(selectedRows));
     }
+    setSelectedRows(new Set());
+    setShowDeleteConfirm(false);
   };
 
   const toggleColumn = (key: string) => {
@@ -451,6 +463,11 @@ export function ResultsTable({
                               <div className="flex items-center gap-2">
                                 {getStatusBadge(result[col.key])}
                                 <RiskScoreBadge result={result} />
+                                {result.haveibeenpwned && (
+                                  <span title="Found in data breach" className="flex items-center">
+                                    <ShieldAlert className="h-3.5 w-3.5 text-red-500 flex-shrink-0" />
+                                  </span>
+                                )}
                               </div>
                             )}
                             {col.key !== 'email' && col.key !== 'result' && (
@@ -510,6 +527,27 @@ export function ResultsTable({
           </span>
         </div>
       )}
+
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent className="max-w-[90vw] sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Selected Results?</DialogTitle>
+            <DialogDescription>
+              This will remove {selectedRows.size} result
+              {selectedRows.size !== 1 ? 's' : ''} from the table. This action
+              cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="ghost" onClick={() => setShowDeleteConfirm(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDelete}>
+              Delete {selectedRows.size} Result{selectedRows.size !== 1 ? 's' : ''}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

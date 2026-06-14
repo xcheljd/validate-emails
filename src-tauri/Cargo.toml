@@ -14,6 +14,9 @@ edition = "2021"
 name = "tauri_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+e2e-testing = ["tauri-plugin-playwright"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -21,6 +24,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-playwright = { version = "0.2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 check-if-email-exists = { git = "https://github.com/reacherhq/check-if-email-exists", tag = "v0.11.6" }

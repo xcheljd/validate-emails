@@ -74,3 +74,26 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Test mode: disable all animations and transitions for Tauri WebView compatibility */
+@layer utilities {
+  /* Target only elements that typically have animations in the UI */
+  body[data-test-mode="true"] .animate-in,
+  body[data-test-mode="true"] .animate-out,
+  body[data-test-mode="true"] [class*="animate-"],
+  body[data-test-mode="true"] [class*="transition-"],
+  body[data-test-mode="true"] .animate-spin,
+  body[data-test-mode="true"] .animate-pulse {
+    animation: none !important;
+    transition: none !important;
+    animation-duration: 0s !important;
+    transition-duration: 0s !important;
+  }
+  
+  /* Ensure modal content is visible in test mode - target dialog content specifically */
+  body[data-test-mode="true"] [role="dialog"] > div,
+  body[data-test-mode="true"] [role="dialog"] [data-radix-dialog-content] {
+    opacity: 1 !important;
+    visibility: visible !important;
+  }
+}

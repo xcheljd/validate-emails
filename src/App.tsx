@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MainLayout } from '@/components/layout/main-layout';
 import { SidebarView } from '@/components/layout/sidebar';
 import { EmailInput } from '@/components/validation/email-input';
@@ -7,7 +7,7 @@ import { ResultsTable } from '@/components/validation/results-table';
 import { ResultDetails } from '@/components/validation/result-details';
 import { Button } from '@/components/ui/button';
 import { ChevronLeft } from 'lucide-react';
-import { useEmailValidation } from '@/hooks/use-email-validation';
+import { useEmailValidation, type ValidationStatus } from '@/hooks/use-email-validation';
 import { ValidationResult } from '@/lib/types';
 import { useSettings, SettingsProvider } from '@/hooks/use-settings';
 import { showWarning } from '@/lib/toast';
@@ -26,8 +26,66 @@ import { CleaningReport } from '@/components/validation/cleaning-report';
 import { CrashRecoveryDialog } from '@/components/validation/crash-recovery-dialog';
 import { RateLimitWarningDialog, estimateValidationTime } from '@/components/validation/rate-limit-warning-dialog';
 import { AutoPauseModal } from '@/components/validation/auto-pause-modal';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { cleanEmailList, type CleaningResult } from '@/lib/email-cleaner';
 import type { ValidationSession } from '@/lib/session-manager';
+
+// Global test helper type declaration
+interface ValidationTestHelper {
+  setValidationState: (state: Partial<{
+    results: ValidationResult[];
+    status: ValidationStatus;
+    progress: number;
+    total: number;
+    validationMode: 'quick' | 'standard' | 'thorough';
+  }>) => void;
+  getValidationState: () => {
+    results: ValidationResult[];
+    status: ValidationStatus;
+    progress: number;
+    total: number;
+    validationMode: 'quick' | 'standard' | 'thorough';
+    isEscalating: boolean;
+    escalationTier: number;
+    escalationEmailCount: number;
+    rateLimitFailureState: {
+      consecutiveFailures: number;
+      isSlowdownActive: boolean;
+      isAutoPaused: boolean;
+    };
+  };
+  setShowDashboard: (value: boolean) => void;
+  resetRateLimitState: () => void;
+  resetEscalationState: () => void;
+  setEscalationState: (state: Partial<{
+    isEscalating: boolean;
+    escalationTier: number;
+    escalationEmailCount: number;
+  }>) => void;
+  setRateLimitFailureState: (state: Partial<{
+    consecutiveFailures: number;
+    isSlowdownActive: boolean;
+    isAutoPaused: boolean;
+  }>) => void;
+  resetRetryPrompt: () => void;
+  retryUnknowns: () => void;
+  setForceShowRetryModal: (value: boolean) => void;
+  setDiffSessions: (sessionA: ValidationSession | null, sessionB: ValidationSession | null) => void;
+  clearDiffSessions: () => void;
+}
+
+declare global {
+  interface Window {
+    __VALIDATION_TEST_HELPER__?: ValidationTestHelper;
+  }
+}
 
 function App() {
   return (
@@ -60,6 +118,8 @@ function AppContent() {
   const [showCrashRecovery, setShowCrashRecovery] = useState(true);
   /** Controls the rate limit warning dialog */
   const [showRateLimitWarning, setShowRateLimitWarning] = useState(false);
+  /** Controls the clear results confirmation dialog */
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   /** Stores the estimated time for the rate limit warning */
   const [rateLimitEstimatedTime, setRateLimitEstimatedTime] = useState('');
   /** Session diff state: two sessions to compare */
@@ -100,20 +160,76 @@ function AppContent() {
     resumeFromAutoPause,
     stopFromAutoPause,
     setValidationStateForTest,
-  } = useEmailValidation(settings.validationMode);
+    getValidationStateForTest,
+    resetRateLimitFailureStateForTest,
+    resetEscalationStateForTest,
+    setEscalationStateForTest,
+    setRateLimitFailureStateForTest,
+  } = useEmailValidation(settings.validationMode, settings.autoSaveInterval);
 
-  // Expose test helper globally for E2E tests
+  const [forceShowRetryModal, setForceShowRetryModal] = useState(false);
+  const [dashboardKey, setDashboardKey] = useState(0);
+
+  // Use refs to store test helper functions to avoid recreation on dependency changes
+  const testHelperRef = useRef({
+    setValidationState: setValidationStateForTest,
+    getValidationState: getValidationStateForTest,
+    setShowDashboard: (value: boolean) => setShowDashboard(value),
+    resetRateLimitState: resetRateLimitFailureStateForTest,
+    resetEscalationState: resetEscalationStateForTest,
+    setEscalationState: setEscalationStateForTest,
+    setRateLimitFailureState: setRateLimitFailureStateForTest,
+    resetRetryPrompt: () => setDashboardKey((k) => k + 1),
+    retryUnknowns: () => retryUnknowns(),
+    setForceShowRetryModal: (value: boolean) => setForceShowRetryModal(value),
+    // Session diff test helpers
+    setDiffSessions: (sessionA: ValidationSession | null, sessionB: ValidationSession | null) => {
+      setDiffSessionA(sessionA);
+      setDiffSessionB(sessionB);
+      setCurrentView('session-diff');
+    },
+    clearDiffSessions: () => {
+      setDiffSessionA(null);
+      setDiffSessionB(null);
+      setCurrentView('history');
+    },
+  });
+
+  // Update ref when functions change (stable setters won't trigger this)
   useEffect(() => {
-    if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development') {
-      (window as any).__VALIDATION_TEST_HELPER__ = {
-        setValidationState: setValidationStateForTest,
-        setShowDashboard: (value: boolean) => setShowDashboard(value),
-      };
+    testHelperRef.current.setValidationState = setValidationStateForTest;
+    testHelperRef.current.getValidationState = getValidationStateForTest;
+    testHelperRef.current.setShowDashboard = (value: boolean) => setShowDashboard(value);
+    testHelperRef.current.resetRateLimitState = resetRateLimitFailureStateForTest;
+    testHelperRef.current.resetEscalationState = resetEscalationStateForTest;
+    testHelperRef.current.setEscalationState = setEscalationStateForTest;
+    testHelperRef.current.setRateLimitFailureState = setRateLimitFailureStateForTest;
+    testHelperRef.current.retryUnknowns = () => retryUnknowns();
+  }, [setValidationStateForTest, getValidationStateForTest, setShowDashboard, resetRateLimitFailureStateForTest, resetEscalationStateForTest, setEscalationStateForTest, setRateLimitFailureStateForTest, retryUnknowns]);
+
+  // Expose test helper globally for E2E tests (only in test mode, not development)
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'test') {
+      window.__VALIDATION_TEST_HELPER__ = testHelperRef.current;
     }
     return () => {
-      delete (window as any).__VALIDATION_TEST_HELPER__;
+      delete window.__VALIDATION_TEST_HELPER__;
     };
-  }, [setValidationStateForTest, setShowDashboard]);
+  }, []);
+
+  // Add test mode attribute to body for CSS animation disabling
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'test') {
+      if (forceShowRetryModal) {
+        document.body.setAttribute('data-test-mode', 'true');
+      } else {
+        document.body.removeAttribute('data-test-mode');
+      }
+    }
+    return () => {
+      document.body.removeAttribute('data-test-mode');
+    };
+  }, [forceShowRetryModal]);
 
   const handleNavigate = (view: SidebarView) => {
     setCurrentView(view);
@@ -147,7 +263,7 @@ function AppContent() {
 
     setShowDashboard(true);
     setStatusFilter('all'); // Reset filter on start
-    startValidation(emails, 5, validationMode);
+    startValidation(emails, settings.concurrency, validationMode);
   };
 
   const handleExport = () => {
@@ -191,6 +307,14 @@ function AppContent() {
     setCleaningResult(null);
     setOriginalEmails([]);
     setDedupMapping(null);
+  };
+
+  const handleClearClick = () => {
+    if (results.length > 0) {
+      setShowClearConfirm(true);
+    } else {
+      handleClear();
+    }
   };
 
   const handleViewDetails = (result: ValidationResult) => {
@@ -391,7 +515,7 @@ function AppContent() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={handleClear}
+                    onClick={handleClearClick}
                     className="font-bold"
                   >
                     New
@@ -426,8 +550,10 @@ function AppContent() {
                 />
               )
             ) : (
-              <div className="max-w-6xl mx-auto space-y-8">
-                <ValidationDashboard
+              <ErrorBoundary inline>
+                <div className="max-w-6xl mx-auto space-y-8">
+                  <ValidationDashboard
+                    key={dashboardKey}
                   results={results}
                   progress={progress}
                   total={total}
@@ -460,6 +586,7 @@ function AppContent() {
                   waitingForProxy={waitingForProxy}
                   waitingCooldownSecs={waitingCooldownSecs}
                   rateLimitFailureState={rateLimitFailureState}
+                  forceShowRetryModal={forceShowRetryModal}
                 />
                 <ResultsTable
                   results={results}
@@ -478,7 +605,8 @@ function AppContent() {
                   onOpenChange={setIsDetailsOpen}
                   onFixEmail={handleFixEmail}
                 />
-              </div>
+                </div>
+              </ErrorBoundary>
             ))}
 
           {currentView === 'history' && (
@@ -509,18 +637,22 @@ function AppContent() {
           )}
 
           {currentView === 'analytics' && (
-            <div className="max-w-6xl mx-auto space-y-8">
-              <StatisticsDashboard results={results} />
-              <DomainAnalysis results={results} />
-            </div>
+            <ErrorBoundary inline>
+              <div className="max-w-6xl mx-auto space-y-8">
+                <StatisticsDashboard results={results} />
+                <DomainAnalysis results={results} />
+              </div>
+            </ErrorBoundary>
           )}
 
           {currentView === 'settings' && (
-            <div className="max-w-4xl mx-auto">
-              <div className="bg-card border rounded-lg p-6">
-                <SettingsContent />
+            <ErrorBoundary inline>
+              <div className="max-w-4xl mx-auto">
+                <div className="bg-card border rounded-lg p-6">
+                  <SettingsContent />
+                </div>
               </div>
-            </div>
+            </ErrorBoundary>
           )}
         </div>
       </MainLayout>
@@ -550,7 +682,7 @@ function AppContent() {
           setShowRateLimitWarning(false);
           setShowDashboard(true);
           setStatusFilter('all');
-          startValidation(emails, 5, validationMode);
+          startValidation(emails, settings.concurrency, validationMode);
         }}
       />
 
@@ -565,6 +697,32 @@ function AppContent() {
         onResume={resumeFromAutoPause}
         onStop={stopFromAutoPause}
       />
+
+      <Dialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
+        <DialogContent className="max-w-[90vw] sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Clear All Results?</DialogTitle>
+            <DialogDescription>
+              This will discard all {results.length} validation results and
+              return to the email input screen. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="ghost" onClick={() => setShowClearConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setShowClearConfirm(false);
+                handleClear();
+              }}
+            >
+              Clear Everything
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </ErrorBoundary>
   );
 }

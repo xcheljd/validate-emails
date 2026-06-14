@@ -50,6 +50,108 @@ pub struct ValidationResult {
     pub proxy_id: Option<String>,
 }
 
+impl ValidationResult {
+    /// Create a builder pre-populated with sensible defaults for all fields.
+    /// Only fields that differ need to be overridden.
+    fn builder(
+        email: &str,
+        domain: &str,
+        result: &str,
+        reason: &str,
+        validation_mode: &str,
+        validation_duration: u64,
+        proxy_id: Option<String>,
+    ) -> ValidationResult {
+        ValidationResult {
+            email: email.to_string(),
+            result: result.to_string(),
+            reason: reason.to_string(),
+            logs: vec![],
+            domain: domain.to_string(),
+            validation_duration,
+            mx_record_count: 0,
+            is_disposable: false,
+            is_role_account: false,
+            is_catch_all: false,
+            is_deliverable: false,
+            is_disabled: false,
+            has_full_inbox: false,
+            can_connect_smtp: false,
+            is_valid_syntax: false,
+            is_b2c: false,
+            suggestion: None,
+            gravatar_url: None,
+            haveibeenpwned: None,
+            error_type: None,
+            timestamp: Utc::now().to_rfc3339(),
+            validation_mode: validation_mode.to_string(),
+            risk_score: 0,
+            proxy_id,
+        }
+    }
+
+    fn with_mx_record_count(mut self, count: u32) -> Self {
+        self.mx_record_count = count;
+        self
+    }
+    fn with_disposable(mut self, val: bool) -> Self {
+        self.is_disposable = val;
+        self
+    }
+    fn with_role_account(mut self, val: bool) -> Self {
+        self.is_role_account = val;
+        self
+    }
+    fn with_catch_all(mut self, val: bool) -> Self {
+        self.is_catch_all = val;
+        self
+    }
+    fn with_deliverable(mut self, val: bool) -> Self {
+        self.is_deliverable = val;
+        self
+    }
+    fn with_disabled(mut self, val: bool) -> Self {
+        self.is_disabled = val;
+        self
+    }
+    fn with_full_inbox(mut self, val: bool) -> Self {
+        self.has_full_inbox = val;
+        self
+    }
+    fn with_can_connect_smtp(mut self, val: bool) -> Self {
+        self.can_connect_smtp = val;
+        self
+    }
+    fn with_valid_syntax(mut self, val: bool) -> Self {
+        self.is_valid_syntax = val;
+        self
+    }
+    fn with_b2c(mut self, val: bool) -> Self {
+        self.is_b2c = val;
+        self
+    }
+    fn with_suggestion(mut self, val: Option<String>) -> Self {
+        self.suggestion = val;
+        self
+    }
+    fn with_gravatar_url(mut self, val: Option<String>) -> Self {
+        self.gravatar_url = val;
+        self
+    }
+    fn with_haveibeenpwned(mut self, val: Option<bool>) -> Self {
+        self.haveibeenpwned = val;
+        self
+    }
+    fn with_error_type(mut self, val: &str) -> Self {
+        self.error_type = Some(val.to_string());
+        self
+    }
+    fn with_risk_score(mut self, val: u32) -> Self {
+        self.risk_score = val;
+        self
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RevalidationRequest {
     pub email: String,
@@ -104,32 +206,17 @@ async fn validate_email_quick(email: String, mode: String, proxy: Option<ProxyCo
     let suggestion = syntax.suggestion.clone();
 
     if !is_valid_syntax {
-        return ValidationResult {
-            email,
-            result: "Invalid".to_string(),
-            reason: "Quick mode: Invalid syntax".to_string(),
-            logs: vec![],
-            domain,
-            validation_duration: start_time.elapsed().as_millis() as u64,
-            mx_record_count: 0,
-            is_disposable: false,
-            is_role_account: false,
-            is_catch_all: false,
-            is_deliverable: false,
-            is_disabled: false,
-            has_full_inbox: false,
-            can_connect_smtp: false,
-            is_valid_syntax: false,
-            is_b2c: false,
-            suggestion,
-            gravatar_url: None,
-            haveibeenpwned: None,
-            error_type: None,
-            timestamp: Utc::now().to_rfc3339(),
-            validation_mode: mode,
-            risk_score: 100,
+        return ValidationResult::builder(
+            &email,
+            &domain,
+            "Invalid",
+            "Quick mode: Invalid syntax",
+            &mode,
+            start_time.elapsed().as_millis() as u64,
             proxy_id,
-        };
+        )
+        .with_suggestion(suggestion)
+        .with_risk_score(100);
     }
 
     // Step 2: MX lookup
@@ -145,63 +232,36 @@ async fn validate_email_quick(email: String, mode: String, proxy: Option<ProxyCo
     // If MX lookup failed entirely, return Unknown
     let mx_failed = mx_result.is_err();
     if mx_failed {
-        return ValidationResult {
-            email,
-            result: "Unknown".to_string(),
-            reason: "Quick mode: MX lookup failed".to_string(),
-            logs: vec![],
-            domain,
-            validation_duration: start_time.elapsed().as_millis() as u64,
-            mx_record_count: 0,
-            is_disposable: false,
-            is_role_account: false,
-            is_catch_all: false,
-            is_deliverable: false,
-            is_disabled: false,
-            has_full_inbox: false,
-            can_connect_smtp: false,
-            is_valid_syntax,
-            is_b2c: false,
-            suggestion,
-            gravatar_url: None,
-            haveibeenpwned: None,
-            error_type: Some("MxLookupError".to_string()),
-            timestamp: Utc::now().to_rfc3339(),
-            validation_mode: mode,
-            risk_score: 50,
+        return ValidationResult::builder(
+            &email,
+            &domain,
+            "Unknown",
+            "Quick mode: MX lookup failed",
+            &mode,
+            start_time.elapsed().as_millis() as u64,
             proxy_id,
-        };
+        )
+        .with_valid_syntax(is_valid_syntax)
+        .with_suggestion(suggestion)
+        .with_error_type("MxLookupError")
+        .with_risk_score(50);
     }
 
     // If no MX records found, email is Invalid
     let mx_ok = mx_result.as_ref().unwrap();
     if mx_ok.lookup.is_err() {
-        return ValidationResult {
-            email,
-            result: "Invalid".to_string(),
-            reason: "Quick mode: No MX records found".to_string(),
-            logs: vec![],
-            domain,
-            validation_duration: start_time.elapsed().as_millis() as u64,
-            mx_record_count: 0,
-            is_disposable: false,
-            is_role_account: false,
-            is_catch_all: false,
-            is_deliverable: false,
-            is_disabled: false,
-            has_full_inbox: false,
-            can_connect_smtp: false,
-            is_valid_syntax,
-            is_b2c: false,
-            suggestion,
-            gravatar_url: None,
-            haveibeenpwned: None,
-            error_type: None,
-            timestamp: Utc::now().to_rfc3339(),
-            validation_mode: mode,
-            risk_score: 100,
+        return ValidationResult::builder(
+            &email,
+            &domain,
+            "Invalid",
+            "Quick mode: No MX records found",
+            &mode,
+            start_time.elapsed().as_millis() as u64,
             proxy_id,
-        };
+        )
+        .with_valid_syntax(is_valid_syntax)
+        .with_suggestion(suggestion)
+        .with_risk_score(100);
     }
 
     // Step 3: Misc checks (disposable, role account, b2c)
@@ -217,32 +277,24 @@ async fn validate_email_quick(email: String, mode: String, proxy: Option<ProxyCo
 
     let risk_score = calculate_risk_score(result_str, misc.is_disposable, false, false, false);
 
-    ValidationResult {
-        email,
-        result: result_str.to_string(),
-        reason: "Quick mode: syntax + MX + misc (SMTP skipped)".to_string(),
-        logs: vec![],
-        domain,
-        validation_duration: start_time.elapsed().as_millis() as u64,
-        mx_record_count,
-        is_disposable: misc.is_disposable,
-        is_role_account: misc.is_role_account,
-        is_catch_all: false,
-        is_deliverable: false,
-        is_disabled: false,
-        has_full_inbox: false,
-        can_connect_smtp: false,
-        is_valid_syntax,
-        is_b2c: misc.is_b2c,
-        suggestion,
-        gravatar_url: misc.gravatar_url,
-        haveibeenpwned: misc.haveibeenpwned,
-        error_type: None,
-        timestamp: Utc::now().to_rfc3339(),
-        validation_mode: mode,
-        risk_score,
+    ValidationResult::builder(
+        &email,
+        &domain,
+        result_str,
+        "Quick mode: syntax + MX + misc (SMTP skipped)",
+        &mode,
+        start_time.elapsed().as_millis() as u64,
         proxy_id,
-    }
+    )
+    .with_mx_record_count(mx_record_count)
+    .with_disposable(misc.is_disposable)
+    .with_role_account(misc.is_role_account)
+    .with_valid_syntax(is_valid_syntax)
+    .with_b2c(misc.is_b2c)
+    .with_suggestion(suggestion)
+    .with_gravatar_url(misc.gravatar_url)
+    .with_haveibeenpwned(misc.haveibeenpwned)
+    .with_risk_score(risk_score)
 }
 
 /// Full SMTP verification (Standard and Thorough modes).
@@ -307,32 +359,17 @@ async fn validate_email_full(
     let output = match input {
         Ok(input) => check_email(&input).await,
         Err(e) => {
-            return ValidationResult {
-                email: email.clone(),
-                result: "Unknown".to_string(),
-                reason: format!("Builder Error: {:?}", e),
-                logs: vec![],
-                domain: email.split('@').next_back().unwrap_or("").to_string(),
-                validation_duration: start_time.elapsed().as_millis() as u64,
-                mx_record_count: 0,
-                is_disposable: false,
-                is_role_account: false,
-                is_catch_all: false,
-                is_deliverable: false,
-                is_disabled: false,
-                has_full_inbox: false,
-                can_connect_smtp: false,
-                is_valid_syntax: false,
-                is_b2c: false,
-                suggestion: None,
-                gravatar_url: None,
-                haveibeenpwned: None,
-                error_type: Some("BuilderError".to_string()),
-                timestamp: Utc::now().to_rfc3339(),
-                validation_mode: mode,
-                risk_score: 50,
+            return ValidationResult::builder(
+                &email,
+                email.split('@').next_back().unwrap_or(""),
+                "Unknown",
+                &format!("Builder Error: {:?}", e),
+                &mode,
+                start_time.elapsed().as_millis() as u64,
                 proxy_id,
-            };
+            )
+            .with_error_type("BuilderError")
+            .with_risk_score(50);
         }
     };
 
@@ -387,32 +424,29 @@ async fn validate_email_full(
 
     let risk_score = calculate_risk_score(result_str, is_disposable, is_catch_all, is_disabled, has_full_inbox);
 
-    ValidationResult {
-        email,
-        result: result_str.to_string(),
-        reason,
-        logs: vec![],
-        domain,
-        validation_duration: start_time.elapsed().as_millis() as u64,
-        mx_record_count,
-        is_disposable,
-        is_role_account,
-        is_catch_all,
-        is_deliverable,
-        is_disabled,
-        has_full_inbox,
-        can_connect_smtp,
-        is_valid_syntax,
-        is_b2c,
-        suggestion,
-        gravatar_url,
-        haveibeenpwned,
-        error_type: None,
-        timestamp: Utc::now().to_rfc3339(),
-        validation_mode: mode,
-        risk_score,
+    ValidationResult::builder(
+        &email,
+        &domain,
+        result_str,
+        &reason,
+        &mode,
+        start_time.elapsed().as_millis() as u64,
         proxy_id,
-    }
+    )
+    .with_mx_record_count(mx_record_count)
+    .with_disposable(is_disposable)
+    .with_role_account(is_role_account)
+    .with_catch_all(is_catch_all)
+    .with_deliverable(is_deliverable)
+    .with_disabled(is_disabled)
+    .with_full_inbox(has_full_inbox)
+    .with_can_connect_smtp(can_connect_smtp)
+    .with_valid_syntax(is_valid_syntax)
+    .with_b2c(is_b2c)
+    .with_suggestion(suggestion)
+    .with_gravatar_url(gravatar_url)
+    .with_haveibeenpwned(haveibeenpwned)
+    .with_risk_score(risk_score)
 }
 
 fn calculate_risk_score(result: &str, is_disposable: bool, is_catch_all: bool, is_disabled: bool, has_full_inbox: bool) -> u32 {

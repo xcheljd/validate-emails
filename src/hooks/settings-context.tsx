@@ -25,27 +25,7 @@ import {
 // Internal helpers (previously module-private in use-settings.ts)
 // ---------------------------------------------------------------------------
 
-const PROXY_STORAGE_KEY = 'proxy-settings';
-
-function getProxyFromStorage(): ProxySettings {
-  try {
-    const stored = localStorage.getItem(PROXY_STORAGE_KEY);
-    if (stored) {
-      return { ...defaultProxySettings, ...JSON.parse(stored) };
-    }
-  } catch (e) {
-    console.error('Failed to parse proxy settings from localStorage:', e);
-  }
-  return { ...defaultProxySettings };
-}
-
-function saveProxyToStorage(settings: ProxySettings): void {
-  try {
-    localStorage.setItem(PROXY_STORAGE_KEY, JSON.stringify(settings));
-  } catch (e) {
-    console.error('Failed to save proxy settings to localStorage:', e);
-  }
-}
+// No separate proxy-settings key; all settings stored under 'app-settings'
 
 interface BackendSettings {
   validation_mode: string;
@@ -61,11 +41,11 @@ interface BackendSettings {
 interface BackendProxyPool {
   proxies: ProxyConfig[];
   enabled: boolean;
-  rotation_mode: RotationMode;
-  domain_assignments: Record<string, string>;
-  proxy_stats?: Record<string, ProxyStats>;
-  cooldown_duration_secs?: number;
-  auto_disable_threshold?: AutoDisableThreshold;
+  rotationMode: RotationMode;
+  domainAssignments: Record<string, string>;
+  proxyStats?: Record<string, ProxyStats>;
+  cooldownDurationSecs?: number;
+  autoDisableThreshold?: AutoDisableThreshold;
 }
 
 function backendToFrontend(backend: BackendSettings): Partial<AppSettings> {
@@ -103,15 +83,83 @@ function backendProxyPoolToFrontend(backend: BackendProxyPool): ProxySettings {
   return {
     proxies: backend.proxies,
     enabled: backend.enabled,
-    rotationMode: backend.rotation_mode,
-    domainAssignments: backend.domain_assignments,
-    proxyStats: backend.proxy_stats || {},
-    cooldownDurationSecs: backend.cooldown_duration_secs ?? 60,
-    autoDisableThreshold: backend.auto_disable_threshold ?? {
+    rotationMode: backend.rotationMode,
+    domainAssignments: backend.domainAssignments,
+    proxyStats: backend.proxyStats || {},
+    cooldownDurationSecs: backend.cooldownDurationSecs ?? 60,
+    autoDisableThreshold: backend.autoDisableThreshold ?? {
       successRatePercent: 20,
       minAttempts: 10,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Shared helper: update proxy portion of settings + persist to localStorage
+// ---------------------------------------------------------------------------
+
+function persistProxyUpdate(
+  setSettings: React.Dispatch<React.SetStateAction<AppSettings>>,
+  updater: (proxy: ProxySettings) => ProxySettings
+): void {
+  setSettings((prev) => {
+    const updated = updater(prev.proxy);
+    const next = { ...prev, proxy: updated };
+    localStorage.setItem('app-settings', JSON.stringify(next));
+    return next;
+  });
+}
+
+/** Sync proxy pool from backend, then persist to localStorage */
+function syncProxyFromBackend(
+  setSettings: React.Dispatch<React.SetStateAction<AppSettings>>,
+  proxySettings: ProxySettings
+): void {
+  setSettings((prev) => {
+    const next = { ...prev, proxy: proxySettings };
+    localStorage.setItem('app-settings', JSON.stringify(next));
+    return next;
+  });
+}
+
+/**
+ * Invoke a Tauri command, then re-sync the proxy pool from the backend.
+ * Falls back to localStorage via `fallbackFn` if the backend is unavailable.
+ */
+async function invokeAndSyncProxy<T>(
+  cmd: string,
+  args: Record<string, unknown>,
+  fallbackFn: (proxy: ProxySettings) => ProxySettings,
+  setSettings: React.Dispatch<React.SetStateAction<AppSettings>>
+): Promise<T> {
+  try {
+    const result = await invoke<T>(cmd, args);
+    const pool = await invoke<BackendProxyPool>('get_proxy_pool');
+    syncProxyFromBackend(setSettings, backendProxyPoolToFrontend(pool));
+    return result;
+  } catch (err) {
+    console.warn(`Failed ${cmd} via Tauri, using localStorage fallback:`, err);
+    persistProxyUpdate(setSettings, fallbackFn);
+    throw err;
+  }
+}
+
+/**
+ * Invoke a Tauri command, then persist a local proxy update.
+ * Used when the command does not return a pool to re-sync from.
+ */
+async function invokeAndPersistProxy(
+  cmd: string,
+  args: Record<string, unknown>,
+  fallbackFn: (proxy: ProxySettings) => ProxySettings,
+  setSettings: React.Dispatch<React.SetStateAction<AppSettings>>
+): Promise<void> {
+  try {
+    await invoke(cmd, args);
+  } catch (err) {
+    console.warn(`Failed ${cmd} via Tauri, using localStorage fallback:`, err);
+  }
+  persistProxyUpdate(setSettings, fallbackFn);
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +225,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         );
       });
 
+    // Load proxy pool and merge with settings to avoid race condition
     invoke<BackendProxyPool>('get_proxy_pool')
       .then((backendPool) => {
         const proxySettings = backendProxyPoolToFrontend(backendPool);
@@ -187,8 +236,18 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
           'Failed to load proxy pool from backend, using localStorage fallback:',
           err
         );
-        const proxySettings = getProxyFromStorage();
-        setSettings((prev) => ({ ...prev, proxy: proxySettings }));
+        // Read proxy settings from app-settings localStorage key
+        try {
+          const stored = localStorage.getItem('app-settings');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (parsed.proxy) {
+              setSettings((prev) => ({ ...prev, proxy: parsed.proxy }));
+            }
+          }
+        } catch (e) {
+          console.error('Failed to parse proxy settings from app-settings:', e);
+        }
       });
   }, []);
 
@@ -215,59 +274,36 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const addProxy = useCallback(async (proxy: ProxyConfig): Promise<void> => {
     try {
-      await invoke('add_proxy', { proxy });
-      const pool = await invoke<BackendProxyPool>('get_proxy_pool');
-      const proxySettings = backendProxyPoolToFrontend(pool);
-      setSettings((prev) => {
-        const next = { ...prev, proxy: proxySettings };
-        localStorage.setItem('app-settings', JSON.stringify(next));
-        return next;
-      });
-    } catch (err) {
-      console.warn(
-        'Failed to add proxy via Tauri, using localStorage fallback:',
-        err
-      );
-      const currentProxy = getProxyFromStorage();
-      const exists = currentProxy.proxies.some(
-        (p) => getProxyId(p) === getProxyId(proxy)
-      );
-      if (!exists) {
-        const updated = {
-          ...currentProxy,
-          proxies: [...currentProxy.proxies, proxy],
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
-      }
+      await invokeAndSyncProxy<void>('add_proxy', { proxy }, (currentProxy) => {
+        const exists = currentProxy.proxies.some(
+          (p) => getProxyId(p) === getProxyId(proxy)
+        );
+        if (!exists) {
+          return { ...currentProxy, proxies: [...currentProxy.proxies, proxy] };
+        }
+        return currentProxy;
+      }, setSettings);
+    } catch {
+      // Fallback already applied in invokeAndSyncProxy
     }
   }, []);
 
   const updateProxy = useCallback(
     async (oldId: string, proxy: ProxyConfig): Promise<void> => {
       try {
-        await invoke('update_proxy', { oldId, proxy });
-        const pool = await invoke<BackendProxyPool>('get_proxy_pool');
-        const proxySettings = backendProxyPoolToFrontend(pool);
-        setSettings((prev) => {
-          const next = { ...prev, proxy: proxySettings };
-          localStorage.setItem('app-settings', JSON.stringify(next));
-          return next;
-        });
-      } catch (err) {
-        console.warn(
-          'Failed to update proxy via Tauri, using localStorage fallback:',
-          err
+        await invokeAndSyncProxy<void>(
+          'update_proxy',
+          { oldId, proxy },
+          (currentProxy) => ({
+            ...currentProxy,
+            proxies: currentProxy.proxies.map((p) =>
+              getProxyId(p) === oldId ? proxy : p
+            ),
+          }),
+          setSettings
         );
-        const currentProxy = getProxyFromStorage();
-        const updated = {
-          ...currentProxy,
-          proxies: currentProxy.proxies.map((p) =>
-            getProxyId(p) === oldId ? proxy : p
-          ),
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
+      } catch {
+        // Fallback already applied in invokeAndSyncProxy
       }
     },
     []
@@ -275,95 +311,51 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const deleteProxy = useCallback(async (id: string): Promise<boolean> => {
     try {
-      const result = await invoke<boolean>('delete_proxy', { id });
-      if (result) {
-        const pool = await invoke<BackendProxyPool>('get_proxy_pool');
-        const proxySettings = backendProxyPoolToFrontend(pool);
-        setSettings((prev) => {
-          const next = { ...prev, proxy: proxySettings };
-          localStorage.setItem('app-settings', JSON.stringify(next));
-          return next;
-        });
-      }
-      return result;
-    } catch (err) {
-      console.warn(
-        'Failed to delete proxy via Tauri, using localStorage fallback:',
-        err
+      return await invokeAndSyncProxy<boolean>(
+        'delete_proxy',
+        { id },
+        (currentProxy) => {
+          const updated = {
+            ...currentProxy,
+            proxies: currentProxy.proxies.filter((p) => getProxyId(p) !== id),
+            domainAssignments: Object.fromEntries(
+              Object.entries(currentProxy.domainAssignments).filter(
+                ([, proxyId]) => proxyId !== id
+              )
+            ),
+          };
+          return updated;
+        },
+        setSettings
       );
-      const currentProxy = getProxyFromStorage();
-      const initialLength = currentProxy.proxies.length;
-      const updated = {
-        ...currentProxy,
-        proxies: currentProxy.proxies.filter((p) => getProxyId(p) !== id),
-        domainAssignments: Object.fromEntries(
-          Object.entries(currentProxy.domainAssignments).filter(
-            ([_, proxyId]) => proxyId !== id
-          )
-        ),
-      };
-      saveProxyToStorage(updated);
-      setSettings((prev) => ({ ...prev, proxy: updated }));
-      return updated.proxies.length < initialLength;
+    } catch {
+      // Fallback already applied, but we don't know if the proxy existed
+      const stored = localStorage.getItem('app-settings');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        return parsed.proxy?.proxies?.some((p: ProxyConfig) => getProxyId(p) === id) ?? false;
+      }
+      return false;
     }
   }, []);
 
   const clearProxies = useCallback(async (): Promise<void> => {
-    try {
-      await invoke('clear_proxies');
-      setSettings((prev) => {
-        const next = {
-          ...prev,
-          proxy: { ...prev.proxy, proxies: [], domainAssignments: {} },
-        };
-        localStorage.setItem('app-settings', JSON.stringify(next));
-        return next;
-      });
-    } catch (err) {
-      console.warn(
-        'Failed to clear proxies via Tauri, using localStorage fallback:',
-        err
-      );
-      const updated: ProxySettings = {
-        ...defaultProxySettings,
-        proxies: [],
-        domainAssignments: {},
-      };
-      saveProxyToStorage(updated);
-      setSettings((prev) => ({ ...prev, proxy: updated }));
-    }
+    const fallback = (): ProxySettings => ({
+      ...defaultProxySettings,
+      proxies: [],
+      domainAssignments: {},
+    });
+    await invokeAndPersistProxy('clear_proxies', {}, fallback, setSettings);
   }, []);
 
   const updateProxyPoolConfig = useCallback(
     async (enabled?: boolean, rotationMode?: RotationMode): Promise<void> => {
-      try {
-        await invoke('update_proxy_pool_config', { enabled, rotationMode });
-        setSettings((prev) => {
-          const updated = {
-            ...prev,
-            proxy: {
-              ...prev.proxy,
-              ...(enabled !== undefined && { enabled }),
-              ...(rotationMode !== undefined && { rotationMode }),
-            },
-          };
-          localStorage.setItem('app-settings', JSON.stringify(updated));
-          return updated;
-        });
-      } catch (err) {
-        console.warn(
-          'Failed to update proxy pool config via Tauri, using localStorage fallback:',
-          err
-        );
-        const currentProxy = getProxyFromStorage();
-        const updated: ProxySettings = {
-          ...currentProxy,
-          ...(enabled !== undefined && { enabled }),
-          ...(rotationMode !== undefined && { rotationMode }),
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
-      }
+      const fallback = (currentProxy: ProxySettings) => ({
+        ...currentProxy,
+        ...(enabled !== undefined && { enabled }),
+        ...(rotationMode !== undefined && { rotationMode }),
+      });
+      await invokeAndPersistProxy('update_proxy_pool_config', { enabled, rotationMode }, fallback, setSettings);
     },
     []
   );
@@ -371,29 +363,20 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const assignDomainProxy = useCallback(
     async (domain: string, proxyId: string): Promise<void> => {
       try {
-        await invoke('assign_domain_proxy', { domain, proxyId });
-        const pool = await invoke<BackendProxyPool>('get_proxy_pool');
-        const proxySettings = backendProxyPoolToFrontend(pool);
-        setSettings((prev) => {
-          const next = { ...prev, proxy: proxySettings };
-          localStorage.setItem('app-settings', JSON.stringify(next));
-          return next;
-        });
-      } catch (err) {
-        console.warn(
-          'Failed to assign domain proxy via Tauri, using localStorage fallback:',
-          err
+        await invokeAndSyncProxy<void>(
+          'assign_domain_proxy',
+          { domain, proxyId },
+          (currentProxy) => ({
+            ...currentProxy,
+            domainAssignments: {
+              ...currentProxy.domainAssignments,
+              [domain]: proxyId,
+            },
+          }),
+          setSettings
         );
-        const currentProxy = getProxyFromStorage();
-        const updated: ProxySettings = {
-          ...currentProxy,
-          domainAssignments: {
-            ...currentProxy.domainAssignments,
-            [domain]: proxyId,
-          },
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
+      } catch {
+        // Fallback already applied
       }
     },
     []
@@ -402,37 +385,27 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const unassignDomainProxy = useCallback(
     async (domain: string): Promise<boolean> => {
       try {
-        const result = await invoke<boolean>('unassign_domain_proxy', {
-          domain,
-        });
-        if (result) {
-          const pool = await invoke<BackendProxyPool>('get_proxy_pool');
-          const proxySettings = backendProxyPoolToFrontend(pool);
-          setSettings((prev) => {
-            const next = { ...prev, proxy: proxySettings };
-            localStorage.setItem('app-settings', JSON.stringify(next));
-            return next;
-          });
-        }
-        return result;
-      } catch (err) {
-        console.warn(
-          'Failed to unassign domain proxy via Tauri, using localStorage fallback:',
-          err
+        return await invokeAndSyncProxy<boolean>(
+          'unassign_domain_proxy',
+          { domain },
+          (currentProxy) => ({
+            ...currentProxy,
+            domainAssignments: Object.fromEntries(
+              Object.entries(currentProxy.domainAssignments).filter(
+                ([d]) => d !== domain
+              )
+            ),
+          }),
+          setSettings
         );
-        const currentProxy = getProxyFromStorage();
-        const hadAssignment = domain in currentProxy.domainAssignments;
-        const updated: ProxySettings = {
-          ...currentProxy,
-          domainAssignments: Object.fromEntries(
-            Object.entries(currentProxy.domainAssignments).filter(
-              ([d]) => d !== domain
-            )
-          ),
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
-        return hadAssignment;
+      } catch {
+        // Fallback applied, but we don't know if assignment existed
+        const stored = localStorage.getItem('app-settings');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          return domain in (parsed.proxy?.domainAssignments ?? {});
+        }
+        return false;
       }
     },
     []
@@ -460,38 +433,24 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const recordProxySuccess = useCallback(
     async (proxyId: string): Promise<void> => {
       try {
-        await invoke('record_proxy_success', { proxyId });
-        const pool = await invoke<BackendProxyPool>('get_proxy_pool');
-        const proxySettings = backendProxyPoolToFrontend(pool);
-        setSettings((prev) => ({ ...prev, proxy: proxySettings }));
-      } catch (err) {
-        console.warn(
-          'Failed to record proxy success via Tauri, using localStorage fallback:',
-          err
+        await invokeAndSyncProxy<void>(
+          'record_proxy_success',
+          { proxyId },
+          (currentProxy) => {
+            const s = currentProxy.proxyStats[proxyId] || {
+              attempts: 0, successes: 0, failures: 0, consecutiveFailures: 0,
+              cooldownUntil: null as number | null, avgDurationMs: 0, autoDisabled: false,
+            };
+            return {
+              ...currentProxy,
+              proxyStats: { ...currentProxy.proxyStats, [proxyId]: {
+                ...s, attempts: s.attempts + 1, successes: s.successes + 1, consecutiveFailures: 0,
+              }},
+            };
+          },
+          setSettings
         );
-        const currentProxy = getProxyFromStorage();
-        const currentStats = currentProxy.proxyStats[proxyId] || {
-          attempts: 0,
-          successes: 0,
-          failures: 0,
-          consecutiveFailures: 0,
-          cooldownUntil: null as number | null,
-          avgDurationMs: 0,
-          autoDisabled: false,
-        };
-        const updatedStats: ProxyStats = {
-          ...currentStats,
-          attempts: currentStats.attempts + 1,
-          successes: currentStats.successes + 1,
-          consecutiveFailures: 0,
-        };
-        const updated: ProxySettings = {
-          ...currentProxy,
-          proxyStats: { ...currentProxy.proxyStats, [proxyId]: updatedStats },
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
-      }
+      } catch { /* Fallback applied */ }
     },
     []
   );
@@ -499,38 +458,25 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const recordProxyFailure = useCallback(
     async (proxyId: string): Promise<void> => {
       try {
-        await invoke('record_proxy_failure', { proxyId });
-        const pool = await invoke<BackendProxyPool>('get_proxy_pool');
-        const proxySettings = backendProxyPoolToFrontend(pool);
-        setSettings((prev) => ({ ...prev, proxy: proxySettings }));
-      } catch (err) {
-        console.warn(
-          'Failed to record proxy failure via Tauri, using localStorage fallback:',
-          err
+        await invokeAndSyncProxy<void>(
+          'record_proxy_failure',
+          { proxyId },
+          (currentProxy) => {
+            const s = currentProxy.proxyStats[proxyId] || {
+              attempts: 0, successes: 0, failures: 0, consecutiveFailures: 0,
+              cooldownUntil: null as number | null, avgDurationMs: 0, autoDisabled: false,
+            };
+            return {
+              ...currentProxy,
+              proxyStats: { ...currentProxy.proxyStats, [proxyId]: {
+                ...s, attempts: s.attempts + 1, failures: s.failures + 1,
+                consecutiveFailures: s.consecutiveFailures + 1,
+              }},
+            };
+          },
+          setSettings
         );
-        const currentProxy = getProxyFromStorage();
-        const currentStats = currentProxy.proxyStats[proxyId] || {
-          attempts: 0,
-          successes: 0,
-          failures: 0,
-          consecutiveFailures: 0,
-          cooldownUntil: null as number | null,
-          avgDurationMs: 0,
-          autoDisabled: false,
-        };
-        const updatedStats: ProxyStats = {
-          ...currentStats,
-          attempts: currentStats.attempts + 1,
-          failures: currentStats.failures + 1,
-          consecutiveFailures: currentStats.consecutiveFailures + 1,
-        };
-        const updated: ProxySettings = {
-          ...currentProxy,
-          proxyStats: { ...currentProxy.proxyStats, [proxyId]: updatedStats },
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
-      }
+      } catch { /* Fallback applied */ }
     },
     []
   );
@@ -538,34 +484,19 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const resetProxyStats = useCallback(
     async (proxyId: string): Promise<void> => {
       try {
-        await invoke('reset_proxy_stats', { proxyId });
-        const pool = await invoke<BackendProxyPool>('get_proxy_pool');
-        const proxySettings = backendProxyPoolToFrontend(pool);
-        setSettings((prev) => ({ ...prev, proxy: proxySettings }));
-      } catch (err) {
-        console.warn(
-          'Failed to reset proxy stats via Tauri, using localStorage fallback:',
-          err
+        await invokeAndSyncProxy<void>(
+          'reset_proxy_stats',
+          { proxyId },
+          (currentProxy) => ({
+            ...currentProxy,
+            proxyStats: { ...currentProxy.proxyStats, [proxyId]: {
+              attempts: 0, successes: 0, failures: 0, consecutiveFailures: 0,
+              cooldownUntil: null, avgDurationMs: 0, autoDisabled: false,
+            }},
+          }),
+          setSettings
         );
-        const currentProxy = getProxyFromStorage();
-        const updated: ProxySettings = {
-          ...currentProxy,
-          proxyStats: {
-            ...currentProxy.proxyStats,
-            [proxyId]: {
-              attempts: 0,
-              successes: 0,
-              failures: 0,
-              consecutiveFailures: 0,
-              cooldownUntil: null,
-              avgDurationMs: 0,
-              autoDisabled: false,
-            },
-          },
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
-      }
+      } catch { /* Fallback applied */ }
     },
     []
   );
@@ -573,39 +504,24 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const bypassProxyCooldown = useCallback(
     async (proxyId: string): Promise<void> => {
       try {
-        await invoke('bypass_proxy_cooldown', { proxyId });
-        const pool = await invoke<BackendProxyPool>('get_proxy_pool');
-        const proxySettings = backendProxyPoolToFrontend(pool);
-        setSettings((prev) => ({ ...prev, proxy: proxySettings }));
-      } catch (err) {
-        console.warn(
-          'Failed to bypass cooldown via Tauri, using localStorage fallback:',
-          err
-        );
-        const currentProxy = getProxyFromStorage();
-        const currentStats = currentProxy.proxyStats[proxyId] || {
-          attempts: 0,
-          successes: 0,
-          failures: 0,
-          consecutiveFailures: 0,
-          cooldownUntil: null,
-          avgDurationMs: 0,
-          autoDisabled: false,
-        };
-        const updated: ProxySettings = {
-          ...currentProxy,
-          proxyStats: {
-            ...currentProxy.proxyStats,
-            [proxyId]: {
-              ...currentStats,
-              cooldownUntil: null,
-              consecutiveFailures: 0,
-            },
+        await invokeAndSyncProxy<void>(
+          'bypass_proxy_cooldown',
+          { proxyId },
+          (currentProxy) => {
+            const s = currentProxy.proxyStats[proxyId] || {
+              attempts: 0, successes: 0, failures: 0, consecutiveFailures: 0,
+              cooldownUntil: null as number | null, avgDurationMs: 0, autoDisabled: false,
+            };
+            return {
+              ...currentProxy,
+              proxyStats: { ...currentProxy.proxyStats, [proxyId]: {
+                ...s, cooldownUntil: null, consecutiveFailures: 0,
+              }},
+            };
           },
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
-      }
+          setSettings
+        );
+      } catch { /* Fallback applied */ }
     },
     []
   );
@@ -613,27 +529,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const setCooldownDuration = useCallback(
     async (durationSecs: number): Promise<void> => {
       const clampedDuration = Math.max(30, Math.min(300, durationSecs));
-      try {
-        await invoke('set_cooldown_duration', {
-          durationSecs: clampedDuration,
-        });
-        setSettings((prev) => ({
-          ...prev,
-          proxy: { ...prev.proxy, cooldownDurationSecs: clampedDuration },
-        }));
-      } catch (err) {
-        console.warn(
-          'Failed to set cooldown duration via Tauri, using localStorage fallback:',
-          err
-        );
-        const currentProxy = getProxyFromStorage();
-        const updated: ProxySettings = {
-          ...currentProxy,
-          cooldownDurationSecs: clampedDuration,
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
-      }
+      await invokeAndPersistProxy(
+        'set_cooldown_duration',
+        { durationSecs: clampedDuration },
+        (currentProxy) => ({ ...currentProxy, cooldownDurationSecs: clampedDuration }),
+        setSettings
+      );
     },
     []
   );
@@ -641,65 +542,36 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const reEnableProxy = useCallback(
     async (proxyId: string): Promise<void> => {
       try {
-        await invoke('re_enable_proxy', { proxyId });
-        const pool = await invoke<BackendProxyPool>('get_proxy_pool');
-        const proxySettings = backendProxyPoolToFrontend(pool);
-        setSettings((prev) => ({ ...prev, proxy: proxySettings }));
-      } catch (err) {
-        console.warn(
-          'Failed to re-enable proxy via Tauri, using localStorage fallback:',
-          err
-        );
-        const currentProxy = getProxyFromStorage();
-        const currentStats = currentProxy.proxyStats[proxyId] || {
-          attempts: 0,
-          successes: 0,
-          failures: 0,
-          consecutiveFailures: 0,
-          cooldownUntil: null,
-          avgDurationMs: 0,
-          autoDisabled: false,
-        };
-        const updated: ProxySettings = {
-          ...currentProxy,
-          proxyStats: {
-            ...currentProxy.proxyStats,
-            [proxyId]: {
-              ...currentStats,
-              autoDisabled: false,
-              consecutiveFailures: 0,
-              cooldownUntil: null,
-            },
+        await invokeAndSyncProxy<void>(
+          're_enable_proxy',
+          { proxyId },
+          (currentProxy) => {
+            const s = currentProxy.proxyStats[proxyId] || {
+              attempts: 0, successes: 0, failures: 0, consecutiveFailures: 0,
+              cooldownUntil: null as number | null, avgDurationMs: 0, autoDisabled: false,
+            };
+            return {
+              ...currentProxy,
+              proxyStats: { ...currentProxy.proxyStats, [proxyId]: {
+                ...s, autoDisabled: false, consecutiveFailures: 0, cooldownUntil: null,
+              }},
+            };
           },
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
-      }
+          setSettings
+        );
+      } catch { /* Fallback applied */ }
     },
     []
   );
 
   const setAutoDisableThreshold = useCallback(
     async (threshold: AutoDisableThreshold): Promise<void> => {
-      try {
-        await invoke('set_auto_disable_threshold', { threshold });
-        setSettings((prev) => ({
-          ...prev,
-          proxy: { ...prev.proxy, autoDisableThreshold: threshold },
-        }));
-      } catch (err) {
-        console.warn(
-          'Failed to set auto-disable threshold via Tauri, using localStorage fallback:',
-          err
-        );
-        const currentProxy = getProxyFromStorage();
-        const updated: ProxySettings = {
-          ...currentProxy,
-          autoDisableThreshold: threshold,
-        };
-        saveProxyToStorage(updated);
-        setSettings((prev) => ({ ...prev, proxy: updated }));
-      }
+      await invokeAndPersistProxy(
+        'set_auto_disable_threshold',
+        { threshold },
+        (currentProxy) => ({ ...currentProxy, autoDisableThreshold: threshold }),
+        setSettings
+      );
     },
     []
   );

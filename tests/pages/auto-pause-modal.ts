@@ -33,24 +33,25 @@ export class AutoPauseModalPage {
   constructor(page: Page) {
     this.page = page;
 
-    // Modal container
-    this.modal = page.locator('[role="dialog"]:has-text("Validation Auto-Paused")');
-    this.modalContent = this.modal.locator('[data-radix-dialog-content]');
+    // Modal container - use filter instead of :has-text() for Tauri compatibility
+    this.modal = page.locator('[role="dialog"]').filter({ hasText: 'Validation Auto-Paused' });
+    this.modalContent = this.modal.locator('> div').first(); // DialogContent is direct child
 
-    // Header
-    this.title = this.modal.locator('[data-radix-dialog-title]:has-text("Validation Auto-Paused")');
-    this.description = this.modal.locator('[data-radix-dialog-description]:has-text("Too many consecutive failures")');
-    this.alertIcon = this.modal.locator('svg.lucide-alert-octagon');
+    // Header - use filter instead of :has-text() for Tauri compatibility
+    this.title = this.modal.locator('h2').filter({ hasText: 'Validation Auto-Paused' });
+    this.description = this.modal.locator('p').filter({ hasText: 'Too many consecutive failures' });
+    // The AlertOctagon icon renders as an img inside the h2
+    this.alertIcon = this.modal.locator('h2:has-text("Validation Auto-Paused") > img').first();
 
-    // Failure count
-    this.failureCountContainer = this.modal.locator('.bg-red-50, .bg-red-950\\/30').first();
+    // Failure count - find the paragraph containing the failure count
+    this.failureCountContainer = this.modal.locator('p').filter({ hasText: /consecutive failures/ }).first();
     this.failureCountText = this.failureCountContainer.locator('strong');
 
     // Footer buttons
     this.stopButton = this.modal.locator('button:has-text("Stop Validation")');
     this.resumeButton = this.modal.locator('button:has-text("Resume")');
 
-    // Overlay (backdrop)
+    // Overlay (backdrop) - Radix Dialog overlay
     this.overlay = page.locator('[data-radix-dialog-overlay]');
   }
 
@@ -110,7 +111,15 @@ export class AutoPauseModalPage {
    * Click outside the modal (on overlay) to close it (triggers stop).
    */
   async clickOutside(): Promise<void> {
-    await this.overlay.click({ position: { x: 10, y: 10 } });
+    // Try clicking the overlay first
+    const overlay = this.page.locator('[data-radix-dialog-overlay]');
+    if (await overlay.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await overlay.click({ position: { x: 10, y: 10 } });
+    } else {
+      // Fallback: click on the body element at top-left corner (0, 0)
+      // which is always outside any centered modal
+      await this.page.locator('body').click({ position: { x: 0, y: 0 } });
+    }
   }
 
   /**

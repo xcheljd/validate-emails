@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import {
   Card,
   CardContent,
@@ -79,6 +79,11 @@ function CollapsibleSection({
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
+  // Sync with defaultOpen prop changes (for controlled/uncontrolled pattern)
+  useEffect(() => {
+    setIsOpen(defaultOpen);
+  }, [defaultOpen]);
+
   return (
     <div className="border rounded-lg">
       <button
@@ -112,7 +117,8 @@ function getVerdictColor(verdict: string): string {
     case 'Unknown':
       return 'bg-slate-500 hover:bg-slate-600 text-white';
     default:
-      return '';
+      // Default neutral color for any future verdict types
+      return 'bg-gray-500 hover:bg-gray-600 text-white';
   }
 }
 
@@ -129,18 +135,19 @@ function ChangeDirectionIcon({
   oldVerdict: string;
   newVerdict: string;
 }) {
-  const order = { Safe: 0, Risky: 1, Unknown: 2, Invalid: 3 } as Record<
+  // Ranking by deliverability confidence: Safe (best) > Risky > Invalid > Unknown (worst - no info)
+  const order = { Safe: 0, Risky: 1, Invalid: 2, Unknown: 3 } as Record<
     string,
     number
   >;
-  const oldRank = order[oldVerdict] ?? 2;
-  const newRank = order[newVerdict] ?? 2;
+  const oldRank = order[oldVerdict] ?? 3;
+  const newRank = order[newVerdict] ?? 3;
 
   if (newRank < oldRank) {
-    // Improved (e.g., Unknown → Safe)
+    // Improved (e.g., Unknown → Safe, Invalid → Risky)
     return <span className="text-green-600 text-sm font-medium">Improved</span>;
   } else if (newRank > oldRank) {
-    // Worsened (e.g., Safe → Invalid)
+    // Worsened (e.g., Safe → Invalid, Risky → Unknown)
     return <span className="text-red-600 text-sm font-medium">Worsened</span>;
   }
   return <span className="text-yellow-600 text-sm font-medium">Changed</span>;
@@ -270,6 +277,7 @@ export function SessionDiffView({
         <CollapsibleSection
           title="Changed Verdicts"
           count={diff.changed.length}
+          defaultOpen={true}
         >
           <Table>
             <TableHeader>

@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { notifyValidationComplete, notifyError } from '@/lib/notifications';
-import { loadSession, ValidationSession } from '@/lib/session-manager';
+import { loadSession, createSession, updateSessionProgress, ValidationSession } from '@/lib/session-manager';
 import { ValidationResult } from '@/lib/types';
 
 export type ValidationStatus =
@@ -43,7 +43,10 @@ export interface RateLimitFailureState {
 const SLOWDOWN_THRESHOLD = 3;
 const AUTO_PAUSE_THRESHOLD = 8;
 
-export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough' = 'standard') {
+export function useEmailValidation(
+  initialMode: 'quick' | 'standard' | 'thorough' = 'standard',
+  autoSaveInterval: number = 10
+) {
   const [results, setResults] = useState<ValidationResult[]>([]);
   const [status, setStatus] = useState<ValidationStatus>('idle');
   const [progress, setProgress] = useState(0);
@@ -79,23 +82,79 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
   const statusRef = useRef<ValidationStatus>('idle');
   const waitingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cooldownEndTimeRef = useRef<number>(0);
+  const sessionIdRef = useRef<string | null>(null);
+  const resultsRef = useRef<ValidationResult[]>([]);
+  const progressRef = useRef(0);
+  const totalRef = useRef(0);
+  const allEmailsRef = useRef<string[]>([]);
 
-  // Keep ref in sync for callbacks
+  // Keep refs in sync for use in callbacks and effects
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
 
-  // Auto-pause effect: when rate limit failure state triggers auto-pause
   useEffect(() => {
-    if (
-      rateLimitFailureState.isAutoPaused &&
-      statusRef.current === 'processing'
-    ) {
-      pauseValidation();
-    }
-  }, [rateLimitFailureState.isAutoPaused]);
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  useEffect(() => {
+    resultsRef.current = results;
+  }, [results]);
+
+  useEffect(() => {
+    progressRef.current = progress;
+  }, [progress]);
+
+  useEffect(() => {
+    totalRef.current = total;
+  }, [total]);
 
   const isProcessing = status === 'processing';
+
+  // Save session progress to backend (fire-and-forget with error logging)
+  const saveSession = useCallback(
+    () => {
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      const resultsToSave = resultsRef.current;
+      const idx = progressRef.current;
+      updateSessionProgress(sid, resultsToSave, idx).catch((err) => {
+        console.warn('Failed to auto-save session:', err);
+      });
+    },
+    []
+  );
+
+  // Auto-save effect: periodically save session based on autoSaveInterval
+  useEffect(() => {
+    if (status !== 'processing' || autoSaveInterval <= 0) return;
+    const interval = setInterval(() => {
+      if (statusRef.current === 'processing' && sessionIdRef.current) {
+        saveSession();
+      }
+    }, autoSaveInterval * 1000);
+    return () => clearInterval(interval);
+  }, [status, autoSaveInterval, saveSession]);
+
+  // Save on completion (status transitions to idle with all results)
+  useEffect(() => {
+    if (
+      status === 'idle' &&
+      results.length > 0 &&
+      progress === total &&
+      total > 0 &&
+      sessionIdRef.current
+    ) {
+      saveSession();
+    }
+  }, [status, results, progress, total, saveSession]);
+
+  // Save on pause
+  useEffect(() => {
+    if (status === 'paused' && sessionIdRef.current) {
+      saveSession();
+    }
+  }, [status, saveSession]);
 
   // Speed and ETA calculation
   useEffect(() => {
@@ -126,61 +185,78 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
       const riskyCount = results.filter((r) => r.result === 'Risky').length;
       notifyValidationComplete(total, safeCount, riskyCount);
     }
-  }, [status, results.length, progress, total]);
+  }, [status, results, progress, total]);
 
   // Event listener
   useEffect(() => {
-    let unlistenValidationProgress: (() => void) | undefined;
-    let unlistenAllProxiesFailed: (() => void) | undefined;
+    const unlistenRefs = {
+      validationProgress: undefined as (() => void) | undefined,
+      allProxiesFailed: undefined as (() => void) | undefined,
+    };
     let isActive = true;
 
     const setupListeners = async () => {
-      const unlistenProgressFn = await listen<ValidationResult>(
-        'validation-progress',
-        (event) => {
-          const result = event.payload;
-          setResults((prev) => [...prev, result]);
-          setProgress((prev) => prev + 1);
-          pendingEmailsRef.current = pendingEmailsRef.current.filter(
-            (e) => e !== result.email
-          );
+      try {
+        const unlistenProgressFn = await listen<ValidationResult>(
+          'validation-progress',
+          (event) => {
+            const result = event.payload;
+            setResults((prev) => {
+              const idx = prev.findIndex((r) => r.email === result.email);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = result;
+                return next;
+              }
+              return [...prev, result];
+            });
+            setProgress((prev) => prev + 1);
+            pendingEmailsRef.current = pendingEmailsRef.current.filter(
+              (e) => e !== result.email
+            );
 
-          // Track consecutive failures for rate limit auto-slowdown/auto-pause
-          const isFailure = result.result === 'Unknown' || !!result.errorType;
-          setRateLimitFailureState((prev) => {
-            if (isFailure) {
-              const newCount = prev.consecutiveFailures + 1;
-              return {
-                consecutiveFailures: newCount,
-                isSlowdownActive: newCount >= SLOWDOWN_THRESHOLD,
-                isAutoPaused: newCount >= AUTO_PAUSE_THRESHOLD,
-              };
-            } else {
-              // Success resets consecutive failures
-              return {
-                ...prev,
-                consecutiveFailures: 0,
-              };
-            }
-          });
+            // Track consecutive failures for rate limit auto-slowdown/auto-pause
+            const isFailure = result.result === 'Unknown' || !!result.errorType;
+            setRateLimitFailureState((prev) => {
+              if (isFailure) {
+                const newCount = prev.consecutiveFailures + 1;
+                return {
+                  consecutiveFailures: newCount,
+                  isSlowdownActive: newCount >= SLOWDOWN_THRESHOLD,
+                  isAutoPaused: newCount >= AUTO_PAUSE_THRESHOLD,
+                };
+              } else {
+                // Success resets consecutive failures
+                return {
+                  ...prev,
+                  consecutiveFailures: 0,
+                };
+              }
+            });
+          }
+        );
+
+        const unlistenProxiesFailedFn = await listen<AllProxiesFailedPayload>(
+          'all-proxies-failed',
+          (event) => {
+            setAllProxiesFailedState(event.payload);
+            setStatus('paused');
+            statusRef.current = 'paused';
+          }
+        );
+
+        if (!isActive) {
+          unlistenProgressFn();
+          unlistenProxiesFailedFn();
+        } else {
+          unlistenRefs.validationProgress = unlistenProgressFn;
+          unlistenRefs.allProxiesFailed = unlistenProxiesFailedFn;
         }
-      );
-
-      const unlistenProxiesFailedFn = await listen<AllProxiesFailedPayload>(
-        'all-proxies-failed',
-        (event) => {
-          setAllProxiesFailedState(event.payload);
-          setStatus('paused');
-          statusRef.current = 'paused';
-        }
-      );
-
-      if (!isActive) {
-        unlistenProgressFn();
-        unlistenProxiesFailedFn();
-      } else {
-        unlistenValidationProgress = unlistenProgressFn;
-        unlistenAllProxiesFailed = unlistenProxiesFailedFn;
+      } catch (err) {
+        // If setup fails, clean up any partially registered listeners
+        if (unlistenRefs.validationProgress) unlistenRefs.validationProgress();
+        if (unlistenRefs.allProxiesFailed) unlistenRefs.allProxiesFailed();
+        throw err;
       }
     };
 
@@ -188,8 +264,8 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
 
     return () => {
       isActive = false;
-      if (unlistenValidationProgress) unlistenValidationProgress();
-      if (unlistenAllProxiesFailed) unlistenAllProxiesFailed();
+      if (unlistenRefs.validationProgress) unlistenRefs.validationProgress();
+      if (unlistenRefs.allProxiesFailed) unlistenRefs.allProxiesFailed();
     };
   }, []);
 
@@ -239,6 +315,9 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
       statusRef.current = 'processing';
       setValidationMode(mode);
       setUsingDirectConnection(false);
+      setSessionId(null);
+      sessionIdRef.current = null;
+      allEmailsRef.current = [...emails];
       // Reset rate limit failure state
       setRateLimitFailureState({
         consecutiveFailures: 0,
@@ -251,6 +330,15 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
       invoke('clear_proxy_bypass_for_session').catch(() => {
         // Ignore errors - this is a cleanup call
       });
+      // Create a session record for persistence
+      createSession(emails, { validationMode: mode })
+        .then((id) => {
+          setSessionId(id);
+          sessionIdRef.current = id;
+        })
+        .catch((err) => {
+          console.warn('Failed to create validation session:', err);
+        });
       mutation.mutate({ emails, concurrency, mode });
     },
     [mutation]
@@ -259,8 +347,23 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
   const pauseValidation = useCallback(async () => {
     setStatus('paused');
     statusRef.current = 'paused';
+    // Clear any active waiting/cooldown timer
+    if (waitingTimerRef.current) {
+      clearInterval(waitingTimerRef.current);
+      waitingTimerRef.current = null;
+    }
     await invoke('pause_validation');
   }, []);
+
+  // Auto-pause effect: when rate limit failure state triggers auto-pause
+  useEffect(() => {
+    if (
+      rateLimitFailureState.isAutoPaused &&
+      statusRef.current === 'processing'
+    ) {
+      pauseValidation();
+    }
+  }, [rateLimitFailureState.isAutoPaused, pauseValidation]);
 
   const resumeValidation = useCallback(async () => {
     if (statusRef.current !== 'paused') return;
@@ -292,6 +395,8 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
         setProgress(session.currentIndex);
         setTotal(session.total);
         setSessionId(sessionIdToResume);
+        sessionIdRef.current = sessionIdToResume;
+        allEmailsRef.current = session.emails;
         setValidationMode(session.settings.validationMode);
         currentConcurrencyRef.current = resolvedConcurrency;
         pendingEmailsRef.current = emailsToRevalidate;
@@ -398,43 +503,52 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
 
       setIsEscalating(true);
 
-      for (let i = 0; i < tiers.length; i++) {
-        if (currentUnknowns.length === 0) break;
+      try {
+        for (let i = 0; i < tiers.length; i++) {
+          if (currentUnknowns.length === 0) break;
 
-        setEscalationTier(i + 1);
-        setEscalationEmailCount(currentUnknowns.length);
+          setEscalationTier(i + 1);
+          setEscalationEmailCount(currentUnknowns.length);
 
-        const items = currentUnknowns.map((email) => ({ email }));
+          const items = currentUnknowns.map((email) => ({ email }));
 
-        // Remove unknowns being retried from results
-        setResults((prev) => prev.filter((r) => r.result !== 'Unknown' || !currentUnknowns.includes(r.email)));
+          // Remove unknowns being retried from results
+          setResults((prev) => prev.filter((r) => r.result !== 'Unknown' || !currentUnknowns.includes(r.email)));
 
-        setStatus('processing');
-        statusRef.current = 'processing';
+          setStatus('processing');
+          statusRef.current = 'processing';
 
-        // Call revalidate_emails_bulk directly via invoke
-        const revalResults = await invoke<ValidationResult[]>(
-          'revalidate_emails_bulk',
-          {
-            items,
-            concurrency: currentConcurrencyRef.current,
-            mode: tiers[i],
-          }
+          // Call revalidate_emails_bulk directly via invoke
+          const revalResults = await invoke<ValidationResult[]>(
+            'revalidate_emails_bulk',
+            {
+              items,
+              concurrency: currentConcurrencyRef.current,
+              mode: tiers[i],
+            }
+          );
+
+          // Merge revalidated results back
+          setResults((prev) => [...prev, ...revalResults]);
+          setProgress((prev) => prev + revalResults.length);
+
+          // Determine remaining unknowns for next tier
+          currentUnknowns = revalResults
+            .filter((r) => r.result === 'Unknown')
+            .map((r) => r.email);
+        }
+      } catch (error) {
+        // On error, reset escalation state so UI doesn't get stuck in "Escalating..."
+        console.error('Auto-escalation failed:', error);
+        notifyError(
+          error instanceof Error ? error.message : 'Auto-escalation failed'
         );
-
-        // Merge revalidated results back
-        setResults((prev) => [...prev, ...revalResults]);
-        setProgress((prev) => prev + revalResults.length);
-
-        // Determine remaining unknowns for next tier
-        currentUnknowns = revalResults
-          .filter((r) => r.result === 'Unknown')
-          .map((r) => r.email);
+      } finally {
+        // Always reset escalation state (whether success or error)
+        setIsEscalating(false);
+        setEscalationTier(1);
+        setEscalationEmailCount(0);
       }
-
-      setIsEscalating(false);
-      setEscalationTier(1);
-      setEscalationEmailCount(0);
 
       if (statusRef.current === 'processing') {
         setStatus('idle');
@@ -453,6 +567,10 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
       waitingTimerRef.current = null;
     }
     await invoke('stop_validation');
+    // Save session with current progress before resetting
+    if (sessionIdRef.current && resultsRef.current.length > 0) {
+      saveSession();
+    }
     setStatus('idle');
     statusRef.current = 'idle';
     // Clear all proxy failure state so the modal closes
@@ -465,8 +583,12 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
       isSlowdownActive: false,
       isAutoPaused: false,
     });
+    // Reset escalation state so UI doesn't get stuck in "Escalating..."
+    setIsEscalating(false);
+    setEscalationTier(1);
+    setEscalationEmailCount(0);
     // We don't reset progress/total here because the user might want to see the partial results
-  }, []);
+  }, [saveSession]);
 
   // Clear the all-proxies-failed state
   const clearAllProxiesFailedState = useCallback(() => {
@@ -549,24 +671,27 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
       );
       setWaitingCooldownSecs(remaining);
 
-      // When cooldown expires, resume validation
+      // When cooldown expires, resume validation only if not stopped/paused
       if (remaining <= 0) {
         if (waitingTimerRef.current) {
           clearInterval(waitingTimerRef.current);
           waitingTimerRef.current = null;
         }
-        setWaitingForProxy(false);
-        setWaitingCooldownSecs(0);
-        setAllProxiesFailedState(null);
-        setStatus('processing');
-        statusRef.current = 'processing';
+        // Only resume if validation hasn't been stopped or paused externally
+        if (statusRef.current === 'waiting') {
+          setWaitingForProxy(false);
+          setWaitingCooldownSecs(0);
+          setAllProxiesFailedState(null);
+          setStatus('processing');
+          statusRef.current = 'processing';
 
-        // Resume validation
-        mutation.mutate({
-          emails: pendingEmailsRef.current,
-          concurrency: currentConcurrencyRef.current,
-          mode: validationMode,
-        });
+          // Resume validation
+          mutation.mutate({
+            emails: pendingEmailsRef.current,
+            concurrency: currentConcurrencyRef.current,
+            mode: validationMode,
+          });
+        }
       }
     }, 1000);
   }, [allProxiesFailedState, mutation, validationMode]);
@@ -579,6 +704,79 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
         waitingTimerRef.current = null;
       }
     };
+  }, []);
+
+  // Test helper - allows tests to set validation state directly
+  const setValidationStateForTest = useCallback((
+    newState: Partial<{
+      results: ValidationResult[];
+      status: ValidationStatus;
+      progress: number;
+      total: number;
+      validationMode: 'quick' | 'standard' | 'thorough';
+    }>
+  ) => {
+    if (newState.results !== undefined) setResults(newState.results);
+    if (newState.status !== undefined) setStatus(newState.status);
+    if (newState.progress !== undefined) setProgress(newState.progress);
+    if (newState.total !== undefined) setTotal(newState.total);
+    if (newState.validationMode !== undefined) setValidationMode(newState.validationMode);
+  }, []);
+
+  // Test helper - allows tests to get validation state directly
+  const getValidationStateForTest = useCallback(() => ({
+    results,
+    status,
+    progress,
+    total,
+    validationMode,
+    isEscalating,
+    escalationTier,
+    escalationEmailCount,
+    rateLimitFailureState,
+  }), [results, status, progress, total, validationMode, isEscalating, escalationTier, escalationEmailCount, rateLimitFailureState]);
+
+  // Test helper - allows tests to reset rate limit failure state
+  const resetRateLimitFailureStateForTest = useCallback(() => {
+    setRateLimitFailureState({
+      consecutiveFailures: 0,
+      isSlowdownActive: false,
+      isAutoPaused: false,
+    });
+  }, []);
+
+  // Test helper - allows tests to reset escalation state
+  const resetEscalationStateForTest = useCallback(() => {
+    setIsEscalating(false);
+    setEscalationTier(1);
+    setEscalationEmailCount(0);
+  }, []);
+
+  // Test helper - allows tests to set escalation state directly
+  const setEscalationStateForTest = useCallback((
+    newState: Partial<{
+      isEscalating: boolean;
+      escalationTier: number;
+      escalationEmailCount: number;
+    }>
+  ) => {
+    if (newState.isEscalating !== undefined) setIsEscalating(newState.isEscalating);
+    if (newState.escalationTier !== undefined) setEscalationTier(newState.escalationTier);
+    if (newState.escalationEmailCount !== undefined) setEscalationEmailCount(newState.escalationEmailCount);
+  }, []);
+
+  // Test helper - allows tests to set rate limit failure state directly
+  const setRateLimitFailureStateForTest = useCallback((
+    newState: Partial<{
+      consecutiveFailures: number;
+      isSlowdownActive: boolean;
+      isAutoPaused: boolean;
+    }>
+  ) => {
+    setRateLimitFailureState((prev) => ({
+      ...prev,
+      ...newState,
+    }));
   }, []);
 
   return {
@@ -621,5 +819,17 @@ export function useEmailValidation(initialMode: 'quick' | 'standard' | 'thorough
     stopFromAutoPause,
     // Test helper - allows tests to set the all proxies failed state directly
     setAllProxiesFailedStateForTest: setAllProxiesFailedState,
+    // Test helper - allows tests to set validation state directly
+    setValidationStateForTest,
+    // Test helper - allows tests to get validation state directly
+    getValidationStateForTest,
+    // Test helper - allows tests to reset rate limit failure state
+    resetRateLimitFailureStateForTest,
+    // Test helper - allows tests to reset escalation state
+    resetEscalationStateForTest,
+    // Test helper - allows tests to set escalation state directly
+    setEscalationStateForTest,
+    // Test helper - allows tests to set rate limit failure state directly
+    setRateLimitFailureStateForTest,
   };
 }

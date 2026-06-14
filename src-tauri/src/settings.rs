@@ -5,18 +5,29 @@ use std::path::PathBuf;
 use std::fs;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-/// Generate a pseudo-random number in range [0, max) using system time.
-/// This is a simple deterministic "random" function for weighted selection
-/// that doesn't require the rand crate.
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Atomic counter for deterministic round-robin fairness in weighted selection.
+/// This avoids the poor distribution of system-time nanos (which may not change
+/// between rapid successive calls) and provides even distribution across proxies.
+static WEIGHTED_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Generate a pseudo-random number in range [0, max) using an atomic counter.
+/// Uses a simple xorshift to avoid sequential clustering while remaining
+/// deterministic and lock-free.
 fn pseudo_random(max: u32) -> u32 {
     if max == 0 {
         return 0;
     }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    nanos % max
+    let prev = WEIGHTED_COUNTER.fetch_add(1, Ordering::Relaxed);
+    // xorshift64 for good distribution
+    let mut x = prev.wrapping_add(0x9E3779B97F4A7C15);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58476D1CE4E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D049BB133111EB);
+    x ^= x >> 31;
+    (x as u32) % max
 }
 
 /// Rotation mode for proxy selection

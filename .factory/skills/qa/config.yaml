@@ -1,0 +1,57 @@
+project: ValidateEmails (ReachCheck)
+imagemagick: true
+environments:
+  development:
+    url: http://localhost:1420
+    restrictions: []
+
+default_target: development
+
+auth:
+  method: none
+  provider: none
+
+personas:
+  - name: default_user
+    description: 'Single-user desktop app. No roles or auth. Tests all features as the sole user.'
+    email: none
+    credentials_source: none
+    test_focus:
+      - email_validation
+      - cleaning_pipeline
+      - results_analytics
+      - proxy_management
+      - session_management
+      - settings
+      - export
+    cannot_do: []
+
+apps:
+  desktop:
+    path_patterns:
+      - 'src/**'
+      - 'src-tauri/src/**'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/build.rs'
+      - 'src-tauri/capabilities/**'
+      - 'index.html'
+      - 'vite.config.ts'
+      - 'tailwind.config.js'
+      - 'postcss.config.js'
+      - 'package.json'
+      - 'tsconfig.json'
+    skill: qa-desktop
+    test_tool: agent-browser
+    build_command: 'npm run dev'
+
+feature_flags:
+  provider: none
+
+integrations: {}
+
+cleanup:
+  auto_cleanup: true
+  strategy: none
+  instructions: 'Desktop app stores sessions in Tauri app data dir. localStorage is used as fallback. QA does not create persistent external data.'
+
+failure_learning: suggest_in_report

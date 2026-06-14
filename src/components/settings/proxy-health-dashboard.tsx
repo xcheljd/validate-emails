@@ -156,21 +156,15 @@ export function ProxyHealthDashboard({
 
   // Re-enable proxy handler with explicit logging for debugging
   const handleReEnable = useCallback(
-    async (proxyId: string, event?: React.MouseEvent<HTMLButtonElement>) => {
-      // Explicit logging for debugging click issues in real browser
-      console.log('[ProxyHealthDashboard] Re-enable clicked for:', proxyId, event ? 'event:' + event.type : 'no event');
-      
+    async (proxyId: string, event?: React.MouseEvent<HTMLButtonElement> | React.PointerEvent<HTMLButtonElement>) => {
       // Prevent any potential event propagation issues
       event?.stopPropagation();
-      
+
       try {
-        console.log('[ProxyHealthDashboard] Calling onReEnableProxy for:', proxyId);
         await onReEnableProxy(proxyId);
-        console.log('[ProxyHealthDashboard] onReEnableProxy succeeded for:', proxyId);
         toast.success(`Proxy ${proxyId} re-enabled`);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to re-enable proxy';
-        console.error('[ProxyHealthDashboard] Re-enable failed for:', proxyId, error);
         toast.error(message);
       }
     },
@@ -362,20 +356,30 @@ export function ProxyHealthDashboard({
                   </TableCell>
                   <TableCell>
                     {entry.autoDisabled && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs relative z-10"
-                        onClick={(e) => handleReEnable(entry.id, e)}
-                        disabled={disabled}
-                        // Explicit type="button" to prevent form submission issues
-                        type="button"
-                        // Ensure pointer events are not blocked
-                        style={{ pointerEvents: 'auto' }}
+                      // Wrapper div with explicit pointer-events:auto and high z-index
+                      // to ensure button is clickable even if TableCell/TableRow CSS interferes
+                      <div
+                        style={{
+                          pointerEvents: 'auto',
+                          zIndex: 100,
+                          position: 'relative',
+                        }}
+                        className="inline-block"
                       >
-                        <RefreshCw className="h-3 w-3 mr-1 pointer-events-none" />
-                        Re-enable
-                      </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs relative z-10"
+                          onClick={(e) => handleReEnable(entry.id, e)}
+                          disabled={disabled}
+                          type="button"
+                          style={{ pointerEvents: 'auto' }}
+                          data-testid={`re-enable-button-${entry.id.replace(/[^a-zA-Z0-9]/g, '-')}`}
+                        >
+                          <RefreshCw className="h-3 w-3 mr-1 pointer-events-none" />
+                          Re-enable
+                        </Button>
+                      </div>
                     )}
                   </TableCell>
                 </TableRow>

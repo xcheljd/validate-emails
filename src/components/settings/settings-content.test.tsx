@@ -6,17 +6,79 @@ import { SettingsProvider } from '@/hooks/use-settings';
 
 // Mock the invoke function
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({
-    validation_mode: 'standard',
-    concurrency: 5,
-    timeout_ms: 30000,
-    max_retries: 3,
-    auto_save_interval: 10,
-    history_retention_days: 90,
-    proxies: [],
-    enabled: false,
-    rotation_mode: 'manual',
-    domain_assignments: {},
+  invoke: vi.fn().mockImplementation((command: string) => {
+    if (command === 'load_settings') {
+      return Promise.resolve({
+        validation_mode: 'standard',
+        concurrency: 5,
+        timeout_ms: 30000,
+        max_retries: 3,
+        auto_save_interval: 10,
+        history_retention_days: 90,
+        max_emails_per_session: 0,
+        rate_limiter: { max_per_second: 1, max_per_minute: 60 },
+      });
+    }
+    if (command === 'get_proxy_pool') {
+      return Promise.resolve({
+        proxies: [],
+        enabled: false,
+        rotationMode: 'manual',
+        domainAssignments: {},
+        proxyStats: {},
+        cooldownDurationSecs: 60,
+        autoDisableThreshold: {
+          successRatePercent: 20,
+          minAttempts: 10,
+        },
+      });
+    }
+    if (command === 'save_settings') {
+      return Promise.resolve();
+    }
+    if (command === 'add_proxy') {
+      return Promise.resolve();
+    }
+    if (command === 'update_proxy') {
+      return Promise.resolve();
+    }
+    if (command === 'delete_proxy') {
+      return Promise.resolve(true);
+    }
+    if (command === 'clear_proxies') {
+      return Promise.resolve();
+    }
+    if (command === 'update_proxy_pool_config') {
+      return Promise.resolve();
+    }
+    if (command === 'assign_domain_proxy') {
+      return Promise.resolve();
+    }
+    if (command === 'unassign_domain_proxy') {
+      return Promise.resolve(true);
+    }
+    if (command === 'record_proxy_success') {
+      return Promise.resolve();
+    }
+    if (command === 'record_proxy_failure') {
+      return Promise.resolve();
+    }
+    if (command === 'reset_proxy_stats') {
+      return Promise.resolve();
+    }
+    if (command === 'bypass_proxy_cooldown') {
+      return Promise.resolve();
+    }
+    if (command === 'set_cooldown_duration') {
+      return Promise.resolve();
+    }
+    if (command === 're_enable_proxy') {
+      return Promise.resolve();
+    }
+    if (command === 'set_auto_disable_threshold') {
+      return Promise.resolve();
+    }
+    return Promise.resolve({});
   }),
 }));
 

@@ -6,6 +6,8 @@ import { AlertTriangle } from 'lucide-react';
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
+  /** When true, uses a compact inline error instead of full-screen */
+  inline?: boolean;
 }
 
 interface State {
@@ -33,32 +35,54 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
-      return (
-        this.props.fallback || (
-          <div className="flex items-center justify-center min-h-screen p-8 bg-background">
-            <Card className="max-w-md w-full">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <AlertTriangle className="h-5 w-5 text-destructive" />
-                  Something went wrong
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <p className="text-sm text-muted-foreground">
-                  An unexpected error occurred. Please try again.
-                </p>
-                {this.state.error && (
-                  <div className="text-xs bg-muted p-3 rounded font-mono overflow-auto max-h-32">
-                    {this.state.error.message}
-                  </div>
-                )}
-                <Button onClick={this.handleReset} className="w-full">
-                  Try Again
-                </Button>
-              </CardContent>
-            </Card>
+      if (this.props.fallback) {
+        return this.props.fallback;
+      }
+
+      if (this.props.inline) {
+        return (
+          <div className="flex flex-col items-center justify-center p-12 text-center">
+            <AlertTriangle className="h-8 w-8 text-destructive mb-3" />
+            <p className="text-sm font-medium mb-1">This view encountered an error</p>
+            <p className="text-xs text-muted-foreground mb-4">
+              Other parts of the app are still working.
+            </p>
+            {this.state.error && (
+              <div className="text-xs bg-muted p-2 rounded font-mono overflow-auto max-h-24 mb-4 max-w-md">
+                {this.state.error.message}
+              </div>
+            )}
+            <Button onClick={this.handleReset} size="sm" variant="outline">
+              Try Again
+            </Button>
           </div>
-        )
+        );
+      }
+
+      return (
+        <div className="flex items-center justify-center min-h-screen p-8 bg-background">
+          <Card className="max-w-md w-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-destructive" />
+                Something went wrong
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                An unexpected error occurred. Please try again.
+              </p>
+              {this.state.error && (
+                <div className="text-xs bg-muted p-3 rounded font-mono overflow-auto max-h-32">
+                  {this.state.error.message}
+                </div>
+              )}
+              <Button onClick={this.handleReset} className="w-full">
+                Try Again
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
       );
     }
 

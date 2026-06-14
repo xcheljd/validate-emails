@@ -59,6 +59,7 @@ interface RetryModalProps {
   isEscalating?: boolean;
   escalationTier?: number;
   escalationEmailCount?: number;
+  testMode?: boolean;
 }
 
 export function RetryModal({
@@ -69,19 +70,23 @@ export function RetryModal({
   isEscalating = false,
   escalationTier = 1,
   escalationEmailCount = 0,
+  testMode = false,
 }: RetryModalProps) {
   const [selectedTier, setSelectedTier] = useState<'quick' | 'standard' | 'thorough'>('standard');
   const [autoEscalate, setAutoEscalate] = useState(false);
+  const [userAction, setUserAction] = useState<'none' | 'retry' | 'cancel'>('none');
 
   // Reset to defaults when modal opens
   useEffect(() => {
     if (open) {
       setSelectedTier('standard');
       setAutoEscalate(false);
+      setUserAction('none');
     }
   }, [open]);
 
   const handleRetry = () => {
+    setUserAction('retry');
     if (autoEscalate) {
       onRetry('auto-escalate');
     } else {
@@ -89,10 +94,17 @@ export function RetryModal({
     }
   };
 
+  const handleCancel = () => {
+    setUserAction('cancel');
+    onCancel();
+  };
+
   const handleOpenChange = (isOpen: boolean) => {
-    if (!isOpen) {
+    if (!isOpen && userAction === 'none') {
+      // Modal closed without explicit user action (Escape, click outside)
       onCancel();
     }
+    setUserAction('none');
   };
 
   const handleTierClick = (tier: 'quick' | 'standard' | 'thorough') => {
@@ -109,7 +121,16 @@ export function RetryModal({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent
+        className="sm:max-w-md"
+        forceMount={testMode ? true : undefined}
+        style={testMode ? {
+          animation: 'none !important',
+          transition: 'none !important',
+          opacity: 1,
+          visibility: 'visible',
+        } : undefined}
+      >
         <DialogHeader>
           <DialogTitle>Retry Unknown Emails</DialogTitle>
           <DialogDescription>
@@ -131,6 +152,7 @@ export function RetryModal({
                 return (
                   <button
                     key={tier.key}
+                    data-testid={`tier-button-${tier.key}`}
                     onClick={() => handleTierClick(tier.key)}
                     role="button"
                     aria-pressed={isSelected}
@@ -160,7 +182,7 @@ export function RetryModal({
                       </div>
                     </div>
                     {isSelected && (
-                      <div className="h-5 w-5 bg-primary rounded-full flex items-center justify-center shrink-0">
+                      <div data-testid="tier-checkmark" className="h-5 w-5 bg-primary rounded-full flex items-center justify-center shrink-0">
                         <Check className="h-3 w-3 text-primary-foreground" />
                       </div>
                     )}
@@ -187,6 +209,7 @@ export function RetryModal({
           >
             <Checkbox
               id="auto-escalate"
+              data-testid="auto-escalate-checkbox"
               checked={autoEscalate}
               onCheckedChange={handleAutoEscalateChange}
               disabled={isEscalating}
@@ -215,14 +238,14 @@ export function RetryModal({
 
           {/* Escalation Progress */}
           {isEscalating && (
-            <div className="p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg">
+            <div data-testid="escalation-progress" className="p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg">
               <div className="flex items-center gap-2 mb-1">
                 <div className="h-2 w-2 bg-blue-500 rounded-full animate-pulse" />
-                <span className="text-sm font-bold text-blue-700 dark:text-blue-300">
+                <span data-testid="escalation-tier-text" className="text-sm font-bold text-blue-700 dark:text-blue-300">
                   Tier {escalationTier} of 3 — {TIERS[escalationTier - 1]?.label.split(': ')[1] || 'Quick'}
                 </span>
               </div>
-              <p className="text-xs text-blue-600 dark:text-blue-400">
+              <p data-testid="escalation-email-count" className="text-xs text-blue-600 dark:text-blue-400">
                 Retrying {escalationEmailCount} emails
               </p>
             </div>
@@ -230,7 +253,7 @@ export function RetryModal({
         </div>
 
         <DialogFooter className="flex-col sm:flex-row gap-2">
-          <Button variant="ghost" onClick={onCancel} disabled={isEscalating}>
+          <Button variant="ghost" onClick={handleCancel} disabled={isEscalating}>
             Cancel
           </Button>
           <Button onClick={handleRetry} disabled={isEscalating}>

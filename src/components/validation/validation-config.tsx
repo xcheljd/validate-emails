@@ -1,7 +1,9 @@
 import { Button } from '@/components/ui/button';
+import { useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Mail, ArrowRight, Trash2, ChevronLeft } from 'lucide-react';
 import { ValidationModeSelector } from './validation-modes';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 type ValidationMode = 'quick' | 'standard' | 'thorough';
 
@@ -28,6 +30,20 @@ export function ValidationConfig({
   onModeChange,
   onBack,
 }: ValidationConfigProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: emails.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 28,
+    overscan: 15,
+  });
+  const items = virtualizer.getVirtualItems();
+  const paddingTop = items.length > 0 ? items[0].start : 0;
+  const paddingBottom =
+    items.length > 0
+      ? virtualizer.getTotalSize() - items[items.length - 1].end
+      : 0;
+
   return (
     <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
       <div className="flex items-center justify-between">
@@ -126,18 +142,24 @@ export function ValidationConfig({
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0 flex-1">
-              <div className="h-full overflow-y-auto p-4 space-y-2 font-mono text-[11px]">
-                {emails.map((email, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-2 border-b border-muted pb-2 last:border-0 truncate text-muted-foreground"
-                  >
-                    <span className="text-[10px] opacity-30 w-6 text-right shrink-0">
-                      {i + 1}
-                    </span>
-                    {email}
-                  </div>
-                ))}
+              <div ref={scrollRef} className="h-full overflow-y-auto p-4 font-mono text-[11px]">
+                {paddingTop > 0 && <div style={{ height: paddingTop }} />}
+                {items.map((virtualRow) => {
+                  const email = emails[virtualRow.index];
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      className="flex items-center gap-2 border-b border-muted pb-2 last:border-0 truncate text-muted-foreground"
+                      style={{ height: '28px' }}
+                    >
+                      <span className="text-[10px] opacity-30 w-6 text-right shrink-0">
+                        {virtualRow.index + 1}
+                      </span>
+                      {email}
+                    </div>
+                  );
+                })}
+                {paddingBottom > 0 && <div style={{ height: paddingBottom }} />}
               </div>
             </CardContent>
           </Card>

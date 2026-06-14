@@ -1,0 +1,20 @@
+target_env: browser-only
+test_focus:
+  - email_cleaning_dedup
+  - validation_lifecycle
+  - results_analytics
+  - proxy_management
+  - session_management
+  - settings_configuration
+  - export
+edge_cases:
+  - large_email_lists
+  - empty_invalid_input
+  - provider_specific_dedup
+  - mid_validation_interruptions
+  - export_accuracy
+  - settings_persistence
+github_workflow: true
+failure_learning: suggest_in_report
+imagemagick: true
+completed: true
