@@ -2636,6 +2636,45 @@
         assert!(pool.is_proxy_available("192.168.1.2:8080"));
     }
 
+    // Renaming a proxy must carry its health stats along, so a burned
+    // (cooled-down + auto-disabled) proxy can't escape by changing its ID (B17).
+    #[test]
+    fn test_update_proxy_rename_moves_stats_and_keeps_disabled() {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
+        pool.auto_disable_threshold = AutoDisableThreshold {
+            success_rate_percent: 50,
+            min_attempts: 3,
+        };
+        pool.assign_domain("example.com".to_string(), "192.168.1.1:8080".to_string()).unwrap();
+
+        // 3 consecutive failures: enters cooldown and gets auto-disabled.
+        for _ in 0..3 {
+            pool.record_failure("192.168.1.1:8080");
+        }
+        let before = pool.get_stats("192.168.1.1:8080");
+        assert!(before.auto_disabled);
+        assert!(pool.is_proxy_in_cooldown("192.168.1.1:8080"));
+        assert!(!pool.is_proxy_available("192.168.1.1:8080"));
+
+        // Change only the ID (port).
+        pool.update_proxy("192.168.1.1:8080", ProxyConfig::new("192.168.1.1".to_string(), 9090))
+            .unwrap();
+
+        // (a) stats now live under the new ID, unchanged.
+        assert_eq!(pool.proxy_stats.get("192.168.1.1:9090"), Some(&before));
+        // (b) nothing left under the old ID.
+        assert!(!pool.proxy_stats.contains_key("192.168.1.1:8080"));
+        // (c) still cooled down + auto-disabled: renaming is not an escape.
+        assert!(pool.get_stats("192.168.1.1:9090").auto_disabled);
+        assert!(pool.is_proxy_in_cooldown("192.168.1.1:9090"));
+        assert!(!pool.is_proxy_available("192.168.1.1:9090"));
+        assert!(pool.get_available_proxies().is_empty());
+        // Domain assignment re-key still works.
+        assert_eq!(pool.get_domain_proxy("example.com").map(|p| p.id()), Some("192.168.1.1:9090".to_string()));
+    }
+
     #[test]
     fn test_re_enable_proxy() {
         let mut pool = ProxyPool::new();

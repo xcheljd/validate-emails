@@ -347,12 +347,18 @@ impl ProxyPool {
 
         // Find and update the proxy
         if let Some(proxy) = self.proxies.iter_mut().find(|p| p.id() == old_id) {
-            // Update domain assignments if ID changed
+            // Update domain assignments and health stats if ID changed. The
+            // stats must follow the proxy: otherwise a cooled-down or
+            // auto-disabled proxy could re-enter rotation as "fresh" just by
+            // being saved under a new ID (B17).
             if old_id != new_id {
                 for v in self.domain_assignments.values_mut() {
                     if *v == old_id {
                         *v = new_id.clone();
                     }
+                }
+                if let Some(stats) = self.proxy_stats.remove(old_id) {
+                    self.proxy_stats.insert(new_id.clone(), stats);
                 }
             }
 
