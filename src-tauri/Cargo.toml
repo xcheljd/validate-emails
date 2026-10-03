@@ -40,3 +40,8 @@ thiserror = "1.0"
 tauri = { version = "2", features = ["test"] }
 mockall = "0.14.0"
 wiremock = "0.6.5"
+# Used only to construct upstream SmtpError variants in classifier tests;
+# versions match what check-if-email-exists v0.11.6 already pulls in.
+async-smtp = "0.9"
+fast-socks5 = "0.9"
+anyhow = "1"

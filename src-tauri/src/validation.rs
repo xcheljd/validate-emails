@@ -9,6 +9,7 @@ use check_if_email_exists::{check_email, CheckEmailInputBuilder, CheckEmailInput
 use check_if_email_exists::syntax::check_syntax;
 use check_if_email_exists::mx::check_mx;
 use check_if_email_exists::misc::check_misc;
+use check_if_email_exists::smtp::{SmtpDetails, SmtpError, SmtpErrorDesc};
 use check_if_email_exists::smtp::verif_method::{
     VerifMethod,
     VerifMethodSmtpConfig,
@@ -31,11 +32,13 @@ pub enum ProxyOutcome {
     /// regardless of the mailbox verdict (even "Invalid" proves the proxy
     /// round-tripped).
     Success,
-    /// The transport itself failed while going through the proxy
-    /// (SOCKS error, I/O error, timeout, IP blacklisted, needs rDNS).
+    /// The proxy itself was at fault: the SOCKS5 hop failed, or the
+    /// destination rejected the proxy's IP (blacklisted / needs rDNS).
+    /// See `classify_smtp_error`.
     Failure,
     /// The proxy was not actually exercised for this email (quick mode,
-    /// invalid syntax, no MX records, builder error).
+    /// invalid syntax, no MX records, builder error), or the failure is as
+    /// likely the destination's fault (timeout, I/O error, other SMTP error).
     Neutral,
 }
 
@@ -490,21 +493,7 @@ async fn validate_email_full(
     // errors — was counted as a proxy failure, so a healthy proxy died after
     // a handful of invalid addresses. A definitive RCPT verdict (even
     // "Invalid") means the proxy carried a full SMTP conversation = success.
-    let proxy_outcome = if proxy_id.is_some() {
-        match &output.smtp {
-            // A transport error (SOCKS/IO/timeout) or an IP-reputation
-            // rejection (blacklisted / needs rDNS) = the proxy path failed.
-            Err(_) => ProxyOutcome::Failure,
-            // SMTP completed: a real round trip happened through the proxy.
-            Ok(details) if details.can_connect_smtp => ProxyOutcome::Success,
-            // Ok but can_connect_smtp==false is the default output for the
-            // early-return paths (invalid syntax, no MX) — the proxy was not
-            // actually exercised, so it's neutral (no success, no failure).
-            Ok(_) => ProxyOutcome::Neutral,
-        }
-    } else {
-        ProxyOutcome::Neutral
-    };
+    let proxy_outcome = proxy_outcome_for(proxy_id.is_some(), &output.smtp);
 
     let risk_score = calculate_risk_score(result_str, is_disposable, is_catch_all, is_disabled, has_full_inbox);
 
@@ -532,6 +521,46 @@ async fn validate_email_full(
     .with_haveibeenpwned(haveibeenpwned)
     .with_risk_score(risk_score)
     .with_proxy_outcome(proxy_outcome)
+}
+
+/// Map the SMTP step's result to a proxy-health outcome.
+fn proxy_outcome_for(
+    proxy_used: bool,
+    smtp: &Result<SmtpDetails, SmtpError>,
+) -> ProxyOutcome {
+    if !proxy_used {
+        return ProxyOutcome::Neutral;
+    }
+    match smtp {
+        Err(e) => classify_smtp_error(e),
+        // SMTP completed: a real round trip happened through the proxy.
+        Ok(details) if details.can_connect_smtp => ProxyOutcome::Success,
+        // Ok but can_connect_smtp==false is the default output for the
+        // early-return paths (invalid syntax, no MX) — the proxy was not
+        // actually exercised, so it's neutral (no success, no failure).
+        Ok(_) => ProxyOutcome::Neutral,
+    }
+}
+
+/// Decide whether an SMTP error is the PROXY's fault.
+///
+/// Only two things are: the SOCKS5 hop itself failing, and the destination
+/// rejecting the proxy's egress IP on reputation grounds (blacklisted /
+/// missing rDNS). Everything else — timeouts, I/O errors, other SMTP
+/// rejections — is just as likely a dead, tarpitting or greylisting MX, and
+/// counting those against the proxy would drain a healthy pool on a list
+/// with a few dead domains. Those are Neutral.
+pub(crate) fn classify_smtp_error(err: &SmtpError) -> ProxyOutcome {
+    match err {
+        SmtpError::Socks5(_) => ProxyOutcome::Failure,
+        SmtpError::AsyncSmtpError(_) => match err.get_description() {
+            Some(SmtpErrorDesc::IpBlacklisted) | Some(SmtpErrorDesc::NeedsRDNS) => {
+                ProxyOutcome::Failure
+            }
+            None => ProxyOutcome::Neutral,
+        },
+        _ => ProxyOutcome::Neutral,
+    }
 }
 
 fn calculate_risk_score(result: &str, is_disposable: bool, is_catch_all: bool, is_disabled: bool, has_full_inbox: bool) -> u32 {
@@ -1100,5 +1129,101 @@ mod tests {
         assert_eq!(clamp_concurrency(10), 10);
         assert_eq!(clamp_concurrency(64), 64);
         assert_eq!(clamp_concurrency(1000), 64);
+    }
+
+    fn smtp_response(severity: async_smtp::response::Severity, msg: &str) -> async_smtp::response::Response {
+        use async_smtp::response::{Category, Code, Detail, Response};
+        Response::new(
+            Code::new(severity, Category::MailSystem, Detail::Zero),
+            vec![msg.to_string()],
+        )
+    }
+
+    // Only SOCKS failures and IP-reputation rejections are the proxy's fault;
+    // timeouts, I/O and other SMTP errors are as likely a dead/greylisting MX.
+    #[test]
+    fn test_classify_smtp_error_table() {
+        use async_smtp::error::Error as AsyncSmtpError;
+        use async_smtp::response::Severity;
+        use std::io;
+
+        let table: Vec<(&str, SmtpError, ProxyOutcome)> = vec![
+            (
+                "socks5 io (proxy refused)",
+                SmtpError::Socks5(fast_socks5::SocksError::Io(io::Error::new(
+                    io::ErrorKind::ConnectionRefused,
+                    "refused",
+                ))),
+                ProxyOutcome::Failure,
+            ),
+            (
+                "socks5 auth failed",
+                SmtpError::Socks5(fast_socks5::SocksError::AuthenticationFailed("bad creds".into())),
+                ProxyOutcome::Failure,
+            ),
+            (
+                "ip blacklisted (permanent)",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Permanent(smtp_response(
+                    Severity::PermanentNegativeCompletion,
+                    "5.7.1 Client host [1.2.3.4] is blacklisted",
+                ))),
+                ProxyOutcome::Failure,
+            ),
+            (
+                "ip on spamhaus (transient)",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Transient(smtp_response(
+                    Severity::TransientNegativeCompletion,
+                    "host 1.2.3.4 is listed on zen.spamhaus.org",
+                ))),
+                ProxyOutcome::Failure,
+            ),
+            (
+                "needs rdns",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Permanent(smtp_response(
+                    Severity::PermanentNegativeCompletion,
+                    "Client host rejected: cannot find your reverse hostname",
+                ))),
+                ProxyOutcome::Failure,
+            ),
+            (
+                "greylisting (transient, no reputation desc)",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Transient(smtp_response(
+                    Severity::TransientNegativeCompletion,
+                    "4.7.1 Greylisted, please try again later",
+                ))),
+                ProxyOutcome::Neutral,
+            ),
+            (
+                "async-smtp io",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Io(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "reset",
+                ))),
+                ProxyOutcome::Neutral,
+            ),
+            ("async-smtp resolution", SmtpError::AsyncSmtpError(AsyncSmtpError::Resolution), ProxyOutcome::Neutral),
+            ("timeout (tarpit / dead MX)", SmtpError::Timeout(Duration::from_secs(10)), ProxyOutcome::Neutral),
+            (
+                "io error",
+                SmtpError::IOError(io::Error::new(io::ErrorKind::TimedOut, "timed out")),
+                ProxyOutcome::Neutral,
+            ),
+            ("anyhow", SmtpError::AnyhowError(anyhow::anyhow!("other")), ProxyOutcome::Neutral),
+        ];
+
+        for (name, err, expected) in table {
+            assert_eq!(classify_smtp_error(&err), expected, "case: {}", name);
+            // The full mapping (proxy used, smtp Err) agrees with the classifier.
+            assert_eq!(proxy_outcome_for(true, &Err(err)), expected, "case (full): {}", name);
+        }
+
+        // Ok paths and no-proxy paths are unchanged.
+        let connected = SmtpDetails { can_connect_smtp: true, ..Default::default() };
+        assert_eq!(proxy_outcome_for(true, &Ok(connected)), ProxyOutcome::Success);
+        assert_eq!(proxy_outcome_for(true, &Ok(SmtpDetails::default())), ProxyOutcome::Neutral);
+        assert_eq!(
+            proxy_outcome_for(false, &Err(SmtpError::Socks5(fast_socks5::SocksError::ArgumentInputError("x")))),
+            ProxyOutcome::Neutral
+        );
     }
 }

@@ -4719,8 +4719,11 @@ dependencies = [
 name = "tauri-app"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-smtp",
  "check-if-email-exists",
  "chrono",
+ "fast-socks5",
  "futures",
  "mockall",
  "reqwest",
