@@ -9,10 +9,10 @@ use tokio::time::sleep;
 use chrono::Utc;
 use std::time::{Instant, Duration};
 use std::collections::HashMap;
-use check_if_email_exists::{check_email, CheckEmailInputBuilder, CheckEmailInputProxy, Reachable};
+use check_if_email_exists::{check_email, CheckEmailInputBuilder, CheckEmailInputProxy, CheckEmailOutput, Reachable};
 use check_if_email_exists::syntax::check_syntax;
 use check_if_email_exists::mx::{check_mx, MxDetails, MxError};
-use check_if_email_exists::misc::check_misc;
+use check_if_email_exists::misc::{check_misc, MiscDetails};
 use check_if_email_exists::smtp::{SmtpDetails, SmtpError, SmtpErrorDesc};
 use check_if_email_exists::smtp::verif_method::{
     VerifMethod,
@@ -462,13 +462,9 @@ async fn validate_email_full(
         Reachable::Unknown => "Unknown",
     };
 
-    let reason = format!(
-        "Reachability: {:?}, Misc: {:?}, MX: {:?}, SMTP: {:?}",
-        output.is_reachable,
-        output.misc,
-        output.mx,
-        output.smtp
-    );
+    // Short reason + error_type, never a {:?} dump of the whole output:
+    // every reason is persisted in the session JSON (B16).
+    let (error_type, reason) = full_mode_reason(&output);
 
     let domain = output.syntax.domain;
     let is_valid_syntax = output.syntax.is_valid_syntax;
@@ -508,7 +504,7 @@ async fn validate_email_full(
 
     let risk_score = calculate_risk_score(result_str, is_disposable, is_catch_all, is_disabled, has_full_inbox);
 
-    ValidationResult::builder(
+    let result = ValidationResult::builder(
         &email,
         &domain,
         result_str,
@@ -531,7 +527,12 @@ async fn validate_email_full(
     .with_gravatar_url(gravatar_url)
     .with_haveibeenpwned(haveibeenpwned)
     .with_risk_score(risk_score)
-    .with_proxy_outcome(proxy_outcome)
+    .with_proxy_outcome(proxy_outcome);
+
+    match error_type {
+        Some(t) => result.with_error_type(t),
+        None => result,
+    }
 }
 
 /// Number of MX records found. A failed lookup (`Err` — DNS error) means
@@ -543,6 +544,100 @@ fn full_mode_mx_record_count(mx: &Result<MxDetails, MxError>) -> u32 {
             Err(_) => 0,
         },
         Err(_) => 0,
+    }
+}
+
+/// Cap on upstream error text embedded in a reason, so one chatty SMTP
+/// server can't bloat the session file.
+const MAX_REASON_DETAIL_CHARS: usize = 160;
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// Concise (error_type, reason) for a full-mode result. `error_type` is set
+/// only for failures (MX lookup error, SMTP error) so results can be
+/// filtered by cause.
+fn full_mode_reason(output: &CheckEmailOutput) -> (Option<&'static str>, String) {
+    if !output.syntax.is_valid_syntax {
+        return (None, "Invalid syntax".to_string());
+    }
+    match &output.mx {
+        Err(e) => {
+            let detail = truncate_chars(&e.to_string(), MAX_REASON_DETAIL_CHARS);
+            return (Some("MxLookupError"), format!("MX lookup failed: {}", detail));
+        }
+        Ok(mx) if mx.lookup.is_err() => return (None, "No MX records found".to_string()),
+        Ok(_) => {}
+    }
+    match &output.smtp {
+        Err(e) => {
+            let (error_type, reason) = classify_smtp_error_detail(e);
+            (Some(error_type), reason)
+        }
+        Ok(smtp) => (None, smtp_verdict_reason(&output.is_reachable, smtp, output.misc.as_ref().ok())),
+    }
+}
+
+/// Human-readable verdict when the SMTP step completed. Mirrors upstream
+/// `calculate_reachable`.
+fn smtp_verdict_reason(reachable: &Reachable, smtp: &SmtpDetails, misc: Option<&MiscDetails>) -> String {
+    match reachable {
+        Reachable::Safe => "Deliverable".to_string(),
+        Reachable::Invalid if smtp.is_disabled => "Mailbox disabled".to_string(),
+        Reachable::Invalid if !smtp.can_connect_smtp => "Could not connect to SMTP server".to_string(),
+        Reachable::Invalid => "Mailbox not found".to_string(),
+        Reachable::Risky => {
+            let mut flags = Vec::new();
+            if smtp.is_catch_all {
+                flags.push("catch-all");
+            }
+            if smtp.has_full_inbox {
+                flags.push("full inbox");
+            }
+            if misc.is_some_and(|m| m.is_disposable) {
+                flags.push("disposable");
+            }
+            if misc.is_some_and(|m| m.is_role_account) {
+                flags.push("role account");
+            }
+            if flags.is_empty() {
+                "Risky".to_string()
+            } else {
+                format!("Risky: {}", flags.join(", "))
+            }
+        }
+        Reachable::Unknown => "Unknown (no SMTP verdict)".to_string(),
+    }
+}
+
+/// Short (error_type, reason) for an SMTP failure. Categories line up with
+/// `classify_smtp_error`: Socks / SmtpBlacklisted / NeedsRDNS are the
+/// proxy's fault; Timeout / IO / Other are neutral. Only the error's Display
+/// text (truncated) is kept — never the SMTP transcript.
+fn classify_smtp_error_detail(err: &SmtpError) -> (&'static str, String) {
+    let detail = truncate_chars(&err.to_string(), MAX_REASON_DETAIL_CHARS);
+    match err {
+        SmtpError::Socks5(_) => ("Socks", detail),
+        SmtpError::AsyncSmtpError(_) => match err.get_description() {
+            Some(SmtpErrorDesc::IpBlacklisted) => {
+                ("SmtpBlacklisted", format!("IP blacklisted / policy rejection: {}", detail))
+            }
+            Some(SmtpErrorDesc::NeedsRDNS) => {
+                ("NeedsRDNS", format!("Proxy IP needs reverse DNS: {}", detail))
+            }
+            None => ("IO", detail),
+        },
+        SmtpError::Timeout(_) => ("Timeout", "SMTP connection/operation timed out".to_string()),
+        SmtpError::IOError(_) => ("IO", detail),
+        // Provider API errors (unreachable: every provider is set to SMTP in
+        // build_verif_method) and the upstream anyhow catch-all.
+        _ => ("Other", detail),
     }
 }
 
@@ -1414,6 +1509,145 @@ mod tests {
         assert_eq!(full_mode_mx_record_count(&dns_err), 0);
         // Lookup ran but found nothing (default lookup is Err) → 0.
         assert_eq!(full_mode_mx_record_count(&Ok(MxDetails::default())), 0);
+    }
+
+    // SMTP failures get a real error_type and a short reason (B16). The
+    // error_type categories agree with classify_smtp_error's proxy blame.
+    #[test]
+    fn test_classify_smtp_error_detail_table() {
+        use async_smtp::error::Error as AsyncSmtpError;
+        use async_smtp::response::Severity;
+        use std::io;
+
+        // (name, error, expected error_type, substring expected in reason)
+        let table: Vec<(&str, SmtpError, &str, &str)> = vec![
+            (
+                "socks5 io (proxy refused)",
+                SmtpError::Socks5(fast_socks5::SocksError::Io(io::Error::new(
+                    io::ErrorKind::ConnectionRefused,
+                    "refused",
+                ))),
+                "Socks",
+                "SOCKS5 error",
+            ),
+            (
+                "socks5 auth failed",
+                SmtpError::Socks5(fast_socks5::SocksError::AuthenticationFailed("bad creds".into())),
+                "Socks",
+                "bad creds",
+            ),
+            (
+                "ip blacklisted (permanent)",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Permanent(smtp_response(
+                    Severity::PermanentNegativeCompletion,
+                    "5.7.1 Client host [1.2.3.4] is blacklisted",
+                ))),
+                "SmtpBlacklisted",
+                "IP blacklisted / policy rejection",
+            ),
+            (
+                "ip on spamhaus (transient)",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Transient(smtp_response(
+                    Severity::TransientNegativeCompletion,
+                    "host 1.2.3.4 is listed on zen.spamhaus.org",
+                ))),
+                "SmtpBlacklisted",
+                "spamhaus",
+            ),
+            (
+                "needs rdns",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Permanent(smtp_response(
+                    Severity::PermanentNegativeCompletion,
+                    "Client host rejected: cannot find your reverse hostname",
+                ))),
+                "NeedsRDNS",
+                "reverse DNS",
+            ),
+            (
+                "greylisting (transient, no reputation desc)",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Transient(smtp_response(
+                    Severity::TransientNegativeCompletion,
+                    "4.7.1 Greylisted, please try again later",
+                ))),
+                "IO",
+                "Greylisted",
+            ),
+            (
+                "async-smtp io",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Io(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "reset",
+                ))),
+                "IO",
+                "reset",
+            ),
+            ("async-smtp resolution", SmtpError::AsyncSmtpError(AsyncSmtpError::Resolution), "IO", "resolve"),
+            ("timeout", SmtpError::Timeout(Duration::from_secs(10)), "Timeout", "timed out"),
+            (
+                "io error",
+                SmtpError::IOError(io::Error::new(io::ErrorKind::ConnectionRefused, "connection refused")),
+                "IO",
+                "connection refused",
+            ),
+            ("anyhow", SmtpError::AnyhowError(anyhow::anyhow!("other")), "Other", "other"),
+        ];
+
+        for (name, err, expected_type, expected_substr) in table {
+            let (error_type, reason) = classify_smtp_error_detail(&err);
+            assert_eq!(error_type, expected_type, "case: {}", name);
+            assert!(reason.contains(expected_substr), "case: {}: reason {:?}", name, reason);
+            // Proxy-blamed categories are exactly the classifier's Failures.
+            let blamed = matches!(error_type, "Socks" | "SmtpBlacklisted" | "NeedsRDNS");
+            assert_eq!(blamed, classify_smtp_error(&err) == ProxyOutcome::Failure, "case: {}", name);
+        }
+
+        // A huge server response is truncated, not stored verbatim.
+        let long = SmtpError::AsyncSmtpError(AsyncSmtpError::Transient(smtp_response(
+            Severity::TransientNegativeCompletion,
+            &"x".repeat(10_000),
+        )));
+        let (_, reason) = classify_smtp_error_detail(&long);
+        assert!(reason.chars().count() <= MAX_REASON_DETAIL_CHARS + 1, "len {}", reason.len());
+    }
+
+    #[test]
+    fn test_full_mode_reason_is_concise() {
+        use check_if_email_exists::syntax::SyntaxDetails;
+        use std::io;
+
+        let valid = || SyntaxDetails { is_valid_syntax: true, ..Default::default() };
+
+        // Invalid syntax / MX failure / no MX records gate before SMTP.
+        let out = CheckEmailOutput::default();
+        assert_eq!(full_mode_reason(&out), (None, "Invalid syntax".to_string()));
+        let out = CheckEmailOutput {
+            syntax: valid(),
+            mx: Err(MxError::IoError(io::Error::new(io::ErrorKind::Other, "dns down"))),
+            ..Default::default()
+        };
+        let (t, r) = full_mode_reason(&out);
+        assert_eq!(t, Some("MxLookupError"));
+        assert!(r.starts_with("MX lookup failed"), "{}", r);
+        let out = CheckEmailOutput { syntax: valid(), ..Default::default() };
+        assert_eq!(full_mode_reason(&out), (None, "No MX records found".to_string()));
+
+        // SMTP verdicts.
+        let ok = SmtpDetails { can_connect_smtp: true, is_deliverable: true, ..Default::default() };
+        assert_eq!(smtp_verdict_reason(&Reachable::Safe, &ok, None), "Deliverable");
+        let missing = SmtpDetails { can_connect_smtp: true, ..Default::default() };
+        assert_eq!(smtp_verdict_reason(&Reachable::Invalid, &missing, None), "Mailbox not found");
+        let disabled = SmtpDetails { can_connect_smtp: true, is_disabled: true, ..Default::default() };
+        assert_eq!(smtp_verdict_reason(&Reachable::Invalid, &disabled, None), "Mailbox disabled");
+        let catch_all = SmtpDetails { can_connect_smtp: true, is_catch_all: true, ..Default::default() };
+        let misc = MiscDetails { is_role_account: true, ..Default::default() };
+        assert_eq!(
+            smtp_verdict_reason(&Reachable::Risky, &catch_all, Some(&misc)),
+            "Risky: catch-all, role account"
+        );
+        assert_eq!(
+            smtp_verdict_reason(&Reachable::Unknown, &SmtpDetails::default(), None),
+            "Unknown (no SMTP verdict)"
+        );
     }
 
     fn smtp_response(severity: async_smtp::response::Severity, msg: &str) -> async_smtp::response::Response {
