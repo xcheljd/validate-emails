@@ -71,7 +71,6 @@ export function useEmailValidation(
   const cooldownEndTimeRef = useRef<number>(0);
   const sessionIdRef = useRef<string | null>(null);
   const resultsRef = useRef<ValidationResult[]>([]);
-  const progressRef = useRef(0);
   const totalRef = useRef(0);
   // Highest backend run id seen. Events stamped with an older run id come
   // from a superseded run and are ignored.
@@ -92,10 +91,6 @@ export function useEmailValidation(
   useEffect(() => {
     resultsRef.current = results;
   }, [results]);
-
-  useEffect(() => {
-    progressRef.current = progress;
-  }, [progress]);
 
   useEffect(() => {
     totalRef.current = total;
@@ -165,8 +160,9 @@ export function useEmailValidation(
       const sid = sessionIdRef.current;
       if (!sid) return;
       const resultsToSave = resultsRef.current;
-      const idx = progressRef.current;
-      updateSessionProgress(sid, resultsToSave, idx).catch((err) => {
+      // Saved progress is a count (for display), not a resume position:
+      // results complete out of order, so they are not a prefix of emails.
+      updateSessionProgress(sid, resultsToSave, resultsToSave.length).catch((err) => {
         console.warn('Failed to auto-save session:', err);
       });
     },
@@ -466,7 +462,11 @@ export function useEmailValidation(
     async (sessionIdToResume: string, concurrency?: number) => {
       try {
         const session: ValidationSession = await loadSession(sessionIdToResume);
-        const unprocessedEmails = session.emails.slice(session.currentIndex);
+        // Resume by what has no result yet, not by index: concurrent runs
+        // complete out of order, so a slice(currentIndex) would skip some
+        // pending emails and re-run some finished ones.
+        const done = new Set(session.results.map((r) => r.email));
+        const unprocessedEmails = session.emails.filter((e) => !done.has(e));
         const problemEmails = session.results
           .filter((r) => r.result === 'Unknown' || r.result === 'Invalid')
           .map((r) => r.email);
@@ -477,7 +477,7 @@ export function useEmailValidation(
           concurrency ?? currentConcurrencyRef.current;
 
         setResults(session.results);
-        setProgress(session.currentIndex);
+        setProgress(session.results.length);
         setTotal(session.total);
         setSessionId(sessionIdToResume);
         sessionIdRef.current = sessionIdToResume;
