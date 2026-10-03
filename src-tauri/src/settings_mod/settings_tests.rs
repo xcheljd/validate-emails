@@ -2687,3 +2687,50 @@
         assert!(json.contains("successRatePercent"));
         assert!(json.contains("minAttempts"));
     }
+
+    // =====================
+    // Persistence (B12 atomic write)
+    // =====================
+
+    #[tokio::test]
+    async fn test_persist_settings_to_round_trips_proxy_pool_atomically() {
+        let dir = std::env::temp_dir().join(format!("settings-persist-test-{}", uuid::Uuid::new_v4()));
+        // Nested path: persist_settings_to must still create the parent dir.
+        let path = dir.join("nested").join("settings.json");
+
+        let mut settings = Settings::default();
+        settings.concurrency = 9;
+        settings.proxy_pool.enabled = true;
+        settings.proxy_pool.add_proxy(ProxyConfig::new("10.0.0.1".to_string(), 1080)).unwrap();
+        settings.proxy_pool.add_proxy(ProxyConfig::with_auth(
+            "10.0.0.2".to_string(), 1081, "user".to_string(), "pass".to_string(),
+        )).unwrap();
+        settings.proxy_pool.assign_domain("gmail.com".to_string(), "10.0.0.2:1081".to_string()).unwrap();
+        let settings = std::sync::Arc::new(tokio::sync::RwLock::new(settings));
+
+        // Overwrite an existing file to exercise rename-over-existing.
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "stale").unwrap();
+        persist_settings_to(&settings, &path).await.unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let loaded: Settings = serde_json::from_str(&content).expect("valid settings JSON");
+        assert_eq!(loaded.concurrency, 9);
+        assert!(loaded.proxy_pool.enabled);
+        assert_eq!(loaded.proxy_pool.proxies.len(), 2);
+        assert_eq!(loaded.proxy_pool.proxies[1].username, Some("user".to_string()));
+        assert_eq!(
+            loaded.proxy_pool.domain_assignments.get("gmail.com"),
+            Some(&"10.0.0.2:1081".to_string())
+        );
+
+        let residue: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(residue.is_empty(), "leftover temp files: {:?}", residue);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+

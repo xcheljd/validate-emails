@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use chrono::{Utc, Duration};
 use crate::validation::ValidationResult;
+use crate::atomic_write::atomic_write;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSettings {
@@ -107,7 +108,7 @@ impl SessionManager {
         let json = serde_json::to_string(&session)
             .map_err(|e| format!("Failed to serialize session for backup: {}", e))?;
         
-        fs::write(&backup_path, json)
+        atomic_write(&backup_path, json.as_bytes())
             .map_err(|e| format!("Failed to write backup: {}", e))
     }
 
@@ -206,7 +207,7 @@ impl SessionManager {
         let json = serde_json::to_string(session)
             .map_err(|e| format!("Failed to serialize session: {}", e))?;
 
-        fs::write(&session_path, json)
+        atomic_write(&session_path, json.as_bytes())
             .map_err(|e| format!("Failed to write session file: {}", e))
     }
 
@@ -422,6 +423,36 @@ mod tests {
         assert!(!fx.manager.sessions_dir.join(format!("{}.json", id)).exists());
         assert!(fx.manager.load_session(&id).unwrap_err().contains("Session not found"));
         assert!(fx.outside_file.exists());
+    }
+
+    fn temp_residue(dir: &Path) -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .map(|rd| rd.flatten().map(|e| e.path()).collect::<Vec<_>>())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.file_name().and_then(|n| n.to_str()).map_or(false, |n| n.contains(".tmp.")))
+            .collect()
+    }
+
+    #[test]
+    fn save_session_is_atomic_and_round_trips() {
+        let fx = Fixture::new();
+        let emails: Vec<String> = (0..500).map(|i| format!("user{}@example.com", i)).collect();
+        let id = fx.manager.create_session("atomic".to_string(), emails.clone(), settings()).unwrap();
+        let mut session = fx.manager.load_session(&id).unwrap();
+        session.status = "in-progress".to_string();
+        session.current_index = 42;
+
+        fx.manager.save_session(&id, &session).unwrap();
+        fx.manager.backup_session(&id).unwrap();
+
+        let loaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(serde_json::to_value(&loaded).unwrap(), serde_json::to_value(&session).unwrap());
+        assert_eq!(loaded.emails, emails);
+        assert!(temp_residue(&fx.manager.sessions_dir).is_empty());
+        let backup_dir = fx.manager.sessions_dir.join("backups");
+        assert!(temp_residue(&backup_dir).is_empty());
+        assert_eq!(fx.dir_entries(&backup_dir).len(), 1);
     }
 
     #[test]

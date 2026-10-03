@@ -67,8 +67,10 @@ pub async fn persist_settings_to(
             .map_err(|e| format!("Failed to create settings directory: {}", e))?;
     }
 
-    tokio::fs::write(&path, json)
+    // Blocking temp-write + fsync + rename (B12), off the async runtime.
+    tokio::task::spawn_blocking(move || crate::atomic_write::atomic_write(&path, json.as_bytes()))
         .await
+        .map_err(|e| format!("Failed to write settings: {}", e))?
         .map_err(|e| format!("Failed to write settings: {}", e))
 }
 

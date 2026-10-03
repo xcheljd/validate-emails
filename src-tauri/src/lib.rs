@@ -1,3 +1,4 @@
+mod atomic_write;
 mod validation;
 mod settings;
 mod session;
