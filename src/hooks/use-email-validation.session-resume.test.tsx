@@ -127,6 +127,32 @@ describe('useEmailValidation session resume', () => {
 
     const save = mockInvoke.mock.calls.find((c: unknown[]) => c[0] === 'update_validation_session');
     expect(save).toBeDefined();
-    expect(save![1]).toEqual(expect.objectContaining({ id: 's2', currentIndex: 2 }));
+    expect(save![1]).toEqual(expect.objectContaining({ id: 's2', currentIndex: 2, status: 'paused' }));
+  });
+
+  it('records a stopped session as stopped', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'create_validation_session') return Promise.resolve('s3');
+      if (cmd === 'validate_emails_bulk') return new Promise(() => {});
+      return Promise.resolve(undefined);
+    });
+
+    const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+
+    await act(async () => {
+      result.current.startValidation(['a@test.com', 'b@test.com']);
+    });
+    act(() => {
+      result.current.setResults([makeResult('a@test.com', 'Safe')]);
+    });
+
+    mockInvoke.mockClear();
+    await act(async () => {
+      await result.current.stopValidation();
+    });
+
+    const save = mockInvoke.mock.calls.find((c: unknown[]) => c[0] === 'update_validation_session');
+    expect(save).toBeDefined();
+    expect(save![1]).toEqual(expect.objectContaining({ id: 's3', currentIndex: 1, status: 'stopped' }));
   });
 });

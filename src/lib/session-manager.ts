@@ -27,10 +27,14 @@ export async function createSession(
   return invoke('create_validation_session', { emails, settings });
 }
 
+/** Why a run halted; recorded on the session. Other statuses are derived by the backend. */
+export type SessionHaltStatus = 'paused' | 'stopped';
+
 export async function updateSessionProgress(
   sessionId: string,
   results: ValidationResult[],
-  currentIndex: number
+  currentIndex: number,
+  status?: SessionHaltStatus
 ): Promise<void> {
   // Validate results before updating
   const validation = validateResultsBatch(results);
@@ -45,6 +49,7 @@ export async function updateSessionProgress(
     results,
     currentIndex,
     backup: true,
+    ...(status ? { status } : {}),
   });
 }
 

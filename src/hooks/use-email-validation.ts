@@ -3,7 +3,13 @@ import { useMutation } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { notifyValidationComplete, notifyError } from '@/lib/notifications';
-import { loadSession, createSession, updateSessionProgress, ValidationSession } from '@/lib/session-manager';
+import {
+  loadSession,
+  createSession,
+  updateSessionProgress,
+  ValidationSession,
+  SessionHaltStatus,
+} from '@/lib/session-manager';
 import { ValidationResult } from '@/lib/types';
 import {
   type ValidationStatus,
@@ -154,15 +160,16 @@ export function useEmailValidation(
     }
   }, [endBackendWait]);
 
-  // Save session progress to backend (fire-and-forget with error logging)
+  // Save session progress to backend (fire-and-forget with error logging).
+  // Pass a status when the run halted so the session records why.
   const saveSession = useCallback(
-    () => {
+    (status?: SessionHaltStatus) => {
       const sid = sessionIdRef.current;
       if (!sid) return;
       const resultsToSave = resultsRef.current;
       // Saved progress is a count (for display), not a resume position:
       // results complete out of order, so they are not a prefix of emails.
-      updateSessionProgress(sid, resultsToSave, resultsToSave.length).catch((err) => {
+      updateSessionProgress(sid, resultsToSave, resultsToSave.length, status).catch((err) => {
         console.warn('Failed to auto-save session:', err);
       });
     },
@@ -196,7 +203,7 @@ export function useEmailValidation(
   // Save on pause
   useEffect(() => {
     if (status === 'paused' && sessionIdRef.current) {
-      saveSession();
+      saveSession('paused');
     }
   }, [status, saveSession]);
 
@@ -661,7 +668,7 @@ export function useEmailValidation(
     await invoke('stop_validation');
     // Save session with current progress before resetting
     if (sessionIdRef.current && resultsRef.current.length > 0) {
-      saveSession();
+      saveSession('stopped');
     }
     setStatus('idle');
     statusRef.current = 'idle';

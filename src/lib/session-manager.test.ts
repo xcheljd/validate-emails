@@ -82,6 +82,21 @@ describe('session-manager', () => {
       currentIndex: 1,
       backup: true,
     });
+    expect(vi.mocked(invoke).mock.calls[0][1]).not.toHaveProperty('status');
+  });
+
+  it('updateSessionProgress passes an explicit paused/stopped status through', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+
+    await updateSessionProgress('test-session-id', [], 0, 'stopped');
+
+    expect(invoke).toHaveBeenCalledWith('update_validation_session', {
+      id: 'test-session-id',
+      results: [],
+      currentIndex: 0,
+      backup: true,
+      status: 'stopped',
+    });
   });
 
   it('loadSession should invoke load_validation_session with correct parameters', async () => {
