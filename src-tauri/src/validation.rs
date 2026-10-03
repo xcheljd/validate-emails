@@ -210,9 +210,22 @@ impl ValidationState {
         token.cancel();
     }
 
-    pub fn reset(&self) {
+    /// Begin a new validation run. Cancels the previous run's token and
+    /// returns a fresh, uncancelled token for this run.
+    ///
+    /// Cancelling the prior token means a new run can never leave an
+    /// orphaned, unstoppable run behind (B6) — the "current" token is always
+    /// the one `cancel()`/Stop acts on. Returning a *fresh* token means every
+    /// run starts clean: a command that instead reused `get_token()` after a
+    /// Stop/Pause would inherit an already-cancelled token and silently do
+    /// nothing (B5 — this is what made "Retry unknowns" return [] after a
+    /// Stop). Both run-starting commands must call this and use the returned
+    /// token.
+    pub fn begin_run(&self) -> CancellationToken {
         let mut token = self.token.lock().unwrap();
+        token.cancel();
         *token = CancellationToken::new();
+        token.clone()
     }
 
     pub fn get_token(&self) -> CancellationToken {
@@ -573,6 +586,14 @@ pub fn calculate_rate_interval(config: &RateLimiterConfig) -> Duration {
     Duration::from_millis(1000 / config.max_per_second as u64)
 }
 
+/// Clamp the user-supplied concurrency to a safe range (B9).
+/// 0 would make `buffer_unordered(0)` never poll its source stream (it waits
+/// for items that can never be polled), hanging the run until Stop. Unbounded
+/// values would open hundreds of simultaneous port-25 sessions from one IP.
+pub fn clamp_concurrency(concurrency: usize) -> usize {
+    concurrency.clamp(1, 64)
+}
+
 pub async fn validate_emails_bulk_core<F>(
     emails: Vec<String>,
     concurrency: usize,
@@ -612,6 +633,9 @@ where
 {
     use futures::stream::{self, StreamExt};
     use tokio::time::sleep;
+
+    // Clamp concurrency: 0 hangs the run, huge values flood port 25 (B9).
+    let concurrency = clamp_concurrency(concurrency);
 
     let mut results = Vec::with_capacity(emails.len());
     let mode_clone = mode.clone();
@@ -687,6 +711,9 @@ where
     F: Fn(ValidationResult) + Send + Sync,
 {
     use futures::stream::{self, StreamExt};
+
+    // Clamp concurrency (B9) — same hang/flood protection as the bulk core.
+    let concurrency = clamp_concurrency(concurrency);
 
     let mut results = Vec::with_capacity(items.len());
     let mode_clone = mode.clone();
@@ -941,8 +968,12 @@ mod tests {
         let proxy = ProxyConfig::new("192.168.1.1".to_string(), 8080);
         let result = validate_email("test@gmail.com".to_string(), "quick".to_string(), Some(proxy)).await;
         assert_eq!(result.validation_mode, "quick");
-        // Quick mode doesn't use proxy for SMTP (no SMTP)
-        assert!(result.proxy_id.is_some());
+        // B4: quick mode never performs an SMTP conversation, so it does not
+        // actually exercise the (rotated) proxy. It must not attribute a
+        // proxy_id — doing so mislabels the result and feeds quick-mode
+        // Unknowns into proxy failure stats.
+        assert!(result.proxy_id.is_none());
+        assert_eq!(result.proxy_outcome, ProxyOutcome::Neutral);
     }
 
     #[test]
@@ -1037,5 +1068,37 @@ mod tests {
         assert!(vm_no_proxy
             .get_proxy(check_if_email_exists::smtp::verif_method::EmailProvider::EverythingElse)
             .is_none());
+    }
+
+    // B5/B6: begin_run must hand out a fresh, uncancelled token every time,
+    // so a run that starts after a Stop/Pause (which cancels the current
+    // token) is not born already-cancelled.
+    #[test]
+    fn test_begin_run_returns_fresh_uncancelled_token() {
+        let state = ValidationState::default();
+
+        // Simulate a Stop: cancel the current run.
+        state.cancel();
+
+        // A new run gets a token that is NOT cancelled (B5) and is a
+        // distinct token from the one Stop acted on (B6).
+        let token = state.begin_run();
+        assert!(!token.is_cancelled());
+
+        // Stop again; the next begin_run is still fresh.
+        state.cancel();
+        assert!(token.is_cancelled());
+        let token2 = state.begin_run();
+        assert!(!token2.is_cancelled());
+    }
+
+    // B9: concurrency must be clamped to [1, 64].
+    #[test]
+    fn test_clamp_concurrency() {
+        assert_eq!(clamp_concurrency(0), 1);
+        assert_eq!(clamp_concurrency(1), 1);
+        assert_eq!(clamp_concurrency(10), 10);
+        assert_eq!(clamp_concurrency(64), 64);
+        assert_eq!(clamp_concurrency(1000), 64);
     }
 }

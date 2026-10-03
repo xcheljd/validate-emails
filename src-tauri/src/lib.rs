@@ -168,9 +168,9 @@ async fn validate_emails_bulk(
     concurrency: usize,
     mode: String,
 ) -> Result<Vec<validation::ValidationResult>, String> {
-    // Reset token so a new validation always starts clean regardless of
-    // whether a previous run was paused or stopped (which cancels the token).
-    validation_state.reset();
+    // Begin a new run: cancels any prior run and returns a fresh, uncancelled
+    // token so this run starts clean even after a Stop/Pause.
+    let token = validation_state.begin_run();
 
     let proxy_state = prepare_proxy_state(&window, &settings_state).await?;
 
@@ -178,7 +178,7 @@ async fn validate_emails_bulk(
     let results = validation::validate_emails_bulk_core(
         emails,
         concurrency,
-        validation_state.get_token(),
+        token,
         mode,
         proxy_state,
         move |res| {
@@ -201,13 +201,17 @@ async fn revalidate_emails_bulk(
     concurrency: usize,
     mode: String,
 ) -> Result<Vec<validation::ValidationResult>, String> {
+    // Begin a new run. Without this, a prior Stop/Pause would leave the
+    // shared token cancelled, and revalidate would silently return [] (B5).
+    let token = validation_state.begin_run();
+
     let proxy_state = prepare_proxy_state(&window, &settings_state).await?;
 
     let window_for_progress = window.clone();
     let results = validation::revalidate_emails_bulk_core(
         items,
         concurrency,
-        validation_state.get_token(),
+        token,
         mode,
         proxy_state,
         move |res| {
@@ -228,7 +232,7 @@ fn pause_validation(state: tauri::State<'_, validation::ValidationState>) {
 
 #[tauri::command]
 fn resume_validation(state: tauri::State<'_, validation::ValidationState>) {
-    state.reset();
+    state.begin_run();
 }
 
 #[tauri::command]
