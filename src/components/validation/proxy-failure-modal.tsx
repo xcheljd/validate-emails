@@ -8,7 +8,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { AlertTriangle, Clock, XCircle, Timer } from 'lucide-react';
+import { AlertTriangle, Clock, XCircle, Timer, RotateCcw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { FailedProxyInfo } from '@/hooks/validation-types';
 
@@ -24,6 +24,9 @@ export interface ProxyFailureModalProps {
   onContinueWithoutProxy: () => void;
   onRetryWithCooldown: () => void;
   onStop: () => void;
+  /** Number of auto-disabled proxies (these need a manual re-enable). */
+  autoDisabledCount?: number;
+  onReEnableAndResume?: () => void;
 }
 
 function formatCooldownTime(seconds: number): string {
@@ -48,6 +51,8 @@ export function ProxyFailureModal({
   onContinueWithoutProxy,
   onRetryWithCooldown,
   onStop,
+  autoDisabledCount = 0,
+  onReEnableAndResume,
 }: ProxyFailureModalProps) {
   return (
     <Dialog
@@ -156,6 +161,16 @@ export function ProxyFailureModal({
               'Retry with Cooldown'
             )}
           </Button>
+          {autoDisabledCount > 0 && onReEnableAndResume && (
+            <Button
+              variant="outline"
+              onClick={onReEnableAndResume}
+              className="w-full sm:w-auto"
+            >
+              <RotateCcw className="h-4 w-4 mr-2" />
+              Re-enable &amp; Resume ({autoDisabledCount})
+            </Button>
+          )}
           <Button onClick={onContinueWithoutProxy} className="w-full sm:w-auto">
             Continue without Proxy
           </Button>

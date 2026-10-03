@@ -58,6 +58,7 @@ interface ValidationDashboardProps {
   allProxiesFailedState?: AllProxiesFailedPayload | null;
   onContinueWithoutProxy?: () => void;
   onRetryWithCooldown?: () => void;
+  onReEnableAndResume?: () => void;
   // Direct connection indicator
   usingDirectConnection?: boolean;
   // Waiting for proxy cooldown
@@ -91,6 +92,7 @@ export function ValidationDashboard({
   allProxiesFailedState,
   onContinueWithoutProxy,
   onRetryWithCooldown,
+  onReEnableAndResume,
   usingDirectConnection = false,
   waitingForProxy = false,
   waitingCooldownSecs = 0,
@@ -184,7 +186,10 @@ export function ValidationDashboard({
   };
 
   const isPaused = status === 'paused';
-  const isWaiting = status === 'waiting';
+  // 'waiting' = the UI is counting down before re-dispatching; a
+  // 'processing' run with waitingForProxy = the backend is waiting in place.
+  const isWaiting =
+    status === 'waiting' || (status === 'processing' && waitingForProxy);
 
   return (
     <div className="space-y-4 md:space-y-6 w-full max-w-6xl mx-auto animate-in fade-in duration-500">
@@ -497,6 +502,11 @@ export function ValidationDashboard({
           badCount={allProxiesFailedState.badCount}
           cooldownCount={allProxiesFailedState.cooldownCount}
           nearestCooldownSecs={allProxiesFailedState.nearestCooldownSecs}
+          autoDisabledCount={
+            allProxiesFailedState.failedProxies.filter((p) => p.autoDisabled)
+              .length
+          }
+          onReEnableAndResume={onReEnableAndResume}
           onContinueWithoutProxy={() => {
             onContinueWithoutProxy?.();
           }}

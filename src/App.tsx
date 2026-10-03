@@ -127,7 +127,7 @@ function AppContent() {
   const [diffSessionB, setDiffSessionB] = useState<ValidationSession | null>(null);
 
   // Read settings from shared context — no more stale independent useState
-  const { settings } = useSettings();
+  const { settings, reEnableProxy } = useSettings();
 
   const {
     results,
@@ -153,6 +153,7 @@ function AppContent() {
     allProxiesFailedState,
     continueWithoutProxy,
     retryWithCooldown,
+    reEnableAndResume,
     usingDirectConnection,
     waitingForProxy,
     waitingCooldownSecs,
@@ -582,6 +583,7 @@ function AppContent() {
                   allProxiesFailedState={allProxiesFailedState}
                   onContinueWithoutProxy={continueWithoutProxy}
                   onRetryWithCooldown={retryWithCooldown}
+                  onReEnableAndResume={() => reEnableAndResume(reEnableProxy)}
                   usingDirectConnection={usingDirectConnection}
                   waitingForProxy={waitingForProxy}
                   waitingCooldownSecs={waitingCooldownSecs}

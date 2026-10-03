@@ -122,6 +122,26 @@ describe('ProxyFailureModal', () => {
     });
   });
 
+  describe('re-enable & resume', () => {
+    it('is hidden when no proxy is auto-disabled', () => {
+      render(<ProxyFailureModal {...defaultProps} onReEnableAndResume={vi.fn()} />);
+      expect(screen.queryByRole('button', { name: /re-enable/i })).toBeNull();
+    });
+
+    it('calls onReEnableAndResume when proxies are auto-disabled', () => {
+      const onReEnableAndResume = vi.fn();
+      render(
+        <ProxyFailureModal
+          {...defaultProps}
+          autoDisabledCount={2}
+          onReEnableAndResume={onReEnableAndResume}
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: /re-enable & resume \(2\)/i }));
+      expect(onReEnableAndResume).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('interactions', () => {
     it('calls onContinueWithoutProxy when Continue button is clicked', () => {
       const onContinueWithoutProxy = vi.fn();

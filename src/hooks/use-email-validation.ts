@@ -12,6 +12,7 @@ import {
   type RateLimitFailureState,
   type ValidationStateForTest,
   type RunOutcome,
+  type WaitingForProxyPayload,
   SLOWDOWN_THRESHOLD,
   AUTO_PAUSE_THRESHOLD,
   toRunOutcome,
@@ -75,6 +76,9 @@ export function useEmailValidation(
   // Highest backend run id seen. Events stamped with an older run id come
   // from a superseded run and are ignored.
   const latestRunIdRef = useRef(0);
+  // In-run wait for a proxy cooldown (backend-driven; the run is still live).
+  const backendWaitTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const backendWaitingRef = useRef(false);
 
   // Keep refs in sync for use in callbacks and effects
   useEffect(() => {
@@ -107,11 +111,44 @@ export function useEmailValidation(
     return false;
   };
 
+  // The backend is waiting in place for a proxy cooldown: show a
+  // non-blocking countdown banner. The run stays 'processing' (Pause/Stop
+  // keep working) and resumes by itself, so nothing is re-dispatched here.
+  const beginBackendWait = useCallback((payload: WaitingForProxyPayload) => {
+    if (backendWaitTimerRef.current) {
+      clearInterval(backendWaitTimerRef.current);
+    }
+    backendWaitingRef.current = true;
+    setWaitingForProxy(true);
+    setWaitingCooldownSecs(payload.nearestCooldownSecs);
+    const endTime = Date.now() + payload.nearestCooldownSecs * 1000;
+    backendWaitTimerRef.current = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+      setWaitingCooldownSecs(remaining);
+      if (remaining <= 0 && backendWaitTimerRef.current) {
+        clearInterval(backendWaitTimerRef.current);
+        backendWaitTimerRef.current = null;
+      }
+    }, 1000);
+  }, []);
+
+  const endBackendWait = useCallback(() => {
+    if (backendWaitTimerRef.current) {
+      clearInterval(backendWaitTimerRef.current);
+      backendWaitTimerRef.current = null;
+    }
+    if (!backendWaitingRef.current) return;
+    backendWaitingRef.current = false;
+    setWaitingForProxy(false);
+    setWaitingCooldownSecs(0);
+  }, []);
+
   // Apply a finished run's outcome to the status. Only a run that validated
   // every email returns the UI to idle; a run that paused itself for lack of
   // a proxy stays paused (whether or not its event arrived first); a
   // cancelled run leaves status to whoever cancelled it.
   const settleRun = useCallback((outcome: RunOutcome) => {
+    endBackendWait();
     if (outcome.stopReason === 'paused_no_proxy') {
       if (statusRef.current === 'processing') {
         setStatus('paused');
@@ -120,7 +157,7 @@ export function useEmailValidation(
     } else if (outcome.stopReason === null && statusRef.current === 'processing') {
       setStatus('idle');
     }
-  }, []);
+  }, [endBackendWait]);
 
   // Save session progress to backend (fire-and-forget with error logging)
   const saveSession = useCallback(
@@ -204,6 +241,7 @@ export function useEmailValidation(
       validationProgress: undefined as (() => void) | undefined,
       allProxiesFailed: undefined as (() => void) | undefined,
       runStarted: undefined as (() => void) | undefined,
+      waitingForProxy: undefined as (() => void) | undefined,
     };
     let isActive = true;
 
@@ -217,11 +255,22 @@ export function useEmailValidation(
         );
         unlistenRefs.runStarted = unlistenRunStartedFn;
 
+        const unlistenWaitingFn = await listen<WaitingForProxyPayload>(
+          'waiting-for-proxy',
+          (event) => {
+            if (isStaleRun(event.payload.runId)) return;
+            beginBackendWait(event.payload);
+          }
+        );
+        unlistenRefs.waitingForProxy = unlistenWaitingFn;
+
         const unlistenProgressFn = await listen<ValidationResult & { runId?: number }>(
           'validation-progress',
           (event) => {
             const { runId, ...result } = event.payload;
             if (isStaleRun(runId)) return;
+            // A result means the run got a proxy again.
+            endBackendWait();
             // Progress counts distinct emails seen. Re-validating an email that
             // is already in results (a retry) updates it in place and must NOT
             // advance progress — otherwise progress would exceed total. This also
@@ -271,6 +320,7 @@ export function useEmailValidation(
           'all-proxies-failed',
           (event) => {
             if (isStaleRun(event.payload.runId)) return;
+            endBackendWait();
             setAllProxiesFailedState(event.payload);
             setStatus('paused');
             statusRef.current = 'paused';
@@ -279,6 +329,7 @@ export function useEmailValidation(
 
         if (!isActive) {
           unlistenRunStartedFn();
+          unlistenWaitingFn();
           unlistenProgressFn();
           unlistenProxiesFailedFn();
         } else {
@@ -288,6 +339,7 @@ export function useEmailValidation(
       } catch (err) {
         // If setup fails, clean up any partially registered listeners
         if (unlistenRefs.runStarted) unlistenRefs.runStarted();
+        if (unlistenRefs.waitingForProxy) unlistenRefs.waitingForProxy();
         if (unlistenRefs.validationProgress) unlistenRefs.validationProgress();
         if (unlistenRefs.allProxiesFailed) unlistenRefs.allProxiesFailed();
         throw err;
@@ -299,10 +351,11 @@ export function useEmailValidation(
     return () => {
       isActive = false;
       if (unlistenRefs.runStarted) unlistenRefs.runStarted();
+      if (unlistenRefs.waitingForProxy) unlistenRefs.waitingForProxy();
       if (unlistenRefs.validationProgress) unlistenRefs.validationProgress();
       if (unlistenRefs.allProxiesFailed) unlistenRefs.allProxiesFailed();
     };
-  }, []);
+  }, [beginBackendWait, endBackendWait]);
 
   const mutation = useMutation({
     mutationFn: async ({
@@ -383,8 +436,9 @@ export function useEmailValidation(
       clearInterval(waitingTimerRef.current);
       waitingTimerRef.current = null;
     }
+    endBackendWait();
     await invoke('pause_validation');
-  }, []);
+  }, [endBackendWait]);
 
   // Auto-pause effect: when rate limit failure state triggers auto-pause
   useEffect(() => {
@@ -613,6 +667,7 @@ export function useEmailValidation(
     statusRef.current = 'idle';
     // Clear all proxy failure state so the modal closes
     setAllProxiesFailedState(null);
+    endBackendWait();
     setWaitingForProxy(false);
     setWaitingCooldownSecs(0);
     // Reset rate limit failure state
@@ -626,7 +681,7 @@ export function useEmailValidation(
     setEscalationTier(1);
     setEscalationEmailCount(0);
     // We don't reset progress/total here because the user might want to see the partial results
-  }, [saveSession]);
+  }, [saveSession, endBackendWait]);
 
   // Clear the all-proxies-failed state
   const clearAllProxiesFailedState = useCallback(() => {
@@ -734,12 +789,55 @@ export function useEmailValidation(
     }, 1000);
   }, [allProxiesFailedState, mutation, validationMode]);
 
+  // Re-enable & resume: auto-disabled proxies never come back on their own
+  // (retryWithCooldown only helps proxies that are cooling down), so
+  // re-enable each one, then resume the emails the paused run didn't
+  // dispatch. `reEnable` defaults to the backend command; callers inside
+  // SettingsProvider pass its reEnableProxy so the settings view stays in
+  // sync. If a re-enable didn't take, the resumed run's precheck re-raises
+  // all-proxies-failed — it never falls back to a direct connection.
+  const reEnableAndResume = useCallback(
+    async (
+      reEnable: (proxyId: string) => Promise<void> = (proxyId) =>
+        invoke('re_enable_proxy', { proxyId })
+    ) => {
+      const disabled =
+        allProxiesFailedState?.failedProxies.filter((p) => p.autoDisabled) ?? [];
+      if (disabled.length === 0) return;
+      try {
+        for (const proxy of disabled) {
+          await reEnable(proxy.id);
+        }
+      } catch (error) {
+        console.error('Failed to re-enable proxies:', error);
+        notifyError(
+          error instanceof Error ? error.message : 'Failed to re-enable proxies'
+        );
+        return;
+      }
+
+      setAllProxiesFailedState(null);
+      setStatus('processing');
+      statusRef.current = 'processing';
+      mutation.mutate({
+        emails: pendingEmailsRef.current,
+        concurrency: currentConcurrencyRef.current,
+        mode: validationMode,
+      });
+    },
+    [allProxiesFailedState, mutation, validationMode]
+  );
+
   // Cleanup timer on unmount
   useEffect(() => {
     return () => {
       if (waitingTimerRef.current) {
         clearInterval(waitingTimerRef.current);
         waitingTimerRef.current = null;
+      }
+      if (backendWaitTimerRef.current) {
+        clearInterval(backendWaitTimerRef.current);
+        backendWaitTimerRef.current = null;
       }
     };
   }, []);
@@ -840,6 +938,7 @@ export function useEmailValidation(
     clearAllProxiesFailedState,
     continueWithoutProxy,
     retryWithCooldown,
+    reEnableAndResume,
     // Direct connection indicator
     usingDirectConnection,
     // Waiting for proxy cooldown state
