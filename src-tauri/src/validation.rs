@@ -618,20 +618,31 @@ fn smtp_verdict_reason(reachable: &Reachable, smtp: &SmtpDetails, misc: Option<&
 
 /// Short (error_type, reason) for an SMTP failure. Categories line up with
 /// `classify_smtp_error`: Socks / SmtpBlacklisted / NeedsRDNS are the
-/// proxy's fault; Timeout / IO / Other are neutral. Only the error's Display
-/// text (truncated) is kept — never the SMTP transcript.
+/// proxy's fault; SmtpTransient / SmtpPermanent / Timeout / IO / Other are
+/// neutral. SmtpTransient is a 4xx reply (greylisting, "try again later",
+/// mailbox busy) and SmtpPermanent a 5xx reply, neither carrying an
+/// IP-reputation description; IO is a connection-level failure. Only the
+/// error's Display text (truncated) is kept — never the SMTP transcript.
 fn classify_smtp_error_detail(err: &SmtpError) -> (&'static str, String) {
+    use async_smtp::error::Error as AsyncSmtpError;
+
     let detail = truncate_chars(&err.to_string(), MAX_REASON_DETAIL_CHARS);
     match err {
         SmtpError::Socks5(_) => ("Socks", detail),
-        SmtpError::AsyncSmtpError(_) => match err.get_description() {
+        SmtpError::AsyncSmtpError(inner) => match err.get_description() {
             Some(SmtpErrorDesc::IpBlacklisted) => {
                 ("SmtpBlacklisted", format!("IP blacklisted / policy rejection: {}", detail))
             }
             Some(SmtpErrorDesc::NeedsRDNS) => {
                 ("NeedsRDNS", format!("Proxy IP needs reverse DNS: {}", detail))
             }
-            None => ("IO", detail),
+            // Display already reads "SMTP error: transient: ..." /
+            // "SMTP error: permanent: ...", so the detail stands alone.
+            None => match inner {
+                AsyncSmtpError::Transient(_) => ("SmtpTransient", detail),
+                AsyncSmtpError::Permanent(_) => ("SmtpPermanent", detail),
+                _ => ("IO", detail),
+            },
         },
         SmtpError::Timeout(_) => ("Timeout", "SMTP connection/operation timed out".to_string()),
         SmtpError::IOError(_) => ("IO", detail),
@@ -1569,8 +1580,35 @@ mod tests {
                     Severity::TransientNegativeCompletion,
                     "4.7.1 Greylisted, please try again later",
                 ))),
-                "IO",
+                "SmtpTransient",
                 "Greylisted",
+            ),
+            (
+                "mailbox busy (transient 450)",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Transient(smtp_response(
+                    Severity::TransientNegativeCompletion,
+                    "4.2.1 Mailbox busy, try again later",
+                ))),
+                "SmtpTransient",
+                "transient: 4.2.1 Mailbox busy",
+            ),
+            (
+                "user unknown (permanent 550)",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Permanent(smtp_response(
+                    Severity::PermanentNegativeCompletion,
+                    "5.1.1 User unknown",
+                ))),
+                "SmtpPermanent",
+                "permanent: 5.1.1 User unknown",
+            ),
+            (
+                "async-smtp connection refused",
+                SmtpError::AsyncSmtpError(AsyncSmtpError::Io(io::Error::new(
+                    io::ErrorKind::ConnectionRefused,
+                    "connection refused",
+                ))),
+                "IO",
+                "connection refused",
             ),
             (
                 "async-smtp io",

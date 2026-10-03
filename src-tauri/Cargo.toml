@@ -35,6 +35,9 @@ reqwest = { version = "0.12", features = ["json"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "1.0"
+# Already pulled in by check-if-email-exists v0.11.6 (same version); named
+# directly so the error classifier can tell 4xx from 5xx replies.
+async-smtp = "0.9"
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
@@ -42,7 +45,6 @@ mockall = "0.14.0"
 wiremock = "0.6.5"
 # Used only to construct upstream SmtpError variants in classifier tests;
 # versions match what check-if-email-exists v0.11.6 already pulls in.
-async-smtp = "0.9"
 fast-socks5 = "0.9"
 anyhow = "1"
 # Paused virtual time for cooldown-wait tests (tokio::test(start_paused)).
