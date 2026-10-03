@@ -15,20 +15,47 @@ pub async fn save_settings(
     state: tauri::State<'_, SettingsState>,
     settings: Settings,
 ) -> Result<(), String> {
-    let json = {
+    {
         let mut current = state.settings.write().await;
-        *current = settings;
-        serde_json::to_string_pretty(&*current)
-            .map_err(|e| format!("Failed to serialize settings: {}", e))?
-    }; // write lock released before I/O
+        // Update only the general fields. `proxy_pool` is managed by the
+        // dedicated proxy commands and is NOT round-tripped by the frontend,
+        // so the incoming value is always the serde default. Overwriting it
+        // would wipe the live pool (proxies, domain assignments, stats,
+        // cooldowns, enabled flag) on every general-settings save, silently
+        // falling back to a direct connection (B2).
+        current.validation_mode = settings.validation_mode;
+        current.timeout_ms = settings.timeout_ms;
+        current.concurrency = settings.concurrency;
+        current.max_retries = settings.max_retries;
+        current.auto_save_interval = settings.auto_save_interval;
+        current.history_retention_days = settings.history_retention_days;
+        current.rate_limiter = settings.rate_limiter;
+        current.max_emails_per_session = settings.max_emails_per_session;
+    } // write lock released before I/O
+    persist_settings(state).await
+}
 
-    if let Some(parent) = state.settings_path.parent() {
+/// Serialize the current settings — including the live proxy pool — to disk.
+/// The proxy-mutating commands call this so the pool survives a restart;
+/// previously only `save_settings` wrote to disk (and it wiped the pool),
+/// leaving proxies effectively memory-only (B10).
+pub async fn persist_settings(
+    state: tauri::State<'_, SettingsState>,
+) -> Result<(), String> {
+    let (json, path) = {
+        let current = state.settings.read().await;
+        let json = serde_json::to_string_pretty(&*current)
+            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+        (json, state.settings_path.clone())
+    }; // read lock released before I/O
+
+    if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|e| format!("Failed to create settings directory: {}", e))?;
     }
 
-    tokio::fs::write(&state.settings_path, json)
+    tokio::fs::write(&path, json)
         .await
         .map_err(|e| format!("Failed to write settings: {}", e))
 }
@@ -37,9 +64,13 @@ pub async fn save_settings(
 pub async fn reset_settings(
     state: tauri::State<'_, SettingsState>,
 ) -> Result<Settings, String> {
-    let mut settings = state.settings.write().await;
-    *settings = Settings::default();
-    Ok(settings.clone())
+    let settings = {
+        let mut settings = state.settings.write().await;
+        *settings = Settings::default();
+        settings.clone()
+    };
+    persist_settings(state).await?;
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -47,9 +78,11 @@ pub async fn update_validator_config(
     state: tauri::State<'_, SettingsState>,
     rate_limiter: RateLimiterConfig,
 ) -> Result<(), String> {
-    let mut settings = state.settings.write().await;
-    settings.rate_limiter = rate_limiter;
-    Ok(())
+    {
+        let mut settings = state.settings.write().await;
+        settings.rate_limiter = rate_limiter;
+    }
+    persist_settings(state).await
 }
 
 #[tauri::command]
@@ -70,8 +103,11 @@ pub async fn add_proxy(
     state: tauri::State<'_, SettingsState>,
     proxy: ProxyConfig,
 ) -> Result<(), String> {
-    let mut settings = state.settings.write().await;
-    settings.proxy_pool.add_proxy(proxy)
+    {
+        let mut settings = state.settings.write().await;
+        settings.proxy_pool.add_proxy(proxy)?;
+    }
+    persist_settings(state).await
 }
 
 /// Update an existing proxy in the pool
@@ -81,8 +117,11 @@ pub async fn update_proxy(
     old_id: String,
     proxy: ProxyConfig,
 ) -> Result<(), String> {
-    let mut settings = state.settings.write().await;
-    settings.proxy_pool.update_proxy(&old_id, proxy)
+    {
+        let mut settings = state.settings.write().await;
+        settings.proxy_pool.update_proxy(&old_id, proxy)?;
+    }
+    persist_settings(state).await
 }
 
 /// Delete a proxy from the pool
@@ -91,8 +130,14 @@ pub async fn delete_proxy(
     state: tauri::State<'_, SettingsState>,
     id: String,
 ) -> Result<bool, String> {
-    let mut settings = state.settings.write().await;
-    Ok(settings.proxy_pool.remove_proxy(&id))
+    let removed = {
+        let mut settings = state.settings.write().await;
+        settings.proxy_pool.remove_proxy(&id)
+    };
+    if removed {
+        persist_settings(state).await?;
+    }
+    Ok(removed)
 }
 
 /// Get all proxies from the pool
@@ -109,9 +154,11 @@ pub async fn get_proxies(
 pub async fn clear_proxies(
     state: tauri::State<'_, SettingsState>,
 ) -> Result<(), String> {
-    let mut settings = state.settings.write().await;
-    settings.proxy_pool.clear();
-    Ok(())
+    {
+        let mut settings = state.settings.write().await;
+        settings.proxy_pool.clear();
+    }
+    persist_settings(state).await
 }
 
 /// Get the entire proxy pool configuration
@@ -130,14 +177,16 @@ pub async fn update_proxy_pool_config(
     enabled: Option<bool>,
     rotation_mode: Option<RotationMode>,
 ) -> Result<(), String> {
-    let mut settings = state.settings.write().await;
-    if let Some(e) = enabled {
-        settings.proxy_pool.enabled = e;
+    {
+        let mut settings = state.settings.write().await;
+        if let Some(e) = enabled {
+            settings.proxy_pool.enabled = e;
+        }
+        if let Some(rm) = rotation_mode {
+            settings.proxy_pool.rotation_mode = rm;
+        }
     }
-    if let Some(rm) = rotation_mode {
-        settings.proxy_pool.rotation_mode = rm;
-    }
-    Ok(())
+    persist_settings(state).await
 }
 
 /// Assign a proxy to a specific domain
@@ -147,8 +196,11 @@ pub async fn assign_domain_proxy(
     domain: String,
     proxy_id: String,
 ) -> Result<(), String> {
-    let mut settings = state.settings.write().await;
-    settings.proxy_pool.assign_domain(domain, proxy_id)
+    {
+        let mut settings = state.settings.write().await;
+        settings.proxy_pool.assign_domain(domain, proxy_id)?;
+    }
+    persist_settings(state).await
 }
 
 /// Remove a domain proxy assignment
@@ -157,8 +209,14 @@ pub async fn unassign_domain_proxy(
     state: tauri::State<'_, SettingsState>,
     domain: String,
 ) -> Result<bool, String> {
-    let mut settings = state.settings.write().await;
-    Ok(settings.proxy_pool.unassign_domain(&domain))
+    let removed = {
+        let mut settings = state.settings.write().await;
+        settings.proxy_pool.unassign_domain(&domain)
+    };
+    if removed {
+        persist_settings(state).await?;
+    }
+    Ok(removed)
 }
 
 // =====================
@@ -246,9 +304,11 @@ pub async fn set_auto_disable_threshold(
     state: tauri::State<'_, SettingsState>,
     threshold: AutoDisableThreshold,
 ) -> Result<(), String> {
-    let mut settings = state.settings.write().await;
-    settings.proxy_pool.set_auto_disable_threshold(threshold);
-    Ok(())
+    {
+        let mut settings = state.settings.write().await;
+        settings.proxy_pool.set_auto_disable_threshold(threshold);
+    }
+    persist_settings(state).await
 }
 
 /// Re-enable an auto-disabled proxy
@@ -257,9 +317,11 @@ pub async fn re_enable_proxy(
     state: tauri::State<'_, SettingsState>,
     proxy_id: String,
 ) -> Result<(), String> {
-    let mut settings = state.settings.write().await;
-    settings.proxy_pool.re_enable_proxy(&proxy_id);
-    Ok(())
+    {
+        let mut settings = state.settings.write().await;
+        settings.proxy_pool.re_enable_proxy(&proxy_id);
+    }
+    persist_settings(state).await
 }
 
 /// Record a successful validation for a proxy with duration tracking
@@ -324,9 +386,11 @@ pub async fn set_cooldown_duration(
     state: tauri::State<'_, SettingsState>,
     duration_secs: u64,
 ) -> Result<(), String> {
-    let mut settings = state.settings.write().await;
-    settings.proxy_pool.set_cooldown_duration(duration_secs);
-    Ok(())
+    {
+        let mut settings = state.settings.write().await;
+        settings.proxy_pool.set_cooldown_duration(duration_secs);
+    }
+    persist_settings(state).await
 }
 
 // =====================
