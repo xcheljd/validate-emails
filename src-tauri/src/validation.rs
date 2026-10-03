@@ -11,7 +11,7 @@ use std::time::{Instant, Duration};
 use std::collections::HashMap;
 use check_if_email_exists::{check_email, CheckEmailInputBuilder, CheckEmailInputProxy, Reachable};
 use check_if_email_exists::syntax::check_syntax;
-use check_if_email_exists::mx::check_mx;
+use check_if_email_exists::mx::{check_mx, MxDetails, MxError};
 use check_if_email_exists::misc::check_misc;
 use check_if_email_exists::smtp::{SmtpDetails, SmtpError, SmtpErrorDesc};
 use check_if_email_exists::smtp::verif_method::{
@@ -474,13 +474,7 @@ async fn validate_email_full(
     let is_valid_syntax = output.syntax.is_valid_syntax;
     let suggestion = output.syntax.suggestion;
 
-    let mx_record_count = match &output.mx {
-        Ok(mx) => match &mx.lookup {
-            Ok(lookup) => lookup.iter().count() as u32,
-            Err(_) => 0,
-        },
-        Err(_) => 1,
-    };
+    let mx_record_count = full_mode_mx_record_count(&output.mx);
 
     let (is_disposable, is_role_account, is_b2c, gravatar_url, haveibeenpwned) = match &output.misc {
         Ok(misc) => (
@@ -538,6 +532,18 @@ async fn validate_email_full(
     .with_haveibeenpwned(haveibeenpwned)
     .with_risk_score(risk_score)
     .with_proxy_outcome(proxy_outcome)
+}
+
+/// Number of MX records found. A failed lookup (`Err` — DNS error) means
+/// zero known records, same as an empty/NXDOMAIN lookup (B15).
+fn full_mode_mx_record_count(mx: &Result<MxDetails, MxError>) -> u32 {
+    match mx {
+        Ok(mx) => match &mx.lookup {
+            Ok(lookup) => lookup.iter().count() as u32,
+            Err(_) => 0,
+        },
+        Err(_) => 0,
+    }
 }
 
 /// Map the SMTP step's result to a proxy-health outcome.
@@ -1397,6 +1403,17 @@ mod tests {
         assert_eq!(clamp_concurrency(10), 10);
         assert_eq!(clamp_concurrency(64), 64);
         assert_eq!(clamp_concurrency(1000), 64);
+    }
+
+    // A failed MX lookup (DNS error) is 0 known MX records, not 1 (B15).
+    #[test]
+    fn test_full_mode_mx_record_count_dns_failure_is_zero() {
+        use std::io;
+        let dns_err: Result<MxDetails, MxError> =
+            Err(MxError::IoError(io::Error::new(io::ErrorKind::Other, "dns failure")));
+        assert_eq!(full_mode_mx_record_count(&dns_err), 0);
+        // Lookup ran but found nothing (default lookup is Err) → 0.
+        assert_eq!(full_mode_mx_record_count(&Ok(MxDetails::default())), 0);
     }
 
     fn smtp_response(severity: async_smtp::response::Severity, msg: &str) -> async_smtp::response::Response {
