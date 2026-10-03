@@ -1055,7 +1055,9 @@ where
 /// When `rate_config` is provided, dispatches strictly sequentially with the
 /// minimum interval between dispatches (see AGENTS.md: deliberate v1
 /// trade-off). Proxy selection, live health and drain handling are the same
-/// either way.
+/// either way, and so is cancellation (B14): the rate-limit sleep races the
+/// token, and on cancel the outer loop drops the stream, so an in-flight
+/// validation is abandoned rather than awaited.
 pub async fn validate_emails_bulk_with_rate_limit<V, Fut, S>(
     emails: Vec<String>,
     concurrency: usize,
@@ -2582,5 +2584,103 @@ mod run_tests {
         assert!(calls.lock().unwrap().iter().all(|c| c.is_some()));
         assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_PAUSED_NO_PROXY));
         assert_eq!(log.failed_count(), 1);
+    }
+    /// Validator for the B14 tests: counts calls started and calls that ran
+    /// to completion, each taking `delay` (virtual time).
+    fn counting_slow(
+        started: &Arc<AtomicUsize>,
+        completed: &Arc<AtomicUsize>,
+        delay: Duration,
+    ) -> impl Fn(String, Option<ProxyConfig>) -> BoxFut + Send + Sync {
+        let started = started.clone();
+        let completed = completed.clone();
+        move |email, proxy| {
+            started.fetch_add(1, Ordering::SeqCst);
+            let completed = completed.clone();
+            Box::pin(async move {
+                sleep(delay).await;
+                completed.fetch_add(1, Ordering::SeqCst);
+                fake_result(&email, &proxy, ProxyOutcome::Neutral)
+            })
+        }
+    }
+
+    fn one_per_second() -> Option<RateLimiterConfig> {
+        Some(RateLimiterConfig { max_per_second: 1, max_per_minute: 60 })
+    }
+
+    // B14: Stop during an in-flight validation in the rate-limited branch
+    // returns at once with the partial results; the in-flight validator is
+    // dropped, not awaited, and nothing else is dispatched.
+    #[tokio::test(start_paused = true)]
+    async fn test_rate_limited_cancel_mid_validation() {
+        let token = CancellationToken::new();
+        let started = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(AtomicUsize::new(0));
+        // email0 runs t=0..10, 1s gap, email1 starts at t=11; Stop at t=15.
+        let canceller = token.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_secs(15)).await;
+            canceller.cancel();
+        });
+        let t0 = tokio::time::Instant::now();
+        let outcome = validate_emails_bulk_with_rate_limit(
+            emails(10),
+            4,
+            token,
+            ProxyPolicy::direct(),
+            counting_slow(&started, &completed, Duration::from_secs(10)),
+            sink(&Arc::new(EventLog::default())),
+            one_per_second(),
+        )
+        .await;
+        let elapsed = t0.elapsed();
+
+        assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_CANCELLED));
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].email, "user0@example.com");
+        // Returned at the Stop, not when email1's validation (t=21) finished.
+        assert_eq!(elapsed, Duration::from_secs(15));
+        assert_eq!(started.load(Ordering::SeqCst), 2);
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+
+        // Long after: the dropped validation never completed, and no further
+        // email was dispatched.
+        sleep(Duration::from_secs(120)).await;
+        assert_eq!(started.load(Ordering::SeqCst), 2);
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+    }
+
+    // B14: Stop during the inter-email rate-limit sleep returns at once and
+    // never dispatches the next email.
+    #[tokio::test(start_paused = true)]
+    async fn test_rate_limited_cancel_during_rate_sleep() {
+        let token = CancellationToken::new();
+        let started = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(AtomicUsize::new(0));
+        // email0 runs t=0..2, then a 1s rate gap; Stop at t=2.5 lands in it.
+        let canceller = token.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(2500)).await;
+            canceller.cancel();
+        });
+        let t0 = tokio::time::Instant::now();
+        let outcome = validate_emails_bulk_with_rate_limit(
+            emails(10),
+            1,
+            token,
+            ProxyPolicy::direct(),
+            counting_slow(&started, &completed, Duration::from_secs(2)),
+            sink(&Arc::new(EventLog::default())),
+            one_per_second(),
+        )
+        .await;
+
+        assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_CANCELLED));
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(t0.elapsed(), Duration::from_millis(2500));
+        sleep(Duration::from_secs(60)).await;
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
     }
 }
