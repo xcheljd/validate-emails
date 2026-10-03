@@ -83,7 +83,9 @@ export function validateResult(data: unknown): ValidationReport {
     }
   }
 
-  if (!record.domain || typeof record.domain !== 'string') {
+  // Domain may legitimately be an empty string for invalid-syntax emails
+  // (check_syntax returns no domain when there is no "@"). Only the type matters.
+  if (typeof record.domain !== 'string') {
     errors.push('Invalid or missing domain');
   }
 

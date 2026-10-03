@@ -162,6 +162,10 @@ async fn validate_emails_bulk(
     concurrency: usize,
     mode: String,
 ) -> Result<Vec<validation::ValidationResult>, String> {
+    // Reset token so a new validation always starts clean regardless of
+    // whether a previous run was paused or stopped (which cancels the token).
+    validation_state.reset();
+
     let proxy_state = prepare_proxy_state(&window, &settings_state).await?;
 
     let window_for_progress = window.clone();

@@ -181,6 +181,14 @@ export function useEmailValidation(
           'validation-progress',
           (event) => {
             const result = event.payload;
+            // Progress counts distinct emails seen. Re-validating an email that
+            // is already in results (a retry) updates it in place and must NOT
+            // advance progress — otherwise progress would exceed total. This also
+            // keeps retries non-destructive: if a retry is interrupted, no result
+            // is lost and progress stays at total.
+            const alreadySeen = resultsRef.current.some(
+              (r) => r.email === result.email
+            );
             setResults((prev) => {
               const idx = prev.findIndex((r) => r.email === result.email);
               if (idx >= 0) {
@@ -190,7 +198,9 @@ export function useEmailValidation(
               }
               return [...prev, result];
             });
-            setProgress((prev) => prev + 1);
+            if (!alreadySeen) {
+              setProgress((prev) => prev + 1);
+            }
             pendingEmailsRef.current = pendingEmailsRef.current.filter(
               (e) => e !== result.email
             );
@@ -434,9 +444,9 @@ export function useEmailValidation(
       email: r.email,
     }));
 
-    setResults((prev) => prev.filter((r) => r.result !== 'Unknown'));
-    setProgress((prev) => Math.max(0, prev - unknownResults.length));
-
+    // Do not remove unknowns or adjust progress here: the progress handler
+    // updates each retried email in place without advancing progress, so
+    // results stay complete and progress stays at total even if interrupted.
     setStatus('processing');
     statusRef.current = 'processing';
 
@@ -456,10 +466,9 @@ export function useEmailValidation(
       if (unknownResults.length === 0) return;
 
       if (!autoEscalate) {
-        // Manual single-tier retry
+        // Manual single-tier retry. The progress handler updates retried emails
+        // in place without advancing progress, so no removal/decrement here.
         const items = unknownResults.map((r) => ({ email: r.email }));
-        setResults((prev) => prev.filter((r) => r.result !== 'Unknown'));
-        setProgress((prev) => Math.max(0, prev - unknownResults.length));
         setStatus('processing');
         statusRef.current = 'processing';
 
@@ -490,15 +499,13 @@ export function useEmailValidation(
 
           const items = currentUnknowns.map((email) => ({ email }));
 
-          // Remove unknowns being retried from results
-          setProgress((prev) => Math.max(0, prev - currentUnknowns.length));
-          const currentUnknownsSet = new Set(currentUnknowns);
-          setResults((prev) => prev.filter((r) => r.result !== 'Unknown' || !currentUnknownsSet.has(r.email)));
-
           setStatus('processing');
           statusRef.current = 'processing';
 
-          // Call revalidate_emails_bulk directly via invoke
+          // Call revalidate_emails_bulk directly via invoke. The progress event
+          // handler updates each retried email in place (no progress change and
+          // no result loss), so we don't mutate results/progress here — we only
+          // use the returned results to pick the unknowns for the next tier.
           const revalResults = await invoke<ValidationResult[]>(
             'revalidate_emails_bulk',
             {
@@ -507,10 +514,6 @@ export function useEmailValidation(
               mode: tiers[i],
             }
           );
-
-          // Merge revalidated results back
-          setResults((prev) => [...prev, ...revalResults]);
-          setProgress((prev) => prev + revalResults.length);
 
           // Determine remaining unknowns for next tier
           currentUnknowns = revalResults
