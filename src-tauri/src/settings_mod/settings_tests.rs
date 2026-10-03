@@ -2734,3 +2734,155 @@
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+
+    // =====================
+    // Corrupt settings handling (B13)
+    // =====================
+
+    struct SettingsDir(std::path::PathBuf);
+
+    impl SettingsDir {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!("settings-load-test-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn settings_path(&self) -> std::path::PathBuf {
+            self.0.join("settings.json")
+        }
+
+        fn corrupt_backups(&self) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(&self.0)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("settings.json.corrupt-"))
+                .collect();
+            names.sort();
+            names
+        }
+    }
+
+    impl Drop for SettingsDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn test_load_missing_settings_uses_defaults_without_warning() {
+        let dir = SettingsDir::new();
+        let state = SettingsState::from_path(dir.settings_path());
+
+        assert!(state.corrupt_settings_warning().is_none());
+        assert_eq!(state.settings.blocking_read().concurrency, Settings::default().concurrency);
+        assert!(!dir.settings_path().exists(), "loading must not create settings.json");
+        assert!(dir.corrupt_backups().is_empty());
+    }
+
+    #[test]
+    fn test_load_valid_settings_has_no_warning() {
+        let dir = SettingsDir::new();
+        let mut settings = Settings::default();
+        settings.proxy_pool.add_proxy(ProxyConfig::new("10.0.0.1".to_string(), 1080)).unwrap();
+        std::fs::write(dir.settings_path(), serde_json::to_string(&settings).unwrap()).unwrap();
+
+        let (loaded, warning) = load_settings_file(&dir.settings_path());
+
+        assert!(warning.is_none());
+        assert_eq!(loaded.proxy_pool.proxies.len(), 1);
+        assert!(dir.corrupt_backups().is_empty());
+    }
+
+    #[test]
+    fn test_load_corrupt_json_preserves_file_and_reports_it() {
+        let dir = SettingsDir::new();
+        let path = dir.settings_path();
+        std::fs::write(&path, "not json {").unwrap();
+
+        let state = SettingsState::from_path(path.clone());
+
+        // App still starts on defaults.
+        assert_eq!(state.settings.blocking_read().validation_mode, "standard");
+        assert!(state.settings.blocking_read().proxy_pool.proxies.is_empty());
+
+        // The bad bytes are preserved under a .corrupt-<ts> name, and the
+        // original name no longer holds them.
+        let backups = dir.corrupt_backups();
+        assert_eq!(backups.len(), 1, "backups: {:?}", backups);
+        let backup_path = dir.0.join(&backups[0]);
+        assert_eq!(std::fs::read_to_string(&backup_path).unwrap(), "not json {");
+        assert!(!path.exists());
+
+        // The getter behind get_corrupt_settings_warning reports it.
+        let info = state.corrupt_settings_warning().expect("warning for corrupt file");
+        assert_eq!(info.original_path, path);
+        assert_eq!(info.backup_path, backup_path);
+        assert!(info.preserved);
+        assert!(info.reason.contains("could not be parsed"), "reason: {}", info.reason);
+        assert!(info.message.contains(&backup_path.display().to_string()));
+        assert!(info.message.contains("default settings are being used"));
+
+        let json = serde_json::to_value(&info).unwrap();
+        assert!(json.get("backupPath").is_some() && json.get("originalPath").is_some());
+    }
+
+    #[test]
+    fn test_load_unreadable_settings_is_treated_as_corrupt() {
+        // Invalid UTF-8 makes read_to_string fail (the "unreadable" branch)
+        // portably, without relying on file permissions.
+        let dir = SettingsDir::new();
+        let path = dir.settings_path();
+        let bytes = vec![0xff, 0xfe, 0x00, 0x7b];
+        std::fs::write(&path, &bytes).unwrap();
+
+        let (settings, info) = load_settings_file(&path);
+
+        assert_eq!(settings.timeout_ms, Settings::default().timeout_ms);
+        let info = info.expect("warning for unreadable file");
+        assert!(info.reason.contains("could not be read"), "reason: {}", info.reason);
+        assert_eq!(std::fs::read(&info.backup_path).unwrap(), bytes);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_corrupt_backup_name_collision_gets_counter_suffix() {
+        let dir = SettingsDir::new();
+        let path = dir.settings_path();
+        let existing = dir.0.join("settings.json.corrupt-20260101-000000");
+        std::fs::write(&existing, "older corrupt file").unwrap();
+
+        std::fs::write(&path, "first bad").unwrap();
+        let (_, first) = load_settings_file_at(&path, "20260101-000000");
+        let first = first.unwrap();
+        assert_eq!(first.backup_path, dir.0.join("settings.json.corrupt-20260101-000000-1"));
+
+        std::fs::write(&path, "second bad").unwrap();
+        let (_, second) = load_settings_file_at(&path, "20260101-000000");
+        let second = second.unwrap();
+        assert_eq!(second.backup_path, dir.0.join("settings.json.corrupt-20260101-000000-2"));
+
+        assert_eq!(std::fs::read_to_string(&existing).unwrap(), "older corrupt file");
+        assert_eq!(std::fs::read_to_string(&first.backup_path).unwrap(), "first bad");
+        assert_eq!(std::fs::read_to_string(&second.backup_path).unwrap(), "second bad");
+        assert_eq!(dir.corrupt_backups().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_save_after_corrupt_load_does_not_touch_backup() {
+        let dir = SettingsDir::new();
+        let path = dir.settings_path();
+        std::fs::write(&path, "{\"proxy_pool\": truncated").unwrap();
+
+        let state = SettingsState::from_path(path.clone());
+        let info = state.corrupt_settings_warning().unwrap();
+        persist_settings_to(&state.settings, &state.settings_path).await.unwrap();
+
+        let fresh: Settings = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(fresh.concurrency, Settings::default().concurrency);
+        assert_eq!(std::fs::read_to_string(&info.backup_path).unwrap(), "{\"proxy_pool\": truncated");
+
+        // Next startup is clean.
+        assert!(SettingsState::from_path(path).corrupt_settings_warning().is_none());
+    }

@@ -1,4 +1,4 @@
-use super::settings_core::{Settings, SettingsState, RateLimiterConfig};
+use super::settings_core::{CorruptSettingsInfo, Settings, SettingsState, RateLimiterConfig};
 use super::proxy_config::{ProxyConfig, RotationMode};
 use super::proxy_pool::{ProxyPool, ProxyStats, AutoDisableThreshold, AllProxiesFailedState};
 use std::path::Path;
@@ -11,6 +11,15 @@ pub async fn load_settings(
 ) -> Result<Settings, String> {
     let settings = state.settings.read().await;
     Ok(settings.clone())
+}
+
+/// Startup warning if settings.json was corrupt and had to be moved aside
+/// (B13). `None` on a clean or first-run load.
+#[tauri::command]
+pub fn get_corrupt_settings_warning(
+    state: tauri::State<'_, SettingsState>,
+) -> Option<CorruptSettingsInfo> {
+    state.corrupt_settings_warning()
 }
 
 #[tauri::command]

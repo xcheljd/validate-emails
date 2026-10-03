@@ -26,7 +26,9 @@ pub use proxy_config::RotationMode;
 #[cfg(test)]
 pub use proxy_pool::{ProxyStats, AutoDisableThreshold, AllProxiesFailedState, HealthStatus};
 #[cfg(test)]
-pub use settings_core::Settings;
+pub use settings_core::{Settings, load_settings_file};
+#[cfg(test)]
+pub(crate) use settings_core::load_settings_file_at;
 
 #[cfg(test)]
 #[path = "settings_mod/settings_tests.rs"]

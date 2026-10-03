@@ -12,6 +12,7 @@ import { ValidationResult } from '@/lib/types';
 import { useSettings, SettingsProvider } from '@/hooks/use-settings';
 import { showWarning } from '@/lib/toast';
 import { SettingsContent } from '@/components/settings/settings-content';
+import { CorruptSettingsBanner } from '@/components/settings/corrupt-settings-banner';
 import { StatisticsDashboard } from '@/components/analytics/statistics-dashboard';
 import { DomainAnalysis } from '@/components/analytics/domain-analysis';
 import { SessionHistory } from '@/components/history/session-history';
@@ -527,6 +528,7 @@ function AppContent() {
         </header>
 
         <div className="flex-1 p-4 sm:p-6 md:p-8">
+          <CorruptSettingsBanner />
           {currentView === 'validation' &&
             (!showDashboard ? (
               cleaningResult ? (

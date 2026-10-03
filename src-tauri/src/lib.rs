@@ -297,6 +297,7 @@ pub fn run() {
             #[cfg(feature = "e2e-testing")]
             test_emit_validation_complete,
             settings::load_settings,
+            settings::get_corrupt_settings_warning,
             settings::save_settings,
             settings::reset_settings,
             settings::update_validator_config,
