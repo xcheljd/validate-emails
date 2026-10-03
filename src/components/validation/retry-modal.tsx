@@ -24,6 +24,11 @@ interface TierConfig {
   bgColor: string;
 }
 
+// Tiers actually traversed by Auto-Escalation (quick is excluded — it can
+// never resolve an Unknown). Index-aligned with the escalation progress
+// display ("Tier N of 2").
+const AUTO_ESCALATION_LABELS = ['Standard', 'Thorough'];
+
 const TIERS: TierConfig[] = [
   {
     key: 'quick',
@@ -223,7 +228,7 @@ export function RetryModal({
                 Auto-Escalate
               </Label>
               <p className="text-xs text-muted-foreground">
-                Progressively retry through Quick → Standard → Thorough
+                Progressively retry through Standard → Thorough
               </p>
             </div>
             <ArrowUpCircle
@@ -242,7 +247,7 @@ export function RetryModal({
               <div className="flex items-center gap-2 mb-1">
                 <div className="h-2 w-2 bg-blue-500 rounded-full animate-pulse" />
                 <span data-testid="escalation-tier-text" className="text-sm font-bold text-blue-700 dark:text-blue-300">
-                  Tier {escalationTier} of 3 — {TIERS[escalationTier - 1]?.label.split(': ')[1] || 'Quick'}
+                  Tier {escalationTier} of 2 — {AUTO_ESCALATION_LABELS[escalationTier - 1] || ''}
                 </span>
               </div>
               <p data-testid="escalation-email-count" className="text-xs text-blue-600 dark:text-blue-400">

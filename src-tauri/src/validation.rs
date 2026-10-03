@@ -5,7 +5,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use std::time::{Instant, Duration};
 use std::collections::HashMap;
-use check_if_email_exists::{check_email, CheckEmailInputBuilder, Reachable};
+use check_if_email_exists::{check_email, CheckEmailInputBuilder, CheckEmailInputProxy, Reachable};
 use check_if_email_exists::syntax::check_syntax;
 use check_if_email_exists::mx::check_mx;
 use check_if_email_exists::misc::check_misc;
@@ -15,10 +15,35 @@ use check_if_email_exists::smtp::verif_method::{
     GmailVerifMethod,
     YahooVerifMethod,
     HotmailB2CVerifMethod,
+    HotmailB2BVerifMethod,
+    MimecastVerifMethod,
+    ProofpointVerifMethod,
+    EverythingElseVerifMethod,
 };
 use crate::settings::{ProxyConfig, ProxyPool, RateLimiterConfig};
 #[cfg(test)]
 use crate::settings::RotationMode;
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ProxyOutcome {
+    /// The proxy carried a complete SMTP conversation for this email,
+    /// regardless of the mailbox verdict (even "Invalid" proves the proxy
+    /// round-tripped).
+    Success,
+    /// The transport itself failed while going through the proxy
+    /// (SOCKS error, I/O error, timeout, IP blacklisted, needs rDNS).
+    Failure,
+    /// The proxy was not actually exercised for this email (quick mode,
+    /// invalid syntax, no MX records, builder error).
+    Neutral,
+}
+
+impl Default for ProxyOutcome {
+    fn default() -> Self {
+        ProxyOutcome::Neutral
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +73,11 @@ pub struct ValidationResult {
     pub risk_score: u32,
     /// The proxy ID used for this validation (if any)
     pub proxy_id: Option<String>,
+    /// How the proxy fared for this email, for proxy-health accounting.
+    /// Only meaningful when `proxy_id` is set. Defaults to Neutral so that
+    /// older session files (without this field) deserialize cleanly.
+    #[serde(default)]
+    pub proxy_outcome: ProxyOutcome,
 }
 
 impl ValidationResult {
@@ -87,6 +117,7 @@ impl ValidationResult {
             validation_mode: validation_mode.to_string(),
             risk_score: 0,
             proxy_id,
+            proxy_outcome: ProxyOutcome::Neutral,
         }
     }
 
@@ -150,6 +181,10 @@ impl ValidationResult {
         self.risk_score = val;
         self
     }
+    fn with_proxy_outcome(mut self, val: ProxyOutcome) -> Self {
+        self.proxy_outcome = val;
+        self
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -197,7 +232,12 @@ pub async fn validate_email(email: String, mode: String, proxy: Option<ProxyConf
 /// ~10x faster than full verification.
 async fn validate_email_quick(email: String, mode: String, proxy: Option<ProxyConfig>) -> ValidationResult {
     let start_time = Instant::now();
-    let proxy_id = proxy.as_ref().map(|p| p.id());
+    // Quick mode never performs an SMTP conversation, so the (rotated) proxy
+    // is not actually exercised here. Do NOT attribute a proxy_id: doing so
+    // both mislabels the result as "via proxy X" and — before the B3 fix —
+    // fed quick-mode Unknowns into the proxy failure stats (B4).
+    let _ = proxy;
+    let proxy_id: Option<String> = None;
 
     // Step 1: Syntax check
     let syntax = check_syntax(&email);
@@ -297,6 +337,41 @@ async fn validate_email_quick(email: String, mode: String, proxy: Option<ProxyCo
     .with_risk_score(risk_score)
 }
 
+/// Build a `VerifMethod` with the same SMTP config (proxy, port, timeout,
+/// retries) applied to ALL seven provider fields.
+///
+/// Historically only gmail/yahoo/hotmailb2c received this config and the
+/// rest fell through to `Default` (no proxy, no timeout, 1 retry), which
+/// meant most domains validated over a direct connection. This helper is
+/// the single source of truth so that can't regress — see
+/// `test_verif_method_applies_config_to_all_providers`.
+fn build_verif_method(
+    proxies: HashMap<String, CheckEmailInputProxy>,
+    proxy_ref: Option<String>,
+    smtp_timeout: Duration,
+    retries: usize,
+) -> VerifMethod {
+    let smtp_config = VerifMethodSmtpConfig {
+        from_email: "verify@example.com".to_string(),
+        hello_name: "example.com".to_string(),
+        proxy: proxy_ref,
+        smtp_port: 25,
+        smtp_timeout: Some(smtp_timeout),
+        retries,
+    };
+
+    VerifMethod {
+        proxies,
+        gmail: GmailVerifMethod::Smtp(smtp_config.clone()),
+        hotmailb2b: HotmailB2BVerifMethod::Smtp(smtp_config.clone()),
+        hotmailb2c: HotmailB2CVerifMethod::Smtp(smtp_config.clone()),
+        mimecast: MimecastVerifMethod::Smtp(smtp_config.clone()),
+        proofpoint: ProofpointVerifMethod::Smtp(smtp_config.clone()),
+        yahoo: YahooVerifMethod::Smtp(smtp_config.clone()),
+        everything_else: EverythingElseVerifMethod::Smtp(smtp_config),
+    }
+}
+
 /// Full SMTP verification (Standard and Thorough modes).
 /// Standard: default timeout (~10s), 1 retry.
 /// Thorough: higher timeout (30s), 2 retries.
@@ -322,34 +397,8 @@ async fn validate_email_full(
         (HashMap::new(), None)
     };
 
-    let verif_method = VerifMethod {
-        proxies,
-        gmail: GmailVerifMethod::Smtp(VerifMethodSmtpConfig {
-            from_email: "verify@example.com".to_string(),
-            hello_name: "example.com".to_string(),
-            proxy: proxy_ref.clone(),
-            smtp_port: 25,
-            smtp_timeout: Some(smtp_timeout),
-            retries,
-        }),
-        yahoo: YahooVerifMethod::Smtp(VerifMethodSmtpConfig {
-            from_email: "verify@example.com".to_string(),
-            hello_name: "example.com".to_string(),
-            proxy: proxy_ref.clone(),
-            smtp_port: 25,
-            smtp_timeout: Some(smtp_timeout),
-            retries,
-        }),
-        hotmailb2c: HotmailB2CVerifMethod::Smtp(VerifMethodSmtpConfig {
-            from_email: "verify@example.com".to_string(),
-            hello_name: "example.com".to_string(),
-            proxy: proxy_ref,
-            smtp_port: 25,
-            smtp_timeout: Some(smtp_timeout),
-            retries,
-        }),
-        ..Default::default()
-    };
+    let verif_method =
+        build_verif_method(proxies, proxy_ref, smtp_timeout, retries);
 
     let mut builder = CheckEmailInputBuilder::default();
     builder.to_email(email.clone()).verif_method(verif_method).check_gravatar(true);
@@ -422,6 +471,28 @@ async fn validate_email_full(
         Err(_) => (false, false, false, false, false),
     };
 
+    // Classify how the proxy fared for THIS email, based on transport outcome
+    // rather than the mailbox verdict (B3). Previously any result other than
+    // Safe/Risky — including Invalid (no such mailbox), Unknown and builder
+    // errors — was counted as a proxy failure, so a healthy proxy died after
+    // a handful of invalid addresses. A definitive RCPT verdict (even
+    // "Invalid") means the proxy carried a full SMTP conversation = success.
+    let proxy_outcome = if proxy_id.is_some() {
+        match &output.smtp {
+            // A transport error (SOCKS/IO/timeout) or an IP-reputation
+            // rejection (blacklisted / needs rDNS) = the proxy path failed.
+            Err(_) => ProxyOutcome::Failure,
+            // SMTP completed: a real round trip happened through the proxy.
+            Ok(details) if details.can_connect_smtp => ProxyOutcome::Success,
+            // Ok but can_connect_smtp==false is the default output for the
+            // early-return paths (invalid syntax, no MX) — the proxy was not
+            // actually exercised, so it's neutral (no success, no failure).
+            Ok(_) => ProxyOutcome::Neutral,
+        }
+    } else {
+        ProxyOutcome::Neutral
+    };
+
     let risk_score = calculate_risk_score(result_str, is_disposable, is_catch_all, is_disabled, has_full_inbox);
 
     ValidationResult::builder(
@@ -447,6 +518,7 @@ async fn validate_email_full(
     .with_gravatar_url(gravatar_url)
     .with_haveibeenpwned(haveibeenpwned)
     .with_risk_score(risk_score)
+    .with_proxy_outcome(proxy_outcome)
 }
 
 fn calculate_risk_score(result: &str, is_disposable: bool, is_catch_all: bool, is_disabled: bool, has_full_inbox: bool) -> u32 {
@@ -910,5 +982,60 @@ mod tests {
         let config = RateLimiterConfig { max_per_second: 0, max_per_minute: 60 };
         let interval = calculate_rate_interval(&config);
         assert_eq!(interval, Duration::from_millis(0));
+    }
+
+    /// Regression test: the proxy, timeout and retries must be applied to
+    /// EVERY provider field — not just gmail/yahoo/hotmailb2c. Before this
+    /// fix, hotmailb2b/mimecast/proofpoint/everything_else fell through to
+    /// Default, validating over a direct connection with no SMTP timeout.
+    #[test]
+    fn test_verif_method_applies_config_to_all_providers() {
+        let mut proxies = HashMap::new();
+        proxies.insert(
+            "proxy1".to_string(),
+            CheckEmailInputProxy {
+                host: "127.0.0.1".to_string(),
+                port: 1080,
+                username: None,
+                password: None,
+                timeout_ms: None,
+            },
+        );
+
+        let vm = build_verif_method(
+            proxies,
+            Some("proxy1".to_string()),
+            Duration::from_secs(30),
+            2,
+        );
+
+        use check_if_email_exists::smtp::verif_method::EmailProvider;
+        for (provider, name) in [
+            (EmailProvider::Gmail, "gmail"),
+            (EmailProvider::HotmailB2B, "hotmailb2b"),
+            (EmailProvider::HotmailB2C, "hotmailb2c"),
+            (EmailProvider::Mimecast, "mimecast"),
+            (EmailProvider::Proofpoint, "proofpoint"),
+            (EmailProvider::Yahoo, "yahoo"),
+            (EmailProvider::EverythingElse, "everything_else"),
+        ] {
+            assert!(
+                vm.get_proxy(provider).is_some(),
+                "provider {} is not routed through the proxy",
+                name
+            );
+        }
+
+        // No proxy configured: every provider must cleanly resolve to None
+        // (not a dangling proxy id).
+        let vm_no_proxy = build_verif_method(
+            HashMap::new(),
+            None,
+            Duration::from_secs(10),
+            1,
+        );
+        assert!(vm_no_proxy
+            .get_proxy(check_if_email_exists::smtp::verif_method::EmailProvider::EverythingElse)
+            .is_none());
     }
 }

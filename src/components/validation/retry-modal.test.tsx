@@ -97,7 +97,7 @@ describe('RetryModal', () => {
         escalationEmailCount={3}
       />
     );
-    expect(screen.getByText(/Tier 2 of 3/)).toBeInTheDocument();
+    expect(screen.getByText(/Tier 2 of 2 — Thorough/)).toBeInTheDocument();
     expect(screen.getByText(/Retrying 3 emails/)).toBeInTheDocument();
   });
 

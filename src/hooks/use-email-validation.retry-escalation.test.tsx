@@ -137,7 +137,7 @@ describe('useEmailValidation retryWithEscalation', () => {
     );
   });
 
-  it('should auto-escalate through all three tiers sequentially', async () => {
+  it('should auto-escalate through standard → thorough sequentially (quick excluded)', async () => {
     const { result } = renderHook(() => useEmailValidation(), { wrapper });
 
     const mockResults = [
@@ -149,18 +149,18 @@ describe('useEmailValidation retryWithEscalation', () => {
       result.current.setResults(mockResults);
     });
 
-    // Mock invoke to return results (still unknown after each tier)
+    // Mock invoke to return results (still unknown after the first tier)
     let callCount = 0;
     (invoke as ReturnType<typeof vi.fn>).mockImplementation((_cmd: string, _args: Record<string, unknown>) => {
       callCount++;
-      // First two calls are revalidate, return still Unknown results
-      if (callCount <= 2) {
+      // First tier (standard) returns still Unknown
+      if (callCount <= 1) {
         return Promise.resolve([
           makeResult('unknown1@test.com', 'Unknown'),
           makeResult('unknown2@test.com', 'Unknown'),
         ]);
       }
-      // Third call resolves them
+      // Second tier (thorough) resolves them
       return Promise.resolve([
         makeResult('unknown1@test.com', 'Safe'),
         makeResult('unknown2@test.com', 'Safe'),
@@ -168,17 +168,16 @@ describe('useEmailValidation retryWithEscalation', () => {
     });
 
     await act(async () => {
-      await result.current.retryWithEscalation('quick', true);
+      await result.current.retryWithEscalation('standard', true);
     });
 
-    // Should have been called 3 times with modes: quick, standard, thorough
+    // quick is not an auto-escalation tier (it can never resolve an Unknown)
     const revalidateCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
       (call: unknown[]) => call[0] === 'revalidate_emails_bulk'
     );
-    expect(revalidateCalls).toHaveLength(3);
-    expect(revalidateCalls[0][1]).toHaveProperty('mode', 'quick');
-    expect(revalidateCalls[1][1]).toHaveProperty('mode', 'standard');
-    expect(revalidateCalls[2][1]).toHaveProperty('mode', 'thorough');
+    expect(revalidateCalls).toHaveLength(2);
+    expect(revalidateCalls[0][1]).toHaveProperty('mode', 'standard');
+    expect(revalidateCalls[1][1]).toHaveProperty('mode', 'thorough');
   });
 
   it('should stop auto-escalation early if all Unknowns are resolved', async () => {
@@ -200,15 +199,15 @@ describe('useEmailValidation retryWithEscalation', () => {
     ]);
 
     await act(async () => {
-      await result.current.retryWithEscalation('quick', true);
+      await result.current.retryWithEscalation('standard', true);
     });
 
-    // Should have been called only once (quick mode) since all resolved
+    // Should have been called only once (standard mode) since all resolved
     const revalidateCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
       (call: unknown[]) => call[0] === 'revalidate_emails_bulk'
     );
     expect(revalidateCalls).toHaveLength(1);
-    expect(revalidateCalls[0][1]).toHaveProperty('mode', 'quick');
+    expect(revalidateCalls[0][1]).toHaveProperty('mode', 'standard');
   });
 
   it('should return early if no unknown results exist', async () => {

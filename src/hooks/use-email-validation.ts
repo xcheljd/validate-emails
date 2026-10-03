@@ -480,9 +480,12 @@ export function useEmailValidation(
         return;
       }
 
-      // Auto-escalation: go through quick → standard → thorough
+      // Auto-escalation: standard → thorough.
+      // `quick` is intentionally NOT a tier: by design it skips SMTP and
+      // returns Unknown for any non-disposable address that has MX records,
+      // so it can never resolve an Unknown — it only wasted a pass and (before
+      // the proxy-outcome fix) fed those Unknowns into proxy failure stats.
       const tiers: ValidationMode[] = [
-        'quick',
         'standard',
         'thorough',
       ];

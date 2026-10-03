@@ -85,12 +85,18 @@ async fn update_proxy_stats(
     let mut settings = settings_state.settings.write().await;
     for result in results {
         if let Some(ref proxy_id) = result.proxy_id {
-            if result.result == "Safe" || result.result == "Risky" {
-                settings
+            // Classify by transport outcome, not the mailbox verdict (B3).
+            // Invalid/Unknown/builder-error are NOT proxy failures — a proxy
+            // that round-tripped a definitive "no such mailbox" RCPT is
+            // working fine. Only actual transport failures (SOCKS/IO/timeout
+            // /IP-rejection) mark the proxy as failing; Neutral results
+            // (quick mode, bad syntax, no MX) don't touch the stats at all.
+            match result.proxy_outcome {
+                validation::ProxyOutcome::Success => settings
                     .proxy_pool
-                    .record_success_with_duration(proxy_id, result.validation_duration as f64);
-            } else {
-                settings.proxy_pool.record_failure(proxy_id);
+                    .record_success_with_duration(proxy_id, result.validation_duration as f64),
+                validation::ProxyOutcome::Failure => settings.proxy_pool.record_failure(proxy_id),
+                validation::ProxyOutcome::Neutral => {}
             }
         }
     }
