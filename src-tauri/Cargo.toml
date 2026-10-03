@@ -45,3 +45,5 @@ wiremock = "0.6.5"
 async-smtp = "0.9"
 fast-socks5 = "0.9"
 anyhow = "1"
+# Paused virtual time for cooldown-wait tests (tokio::test(start_paused)).
+tokio = { version = "1", features = ["full", "test-util"] }

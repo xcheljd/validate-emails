@@ -2,6 +2,16 @@ use serde::{Deserialize, Serialize};
 
 use super::proxy_config::{ProxyConfig, RotationMode, pseudo_random};
 
+/// Current wall-clock time as Unix epoch seconds. Cooldowns are stored in
+/// this unit; the `_at(now)` method variants take it explicitly so a run can
+/// inject a test clock.
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 /// Health status of a proxy based on success rate.
 /// Health status of a proxy based on success rate
 #[cfg(test)]
@@ -35,6 +45,13 @@ pub struct ProxyStats {
     /// Whether this proxy has been auto-disabled due to low success rate
     #[serde(default)]
     pub auto_disabled: bool,
+    /// Incremented every time the proxy enters cooldown. A validation run
+    /// tags each dispatch with the epoch it saw; a result whose tag is older
+    /// than the current epoch was dispatched before this cooldown began and
+    /// is ignored, so a burst of in-flight failures can't extend the
+    /// cooldown or auto-disable the proxy, and a stale success can't clear it.
+    #[serde(default)]
+    pub cooldown_epoch: u64,
 }
 
 impl PartialEq for ProxyStats {
@@ -46,6 +63,7 @@ impl PartialEq for ProxyStats {
             && self.cooldown_until == other.cooldown_until
             && (self.avg_duration_ms - other.avg_duration_ms).abs() < f64::EPSILON
             && self.auto_disabled == other.auto_disabled
+            && self.cooldown_epoch == other.cooldown_epoch
     }
 }
 
@@ -116,39 +134,37 @@ impl ProxyStats {
     }
 
     /// Enter cooldown mode for the specified duration (in seconds)
+    #[cfg(test)]
     pub fn enter_cooldown(&mut self, duration_secs: u64) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        self.enter_cooldown_at(duration_secs, unix_now());
+    }
+
+    /// Enter cooldown relative to `now` (Unix seconds) and bump the epoch.
+    pub fn enter_cooldown_at(&mut self, duration_secs: u64, now: i64) {
         self.cooldown_until = Some(now + duration_secs as i64);
+        self.cooldown_epoch += 1;
     }
 
     /// Check if proxy is currently in cooldown
+    #[cfg(test)]
     pub fn is_in_cooldown(&self) -> bool {
-        if let Some(cooldown_until) = self.cooldown_until {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-            return now < cooldown_until;
-        }
-        false
+        self.is_in_cooldown_at(unix_now())
+    }
+
+    pub fn is_in_cooldown_at(&self, now: i64) -> bool {
+        matches!(self.cooldown_until, Some(until) if now < until)
     }
 
     /// Get remaining cooldown time in seconds. Returns 0 if not in cooldown.
     pub fn remaining_cooldown_secs(&self) -> u64 {
-        if let Some(cooldown_until) = self.cooldown_until {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-            let remaining = cooldown_until - now;
-            if remaining > 0 {
-                return remaining as u64;
-            }
+        self.remaining_cooldown_secs_at(unix_now())
+    }
+
+    pub fn remaining_cooldown_secs_at(&self, now: i64) -> u64 {
+        match self.cooldown_until {
+            Some(until) if until > now => (until - now) as u64,
+            _ => 0,
         }
-        0
     }
 
     /// Clear cooldown (manual bypass)
@@ -165,8 +181,13 @@ impl ProxyStats {
     /// - Returns 0 if in cooldown (proxy should not be selected)
     /// - Returns 50 for new proxies (no attempts) - neutral weight
     /// - Returns success_rate (0-100) for proxies with data
+    #[cfg(test)]
     pub fn get_weight(&self) -> u32 {
-        if self.is_in_cooldown() {
+        self.get_weight_at(unix_now())
+    }
+
+    pub fn get_weight_at(&self, now: i64) -> u32 {
+        if self.is_in_cooldown_at(now) {
             return 0;
         }
         if self.attempts == 0 {
@@ -252,6 +273,10 @@ pub struct FailedProxyInfo {
     pub consecutive_failures: u32,
     /// Success rate percentage (0-100)
     pub success_rate: u32,
+    /// Whether the proxy was auto-disabled (needs a manual re-enable; waiting
+    /// out a cooldown will not bring it back)
+    #[serde(default)]
+    pub auto_disabled: bool,
 }
 
 /// State returned when all proxies are unavailable
@@ -404,13 +429,17 @@ impl ProxyPool {
     /// Automatically enters cooldown if proxy becomes "bad" (3 consecutive failures)
     /// Checks auto-disable threshold after recording failure
     pub fn record_failure(&mut self, proxy_id: &str) {
+        self.record_failure_at(proxy_id, unix_now());
+    }
+
+    pub fn record_failure_at(&mut self, proxy_id: &str, now: i64) {
         // Get cooldown duration first to avoid borrow issues
         let cooldown_duration = self.cooldown_duration_secs;
         let stats = self.get_stats_mut(proxy_id);
         stats.record_failure();
         // Enter cooldown if this failure made the proxy "bad"
         if stats.is_bad() {
-            stats.enter_cooldown(cooldown_duration);
+            stats.enter_cooldown_at(cooldown_duration, now);
         }
 
         // Check auto-disable threshold
@@ -461,10 +490,27 @@ impl ProxyPool {
 
     /// Check if a proxy is currently in cooldown
     pub fn is_proxy_in_cooldown(&self, proxy_id: &str) -> bool {
+        self.is_proxy_in_cooldown_at(proxy_id, unix_now())
+    }
+
+    pub fn is_proxy_in_cooldown_at(&self, proxy_id: &str, now: i64) -> bool {
         self.proxy_stats
             .get(proxy_id)
-            .map(|stats| stats.is_in_cooldown())
+            .map(|stats| stats.is_in_cooldown_at(now))
             .unwrap_or(false)
+    }
+
+    /// Current cooldown epoch for a proxy (0 if it has no stats yet).
+    pub fn cooldown_epoch(&self, proxy_id: &str) -> u64 {
+        self.proxy_stats
+            .get(proxy_id)
+            .map(|stats| stats.cooldown_epoch)
+            .unwrap_or(0)
+    }
+
+    /// Whether `proxy_id` is (still) configured in the pool.
+    pub fn contains_proxy(&self, proxy_id: &str) -> bool {
+        self.proxies.iter().any(|p| p.id() == proxy_id)
     }
 
     /// Check if a proxy is available for use.
@@ -472,8 +518,13 @@ impl ProxyPool {
     /// After cooldown expires, the proxy is given another chance to succeed,
     /// even if its consecutive failure count is still high. If it fails again,
     /// it will re-enter cooldown automatically via record_failure.
+    #[cfg(test)]
     pub fn is_proxy_available(&self, proxy_id: &str) -> bool {
-        if self.is_proxy_in_cooldown(proxy_id) {
+        self.is_proxy_available_at(proxy_id, unix_now())
+    }
+
+    pub fn is_proxy_available_at(&self, proxy_id: &str, now: i64) -> bool {
+        if self.is_proxy_in_cooldown_at(proxy_id, now) {
             return false;
         }
         // Auto-disabled proxies are excluded from rotation
@@ -538,32 +589,54 @@ impl ProxyPool {
 
     /// Get list of available (non-bad, not in cooldown) proxies
     /// Bad proxies (3+ consecutive failures) and proxies in cooldown are excluded from this list
+    #[cfg(test)]
     pub fn get_available_proxies(&self) -> Vec<ProxyConfig> {
+        self.get_available_proxies_at(unix_now())
+    }
+
+    pub fn get_available_proxies_at(&self, now: i64) -> Vec<ProxyConfig> {
         self.proxies
             .iter()
-            .filter(|p| self.is_proxy_available(&p.id()))
+            .filter(|p| self.is_proxy_available_at(&p.id(), now))
             .cloned()
             .collect()
     }
 
     /// Check if there are any available (non-bad, not in cooldown) proxies
+    #[cfg(test)]
     pub fn has_available_proxies(&self) -> bool {
-        self.proxies.iter().any(|p| self.is_proxy_available(&p.id()))
+        self.has_available_proxies_at(unix_now())
+    }
+
+    pub fn has_available_proxies_at(&self, now: i64) -> bool {
+        self.proxies.iter().any(|p| self.is_proxy_available_at(&p.id(), now))
     }
 
     /// Check if all proxies have failed (all are either bad or in cooldown)
     /// Returns true if proxy is enabled, has proxies configured, but none are available
     pub fn all_proxies_failed(&self) -> bool {
-        self.enabled && !self.proxies.is_empty() && !self.has_available_proxies()
+        self.all_proxies_failed_at(unix_now())
+    }
+
+    pub fn all_proxies_failed_at(&self, now: i64) -> bool {
+        self.enabled && !self.proxies.is_empty() && !self.has_available_proxies_at(now)
     }
 
     /// Get the detailed state for when all proxies have failed
     /// Returns None if not in all-proxies-failed state
     pub fn get_all_proxies_failed_state(&self) -> Option<AllProxiesFailedState> {
-        if !self.all_proxies_failed() {
+        let now = unix_now();
+        if !self.all_proxies_failed_at(now) {
             return None;
         }
+        Some(self.unavailable_state_at(now))
+    }
 
+    /// Build the all-proxies-failed payload unconditionally. A run uses this
+    /// when it can't dispatch for any reason — including the pool having
+    /// been disabled or emptied mid-run, where `get_all_proxies_failed_state`
+    /// would return None.
+    pub fn unavailable_state_at(&self, now: i64) -> AllProxiesFailedState {
         let failed_proxies: Vec<FailedProxyInfo> = self.proxies
             .iter()
             .map(|p| {
@@ -572,9 +645,10 @@ impl ProxyPool {
                 FailedProxyInfo {
                     id: id.clone(),
                     is_bad: stats.is_bad(),
-                    remaining_cooldown_secs: stats.remaining_cooldown_secs(),
+                    remaining_cooldown_secs: stats.remaining_cooldown_secs_at(now),
                     consecutive_failures: stats.consecutive_failures,
                     success_rate: stats.success_rate(),
+                    auto_disabled: stats.auto_disabled,
                 }
             })
             .collect();
@@ -590,14 +664,14 @@ impl ProxyPool {
             .min()
             .unwrap_or(0);
 
-        Some(AllProxiesFailedState {
+        AllProxiesFailedState {
             failed_proxies,
             proxy_enabled: self.enabled,
             total_proxies: self.proxies.len(),
             bad_count,
             cooldown_count,
             nearest_cooldown_secs,
-        })
+        }
     }
 
     /// Check if proxy is enabled but no proxies are configured
@@ -609,20 +683,30 @@ impl ProxyPool {
     /// - Returns 0 if proxy is in cooldown
     /// - Returns 50 for new proxies (no attempts)
     /// - Returns success_rate (0-100) for proxies with data
+    #[cfg(test)]
     pub fn get_proxy_weight(&self, proxy_id: &str) -> u32 {
+        self.get_proxy_weight_at(proxy_id, unix_now())
+    }
+
+    pub fn get_proxy_weight_at(&self, proxy_id: &str, now: i64) -> u32 {
         self.proxy_stats
             .get(proxy_id)
-            .map(|stats| stats.get_weight())
+            .map(|stats| stats.get_weight_at(now))
             .unwrap_or(50) // New proxy - neutral weight
     }
 
     /// Check if all available proxies have equal weights
+    #[cfg(test)]
     pub(crate) fn all_weights_equal(&self, available: &[ProxyConfig]) -> bool {
+        self.all_weights_equal_at(available, unix_now())
+    }
+
+    fn all_weights_equal_at(&self, available: &[ProxyConfig], now: i64) -> bool {
         if available.len() <= 1 {
             return true;
         }
-        let first_weight = self.get_proxy_weight(&available[0].id());
-        available.iter().all(|p| self.get_proxy_weight(&p.id()) == first_weight)
+        let first_weight = self.get_proxy_weight_at(&available[0].id(), now);
+        available.iter().all(|p| self.get_proxy_weight_at(&p.id(), now) == first_weight)
     }
 
     /// Get the next available proxy for automatic rotation
@@ -630,34 +714,44 @@ impl ProxyPool {
     /// Falls back to round-robin when all weights are equal.
     /// Bad proxies (3+ consecutive failures) and proxies in cooldown are excluded.
     /// Returns None if no proxies are available.
-    pub fn get_next_proxy(&mut self, rotation_index: &mut usize) -> Option<ProxyConfig> {
-        let available = self.get_available_proxies();
+    #[cfg(test)]
+    pub fn get_next_proxy(&self, rotation_index: &mut usize) -> Option<ProxyConfig> {
+        self.get_next_proxy_at(rotation_index, unix_now())
+    }
+
+    fn get_next_proxy_at(&self, rotation_index: &mut usize, now: i64) -> Option<ProxyConfig> {
+        let available = self.get_available_proxies_at(now);
         if available.is_empty() {
             return None;
         }
 
         // Check if all weights are equal - if so, use round-robin
-        if self.all_weights_equal(&available) {
+        if self.all_weights_equal_at(&available, now) {
             let proxy = available[*rotation_index % available.len()].clone();
             *rotation_index = (*rotation_index + 1) % available.len();
             return Some(proxy);
         }
 
         // Use weighted selection
-        self.select_weighted_proxy(&available)
+        self.select_weighted_proxy_at(&available, now)
     }
 
     /// Select a proxy using weighted random selection.
     /// Proxies with higher success rates are selected more frequently.
     /// Selection probability is proportional to weight.
+    #[cfg(test)]
     pub(crate) fn select_weighted_proxy(&self, available: &[ProxyConfig]) -> Option<ProxyConfig> {
+        self.select_weighted_proxy_at(available, unix_now())
+    }
+
+    fn select_weighted_proxy_at(&self, available: &[ProxyConfig], now: i64) -> Option<ProxyConfig> {
         if available.is_empty() {
             return None;
         }
 
         // Calculate total weight
         let weights: Vec<u32> = available.iter()
-            .map(|p| self.get_proxy_weight(&p.id()))
+            .map(|p| self.get_proxy_weight_at(&p.id(), now))
             .collect();
         let total_weight: u32 = weights.iter().sum();
 
@@ -689,10 +783,20 @@ impl ProxyPool {
     ///
     /// Bad proxies (3+ consecutive failures) and proxies in cooldown are excluded from rotation
     /// Returns None if no proxies are available
+    #[cfg(test)]
     pub fn get_proxy_for_email(
-        &mut self,
+        &self,
         email: &str,
         rotation_index: &mut usize,
+    ) -> Option<ProxyConfig> {
+        self.get_proxy_for_email_at(email, rotation_index, unix_now())
+    }
+
+    pub fn get_proxy_for_email_at(
+        &self,
+        email: &str,
+        rotation_index: &mut usize,
+        now: i64,
     ) -> Option<ProxyConfig> {
         if self.proxies.is_empty() {
             return None;
@@ -703,12 +807,12 @@ impl ProxyPool {
                 // In manual mode, use the first available proxy (skip bad/cooldown ones)
                 self.proxies
                     .iter()
-                    .find(|p| self.is_proxy_available(&p.id()))
+                    .find(|p| self.is_proxy_available_at(&p.id(), now))
                     .cloned()
             }
             RotationMode::Automatic => {
                 // In automatic mode, rotate through available proxies (skip bad/cooldown ones)
-                self.get_next_proxy(rotation_index)
+                self.get_next_proxy_at(rotation_index, now)
             }
             RotationMode::PerDomain => {
                 // Extract domain from email
@@ -716,7 +820,7 @@ impl ProxyPool {
                 
                 // Check for domain assignment (only if proxy is available)
                 if let Some(proxy) = self.get_domain_proxy(domain) {
-                    if self.is_proxy_available(&proxy.id()) {
+                    if self.is_proxy_available_at(&proxy.id(), now) {
                         return Some(proxy.clone());
                     }
                 }
@@ -724,7 +828,7 @@ impl ProxyPool {
                 // Fall back to first available proxy for unassigned domains
                 self.proxies
                     .iter()
-                    .find(|p| self.is_proxy_available(&p.id()))
+                    .find(|p| self.is_proxy_available_at(&p.id(), now))
                     .cloned()
             }
         }

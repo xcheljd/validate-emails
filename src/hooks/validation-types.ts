@@ -15,6 +15,8 @@ export interface FailedProxyInfo {
   remainingCooldownSecs: number;
   consecutiveFailures: number;
   successRate: number;
+  /** Auto-disabled proxies need a manual re-enable; waiting won't help. */
+  autoDisabled?: boolean;
 }
 
 export interface AllProxiesFailedPayload {
@@ -24,6 +26,40 @@ export interface AllProxiesFailedPayload {
   badCount: number;
   cooldownCount: number;
   nearestCooldownSecs: number;
+  /** Run that emitted the event (absent on older/test emitters). */
+  runId?: number;
+}
+
+/** Every proxy is cooling down; the run is waiting in place, not paused. */
+export interface WaitingForProxyPayload {
+  proxyIds: string[];
+  nearestCooldownSecs: number;
+  runId: number;
+}
+
+/** Why a run ended before validating every email. */
+export type RunStopReason = 'paused_no_proxy' | 'cancelled';
+
+/** Return value of validate_emails_bulk / revalidate_emails_bulk. */
+export interface RunOutcome {
+  results: ValidationResult[];
+  /** null when every email was validated; otherwise results are partial. */
+  stopReason: RunStopReason | null;
+}
+
+/**
+ * Normalize a run command's return value. Accepts the legacy bare-array
+ * shape so mocks and older backends keep working.
+ */
+export function toRunOutcome(raw: unknown): RunOutcome {
+  if (Array.isArray(raw)) {
+    return { results: raw as ValidationResult[], stopReason: null };
+  }
+  const outcome = (raw ?? {}) as Partial<RunOutcome>;
+  return {
+    results: Array.isArray(outcome.results) ? outcome.results : [],
+    stopReason: outcome.stopReason ?? null,
+  };
 }
 
 /** Rate limit status for consecutive failure tracking */

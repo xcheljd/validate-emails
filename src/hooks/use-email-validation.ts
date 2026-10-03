@@ -11,8 +11,10 @@ import {
   type AllProxiesFailedPayload,
   type RateLimitFailureState,
   type ValidationStateForTest,
+  type RunOutcome,
   SLOWDOWN_THRESHOLD,
   AUTO_PAUSE_THRESHOLD,
+  toRunOutcome,
 } from './validation-types';
 
 // Re-export types for backward compatibility with existing consumers.
@@ -22,6 +24,9 @@ export type {
   FailedProxyInfo,
   AllProxiesFailedPayload,
   RateLimitFailureState,
+  RunOutcome,
+  RunStopReason,
+  WaitingForProxyPayload,
 } from './validation-types';
 
 export function useEmailValidation(
@@ -67,6 +72,9 @@ export function useEmailValidation(
   const resultsRef = useRef<ValidationResult[]>([]);
   const progressRef = useRef(0);
   const totalRef = useRef(0);
+  // Highest backend run id seen. Events stamped with an older run id come
+  // from a superseded run and are ignored.
+  const latestRunIdRef = useRef(0);
 
   // Keep refs in sync for use in callbacks and effects
   useEffect(() => {
@@ -90,6 +98,29 @@ export function useEmailValidation(
   }, [total]);
 
   const isProcessing = status === 'processing';
+
+  /** True if an event's run id belongs to a superseded run. */
+  const isStaleRun = (runId: number | undefined): boolean => {
+    if (runId === undefined) return false;
+    if (runId < latestRunIdRef.current) return true;
+    latestRunIdRef.current = runId;
+    return false;
+  };
+
+  // Apply a finished run's outcome to the status. Only a run that validated
+  // every email returns the UI to idle; a run that paused itself for lack of
+  // a proxy stays paused (whether or not its event arrived first); a
+  // cancelled run leaves status to whoever cancelled it.
+  const settleRun = useCallback((outcome: RunOutcome) => {
+    if (outcome.stopReason === 'paused_no_proxy') {
+      if (statusRef.current === 'processing') {
+        setStatus('paused');
+        statusRef.current = 'paused';
+      }
+    } else if (outcome.stopReason === null && statusRef.current === 'processing') {
+      setStatus('idle');
+    }
+  }, []);
 
   // Save session progress to backend (fire-and-forget with error logging)
   const saveSession = useCallback(
@@ -172,15 +203,25 @@ export function useEmailValidation(
     const unlistenRefs = {
       validationProgress: undefined as (() => void) | undefined,
       allProxiesFailed: undefined as (() => void) | undefined,
+      runStarted: undefined as (() => void) | undefined,
     };
     let isActive = true;
 
     const setupListeners = async () => {
       try {
-        const unlistenProgressFn = await listen<ValidationResult>(
+        const unlistenRunStartedFn = await listen<{ runId: number }>(
+          'validation-run-started',
+          (event) => {
+            isStaleRun(event.payload.runId);
+          }
+        );
+        unlistenRefs.runStarted = unlistenRunStartedFn;
+
+        const unlistenProgressFn = await listen<ValidationResult & { runId?: number }>(
           'validation-progress',
           (event) => {
-            const result = event.payload;
+            const { runId, ...result } = event.payload;
+            if (isStaleRun(runId)) return;
             // Progress counts distinct emails seen. Re-validating an email that
             // is already in results (a retry) updates it in place and must NOT
             // advance progress — otherwise progress would exceed total. This also
@@ -229,6 +270,7 @@ export function useEmailValidation(
         const unlistenProxiesFailedFn = await listen<AllProxiesFailedPayload>(
           'all-proxies-failed',
           (event) => {
+            if (isStaleRun(event.payload.runId)) return;
             setAllProxiesFailedState(event.payload);
             setStatus('paused');
             statusRef.current = 'paused';
@@ -236,6 +278,7 @@ export function useEmailValidation(
         );
 
         if (!isActive) {
+          unlistenRunStartedFn();
           unlistenProgressFn();
           unlistenProxiesFailedFn();
         } else {
@@ -244,6 +287,7 @@ export function useEmailValidation(
         }
       } catch (err) {
         // If setup fails, clean up any partially registered listeners
+        if (unlistenRefs.runStarted) unlistenRefs.runStarted();
         if (unlistenRefs.validationProgress) unlistenRefs.validationProgress();
         if (unlistenRefs.allProxiesFailed) unlistenRefs.allProxiesFailed();
         throw err;
@@ -254,6 +298,7 @@ export function useEmailValidation(
 
     return () => {
       isActive = false;
+      if (unlistenRefs.runStarted) unlistenRefs.runStarted();
       if (unlistenRefs.validationProgress) unlistenRefs.validationProgress();
       if (unlistenRefs.allProxiesFailed) unlistenRefs.allProxiesFailed();
     };
@@ -269,18 +314,15 @@ export function useEmailValidation(
       concurrency: number;
       mode: ValidationMode;
     }) => {
-      return invoke<ValidationResult[]>('validate_emails_bulk', {
-        emails,
-        concurrency,
-        mode,
-      });
+      return toRunOutcome(
+        await invoke<unknown>('validate_emails_bulk', {
+          emails,
+          concurrency,
+          mode,
+        })
+      );
     },
-    onSuccess: () => {
-      // Only return to idle if we were processing and didn't pause/stop
-      if (statusRef.current === 'processing') {
-        setStatus('idle');
-      }
-    },
+    onSuccess: settleRun,
     onError: (error) => {
       if (statusRef.current === 'processing') {
         console.error('Bulk validation failed:', error);
@@ -414,17 +456,15 @@ export function useEmailValidation(
       concurrency: number;
       mode: ValidationMode;
     }) => {
-      return invoke<ValidationResult[]>('revalidate_emails_bulk', {
-        items,
-        concurrency,
-        mode,
-      });
+      return toRunOutcome(
+        await invoke<unknown>('revalidate_emails_bulk', {
+          items,
+          concurrency,
+          mode,
+        })
+      );
     },
-    onSuccess: () => {
-      if (statusRef.current === 'processing') {
-        setStatus('idle');
-      }
-    },
+    onSuccess: settleRun,
     onError: (error) => {
       if (statusRef.current === 'processing') {
         console.error('Revalidation failed:', error);
@@ -449,6 +489,7 @@ export function useEmailValidation(
     // results stay complete and progress stays at total even if interrupted.
     setStatus('processing');
     statusRef.current = 'processing';
+    pendingEmailsRef.current = items.map((i) => i.email);
 
     revalidationMutation.mutate({
       items,
@@ -471,6 +512,7 @@ export function useEmailValidation(
         const items = unknownResults.map((r) => ({ email: r.email }));
         setStatus('processing');
         statusRef.current = 'processing';
+        pendingEmailsRef.current = items.map((i) => i.email);
 
         revalidationMutation.mutate({
           items,
@@ -504,22 +546,32 @@ export function useEmailValidation(
 
           setStatus('processing');
           statusRef.current = 'processing';
+          // If this tier pauses, resume picks up whatever it didn't finish.
+          pendingEmailsRef.current = [...currentUnknowns];
 
           // Call revalidate_emails_bulk directly via invoke. The progress event
           // handler updates each retried email in place (no progress change and
           // no result loss), so we don't mutate results/progress here — we only
           // use the returned results to pick the unknowns for the next tier.
-          const revalResults = await invoke<ValidationResult[]>(
-            'revalidate_emails_bulk',
-            {
+          const outcome = toRunOutcome(
+            await invoke<unknown>('revalidate_emails_bulk', {
               items,
               concurrency: currentConcurrencyRef.current,
               mode: tiers[i],
-            }
+            })
           );
 
+          // A paused or cancelled tier returned only partial results. Treat
+          // them as final for this attempt: escalating now would re-run the
+          // unfinished emails at the next tier (and, for a proxy pause, start
+          // a run against a drained pool).
+          if (outcome.stopReason !== null) {
+            settleRun(outcome);
+            break;
+          }
+
           // Determine remaining unknowns for next tier
-          currentUnknowns = revalResults
+          currentUnknowns = outcome.results
             .filter((r) => r.result === 'Unknown')
             .map((r) => r.email);
         }
@@ -541,7 +593,7 @@ export function useEmailValidation(
         statusRef.current = 'idle';
       }
     },
-    [results, revalidationMutation]
+    [results, revalidationMutation, settleRun]
   );
 
   const stopValidation = useCallback(async () => {

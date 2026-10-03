@@ -15,6 +15,22 @@ pub struct AllProxiesFailedPayload {
     pub bad_count: usize,
     pub cooldown_count: usize,
     pub nearest_cooldown_secs: u64,
+    /// Run that emitted the event, so the UI can ignore superseded runs.
+    pub run_id: u64,
+}
+
+impl AllProxiesFailedPayload {
+    fn new(state: settings::proxy_pool::AllProxiesFailedState, run_id: u64) -> Self {
+        Self {
+            failed_proxies: state.failed_proxies,
+            proxy_enabled: state.proxy_enabled,
+            total_proxies: state.total_proxies,
+            bad_count: state.bad_count,
+            cooldown_count: state.cooldown_count,
+            nearest_cooldown_secs: state.nearest_cooldown_secs,
+            run_id,
+        }
+    }
 }
 
 /// Event payload for no-proxies-configured event  
@@ -24,19 +40,48 @@ pub struct NoProxiesConfiguredPayload {
     pub message: String,
 }
 
-/// Check proxy preconditions and create a proxy rotation state if applicable.
+/// `validation-progress` payload: the result plus the run that produced it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProgressPayload {
+    #[serde(flatten)]
+    result: validation::ValidationResult,
+    run_id: u64,
+}
+
+/// `waiting-for-proxy` payload: every proxy is cooling down and the run is
+/// waiting in place (not paused) for the nearest expiry.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WaitingForProxyPayload {
+    proxy_ids: Vec<String>,
+    nearest_cooldown_secs: u64,
+    run_id: u64,
+}
+
+/// `validation-run-started` payload, emitted before any other event of a run.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunStartedPayload {
+    run_id: u64,
+}
+
+/// Check proxy preconditions and snapshot the run's proxy policy.
 /// Emits the appropriate event and returns `Err` if validation should abort.
-async fn prepare_proxy_state(
+async fn prepare_proxy_policy(
     window: &tauri::Window,
     settings_state: &tauri::State<'_, settings::SettingsState>,
-) -> Result<Option<Arc<validation::ProxyRotationState>>, String> {
-    let settings = settings_state.settings.read().await;
-    let proxy_pool = settings.proxy_pool.clone();
-    drop(settings);
+    run_id: u64,
+) -> Result<validation::ProxyPolicy, String> {
+    let (pool_enabled, no_proxies, failed_state) = {
+        let settings = settings_state.settings.read().await;
+        let pool = &settings.proxy_pool;
+        (pool.enabled, pool.no_proxies_configured(), pool.get_all_proxies_failed_state())
+    };
 
     let proxy_bypass = *settings_state.proxy_bypass_for_session.read().await;
 
-    if !proxy_bypass && proxy_pool.no_proxies_configured() {
+    if !proxy_bypass && no_proxies {
         let _ = window.emit(
             "no-proxies-configured",
             NoProxiesConfiguredPayload {
@@ -46,73 +91,61 @@ async fn prepare_proxy_state(
         return Err("No proxies configured".to_string());
     }
 
-    if !proxy_bypass && proxy_pool.all_proxies_failed() {
-        if let Some(failed_state) = proxy_pool.get_all_proxies_failed_state() {
-            let payload = AllProxiesFailedPayload {
-                failed_proxies: failed_state.failed_proxies.clone(),
-                proxy_enabled: failed_state.proxy_enabled,
-                total_proxies: failed_state.total_proxies,
-                bad_count: failed_state.bad_count,
-                cooldown_count: failed_state.cooldown_count,
-                nearest_cooldown_secs: failed_state.nearest_cooldown_secs,
-            };
-            let _ = window.emit("all-proxies-failed", payload);
+    if !proxy_bypass {
+        if let Some(failed_state) = failed_state {
+            let _ = window.emit("all-proxies-failed", AllProxiesFailedPayload::new(failed_state, run_id));
             return Err("All proxies are unavailable".to_string());
         }
     }
 
-    let proxy_state = if !proxy_bypass && proxy_pool.enabled && !proxy_pool.proxies.is_empty() {
-        Some(Arc::new(validation::ProxyRotationState::new(proxy_pool)))
+    // Snapshot policy: with proxies on, this run must never go direct, even
+    // if the pool is disabled or emptied while it runs (B8).
+    let require_proxy = !proxy_bypass && pool_enabled;
+    let state = if require_proxy {
+        Some(Arc::new(validation::ProxyRotationState::new(
+            settings_state.settings.clone(),
+            validation::system_clock(),
+        )))
     } else {
         None
     };
 
-    Ok(proxy_state)
+    Ok(validation::ProxyPolicy { state, require_proxy })
 }
 
-/// Update proxy pool stats after validation completes.
-/// Also emits `all-proxies-failed` if proxies became unavailable during validation.
-async fn update_proxy_stats(
-    window: &tauri::Window,
+/// Forward a run's events to the window, stamped with its run id.
+fn run_event_sink(window: tauri::Window, run_id: u64) -> impl Fn(validation::RunEvent) + Send + Sync {
+    move |event| match event {
+        validation::RunEvent::Progress(result) => {
+            let _ = window.emit("validation-progress", ProgressPayload { result, run_id });
+        }
+        validation::RunEvent::WaitingForProxy { proxy_ids, nearest_cooldown_secs } => {
+            let _ = window.emit(
+                "waiting-for-proxy",
+                WaitingForProxyPayload { proxy_ids, nearest_cooldown_secs, run_id },
+            );
+        }
+        validation::RunEvent::AllProxiesFailed(state) => {
+            let _ = window.emit("all-proxies-failed", AllProxiesFailedPayload::new(state, run_id));
+        }
+    }
+}
+
+/// Persist proxy health once per run. Stats are recorded live during the
+/// run (B7) and kept in memory only — persisting per email would be an I/O
+/// storm — so this single write at run end (including a self-pause, which
+/// also ends the run) is what makes them survive a restart.
+async fn persist_run_stats(
     settings_state: &tauri::State<'_, settings::SettingsState>,
-    results: &[validation::ValidationResult],
+    used_pool: bool,
 ) {
-    let proxy_bypass = *settings_state.proxy_bypass_for_session.read().await;
-    if proxy_bypass {
+    if !used_pool {
         return;
     }
-
-    let mut settings = settings_state.settings.write().await;
-    for result in results {
-        if let Some(ref proxy_id) = result.proxy_id {
-            // Classify by transport outcome, not the mailbox verdict (B3).
-            // Invalid/Unknown/builder-error are NOT proxy failures — a proxy
-            // that round-tripped a definitive "no such mailbox" RCPT is
-            // working fine. Only actual transport failures (SOCKS/IO/timeout
-            // /IP-rejection) mark the proxy as failing; Neutral results
-            // (quick mode, bad syntax, no MX) don't touch the stats at all.
-            match result.proxy_outcome {
-                validation::ProxyOutcome::Success => settings
-                    .proxy_pool
-                    .record_success_with_duration(proxy_id, result.validation_duration as f64),
-                validation::ProxyOutcome::Failure => settings.proxy_pool.record_failure(proxy_id),
-                validation::ProxyOutcome::Neutral => {}
-            }
-        }
-    }
-
-    if settings.proxy_pool.all_proxies_failed() {
-        if let Some(failed_state) = settings.proxy_pool.get_all_proxies_failed_state() {
-            let payload = AllProxiesFailedPayload {
-                failed_proxies: failed_state.failed_proxies.clone(),
-                proxy_enabled: failed_state.proxy_enabled,
-                total_proxies: failed_state.total_proxies,
-                bad_count: failed_state.bad_count,
-                cooldown_count: failed_state.cooldown_count,
-                nearest_cooldown_secs: failed_state.nearest_cooldown_secs,
-            };
-            let _ = window.emit("all-proxies-failed", payload);
-        }
+    if let Err(e) =
+        settings::persist_settings_to(&settings_state.settings, &settings_state.settings_path).await
+    {
+        eprintln!("Failed to persist proxy stats after run: {}", e);
     }
 }
 
@@ -167,29 +200,28 @@ async fn validate_emails_bulk(
     emails: Vec<String>,
     concurrency: usize,
     mode: String,
-) -> Result<Vec<validation::ValidationResult>, String> {
+) -> Result<validation::RunOutcome, String> {
     // Begin a new run: cancels any prior run and returns a fresh, uncancelled
     // token so this run starts clean even after a Stop/Pause.
-    let token = validation_state.begin_run();
+    let (run_id, token) = validation_state.begin_run_with_id();
+    let _ = window.emit("validation-run-started", RunStartedPayload { run_id });
 
-    let proxy_state = prepare_proxy_state(&window, &settings_state).await?;
+    let policy = prepare_proxy_policy(&window, &settings_state, run_id).await?;
+    let used_pool = policy.state.is_some();
 
-    let window_for_progress = window.clone();
-    let results = validation::validate_emails_bulk_core(
+    let outcome = validation::validate_emails_bulk_core(
         emails,
         concurrency,
         token,
-        mode,
-        proxy_state,
-        move |res| {
-            let _ = window_for_progress.emit("validation-progress", res);
-        },
+        policy,
+        move |email, proxy| validation::validate_email(email, mode.clone(), proxy),
+        run_event_sink(window.clone(), run_id),
     )
     .await;
 
-    update_proxy_stats(&window, &settings_state, &results).await;
+    persist_run_stats(&settings_state, used_pool).await;
 
-    Ok(results)
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -200,29 +232,28 @@ async fn revalidate_emails_bulk(
     items: Vec<validation::RevalidationRequest>,
     concurrency: usize,
     mode: String,
-) -> Result<Vec<validation::ValidationResult>, String> {
+) -> Result<validation::RunOutcome, String> {
     // Begin a new run. Without this, a prior Stop/Pause would leave the
     // shared token cancelled, and revalidate would silently return [] (B5).
-    let token = validation_state.begin_run();
+    let (run_id, token) = validation_state.begin_run_with_id();
+    let _ = window.emit("validation-run-started", RunStartedPayload { run_id });
 
-    let proxy_state = prepare_proxy_state(&window, &settings_state).await?;
+    let policy = prepare_proxy_policy(&window, &settings_state, run_id).await?;
+    let used_pool = policy.state.is_some();
 
-    let window_for_progress = window.clone();
-    let results = validation::revalidate_emails_bulk_core(
+    let outcome = validation::revalidate_emails_bulk_core(
         items,
         concurrency,
         token,
-        mode,
-        proxy_state,
-        move |res| {
-            let _ = window_for_progress.emit("validation-progress", res);
-        },
+        policy,
+        move |email, proxy| validation::validate_email(email, mode.clone(), proxy),
+        run_event_sink(window.clone(), run_id),
     )
     .await;
 
-    update_proxy_stats(&window, &settings_state, &results).await;
+    persist_run_stats(&settings_state, used_pool).await;
 
-    Ok(results)
+    Ok(outcome)
 }
 
 #[tauri::command]

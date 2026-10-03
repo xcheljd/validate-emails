@@ -1,6 +1,9 @@
 use super::settings_core::{Settings, SettingsState, RateLimiterConfig};
 use super::proxy_config::{ProxyConfig, RotationMode};
 use super::proxy_pool::{ProxyPool, ProxyStats, AutoDisableThreshold, AllProxiesFailedState};
+use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[tauri::command]
 pub async fn load_settings(
@@ -42,11 +45,20 @@ pub async fn save_settings(
 pub async fn persist_settings(
     state: tauri::State<'_, SettingsState>,
 ) -> Result<(), String> {
+    persist_settings_to(&state.settings, &state.settings_path).await
+}
+
+/// `persist_settings` without a Tauri `State`, for callers (e.g. the end of
+/// a validation run) that hold the settings Arc directly.
+pub async fn persist_settings_to(
+    settings: &Arc<RwLock<Settings>>,
+    settings_path: &Path,
+) -> Result<(), String> {
     let (json, path) = {
-        let current = state.settings.read().await;
+        let current = settings.read().await;
         let json = serde_json::to_string_pretty(&*current)
             .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-        (json, state.settings_path.clone())
+        (json, settings_path.to_path_buf())
     }; // read lock released before I/O
 
     if let Some(parent) = path.parent() {

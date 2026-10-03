@@ -14,9 +14,12 @@ pub mod settings_core;
 pub mod settings_commands;
 
 pub use proxy_config::ProxyConfig;
-pub use proxy_pool::{ProxyPool, FailedProxyInfo};
+pub use proxy_pool::FailedProxyInfo;
 pub use settings_core::{RateLimiterConfig, SettingsState};
 pub use settings_commands::*;
+
+#[cfg(test)]
+pub use proxy_pool::ProxyPool;
 
 #[cfg(test)]
 pub use proxy_config::RotationMode;

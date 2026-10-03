@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
+use std::future::Future;
 use std::sync::Mutex;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use tokio::sync::RwLock;
+use tokio::time::sleep;
 use chrono::Utc;
 use std::time::{Instant, Duration};
 use std::collections::HashMap;
@@ -21,9 +25,11 @@ use check_if_email_exists::smtp::verif_method::{
     ProofpointVerifMethod,
     EverythingElseVerifMethod,
 };
-use crate::settings::{ProxyConfig, ProxyPool, RateLimiterConfig};
+use crate::settings::{ProxyConfig, RateLimiterConfig};
+use crate::settings::proxy_pool::{unix_now, AllProxiesFailedState};
+use crate::settings::settings_core::Settings;
 #[cfg(test)]
-use crate::settings::RotationMode;
+use crate::settings::{ProxyPool, RotationMode};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -197,12 +203,16 @@ pub struct RevalidationRequest {
 
 pub struct ValidationState {
     pub token: Mutex<CancellationToken>,
+    /// Monotonic id of the current run; stamped on run events so the
+    /// frontend can drop events from a superseded run.
+    run_counter: AtomicU64,
 }
 
 impl Default for ValidationState {
     fn default() -> Self {
         Self {
             token: Mutex::new(CancellationToken::new()),
+            run_counter: AtomicU64::new(0),
         }
     }
 }
@@ -225,12 +235,19 @@ impl ValidationState {
     /// Stop). Both run-starting commands must call this and use the returned
     /// token.
     pub fn begin_run(&self) -> CancellationToken {
+        self.begin_run_with_id().1
+    }
+
+    /// `begin_run`, also returning the new run's id.
+    pub fn begin_run_with_id(&self) -> (u64, CancellationToken) {
         let mut token = self.token.lock().unwrap();
         token.cancel();
         *token = CancellationToken::new();
-        token.clone()
+        let run_id = self.run_counter.fetch_add(1, Ordering::SeqCst) + 1;
+        (run_id, token.clone())
     }
 
+    #[cfg(test)]
     pub fn get_token(&self) -> CancellationToken {
         self.token.lock().unwrap().clone()
     }
@@ -579,31 +596,313 @@ fn calculate_risk_score(result: &str, is_disposable: bool, is_catch_all: bool, i
     score
 }
 
-/// Proxy rotation state shared across validation tasks
+/// Unix-seconds clock used for cooldown decisions. Injectable so tests can
+/// drive cooldown expiry without sleeping.
+pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+
+pub fn system_clock() -> Clock {
+    Arc::new(unix_now)
+}
+
+/// One dispatch through a proxy: which proxy, and the cooldown epoch it was
+/// in when it was selected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchTag {
+    pub proxy_id: String,
+    pub epoch: u64,
+}
+
+/// What `ProxyRotationState::record` did with a result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordOutcome {
+    Recorded,
+    /// Neutral outcome, or the result is not attributed to the tagged proxy.
+    Skipped,
+    /// Dispatched before the proxy's current cooldown began; ignored.
+    Stale,
+    /// The proxy was deleted from the pool mid-run; ignored.
+    Removed,
+}
+
+/// Live proxy selection and health accounting for one run (B7).
+///
+/// Holds the SAME `Arc<RwLock<Settings>>` as `SettingsState` (the pool is a
+/// field of Settings), so a cooldown or auto-disable caused by one email
+/// steers the very next selection, and pool edits made mid-run (disable,
+/// delete) take effect immediately. The lock is only held for the duration
+/// of one select/record — never across a validation or a sleep.
 pub struct ProxyRotationState {
-    pub pool: ProxyPool,
-    pub rotation_index: Mutex<usize>,
+    pub settings: Arc<RwLock<Settings>>,
+    pub rotation_index: AtomicUsize,
+    clock: Clock,
 }
 
 impl ProxyRotationState {
-    pub fn new(pool: ProxyPool) -> Self {
+    pub fn new(settings: Arc<RwLock<Settings>>, clock: Clock) -> Self {
         Self {
-            pool,
-            rotation_index: Mutex::new(0),
+            settings,
+            rotation_index: AtomicUsize::new(0),
+            clock,
         }
+    }
+
+    #[cfg(test)]
+    pub fn from_pool(pool: ProxyPool) -> Self {
+        let settings = Settings {
+            proxy_pool: pool,
+            ..Settings::default()
+        };
+        Self::new(Arc::new(RwLock::new(settings)), system_clock())
+    }
+
+    fn now(&self) -> i64 {
+        (self.clock)()
+    }
+
+    /// Select a proxy for `email` from the live pool and tag the dispatch
+    /// with that proxy's current cooldown epoch. None if the pool is
+    /// disabled, empty, or has nothing available.
+    pub async fn select(&self, email: &str) -> Option<(ProxyConfig, DispatchTag)> {
+        let now = self.now();
+        let settings = self.settings.read().await;
+        let pool = &settings.proxy_pool;
+        if !pool.enabled || pool.proxies.is_empty() {
+            return None;
+        }
+        // Each selection claims its own counter slot, so concurrent tasks
+        // round-robin without holding a lock.
+        let mut index = self.rotation_index.fetch_add(1, Ordering::Relaxed);
+        let proxy = pool.get_proxy_for_email_at(email, &mut index, now)?;
+        let proxy_id = proxy.id();
+        let epoch = pool.cooldown_epoch(&proxy_id);
+        Some((proxy, DispatchTag { proxy_id, epoch }))
     }
 
     /// Get the proxy to use for a specific email
     /// Returns None if proxy is disabled or no proxies available
-    pub fn get_proxy_for_email(&self, email: &str) -> Option<ProxyConfig> {
-        if !self.pool.enabled || self.pool.proxies.is_empty() {
-            return None;
+    #[cfg(test)]
+    pub async fn get_proxy_for_email(&self, email: &str) -> Option<ProxyConfig> {
+        self.select(email).await.map(|(proxy, _)| proxy)
+    }
+
+    /// Apply one completed email's proxy outcome to the live pool.
+    pub async fn record(&self, tag: &DispatchTag, result: &ValidationResult) -> RecordOutcome {
+        if result.proxy_id.as_deref() != Some(tag.proxy_id.as_str())
+            || result.proxy_outcome == ProxyOutcome::Neutral
+        {
+            return RecordOutcome::Skipped;
+        }
+        let now = self.now();
+        let mut settings = self.settings.write().await;
+        let pool = &mut settings.proxy_pool;
+        // get_stats_mut() would create orphan stats for a deleted proxy.
+        if !pool.contains_proxy(&tag.proxy_id) {
+            return RecordOutcome::Removed;
+        }
+        if tag.epoch < pool.cooldown_epoch(&tag.proxy_id) {
+            return RecordOutcome::Stale;
+        }
+        match result.proxy_outcome {
+            ProxyOutcome::Success => pool
+                .record_success_with_duration(&tag.proxy_id, result.validation_duration as f64),
+            ProxyOutcome::Failure => pool.record_failure_at(&tag.proxy_id, now),
+            ProxyOutcome::Neutral => {}
+        }
+        RecordOutcome::Recorded
+    }
+
+    async fn drain_snapshot(&self) -> DrainSnapshot {
+        let now = self.now();
+        let settings = self.settings.read().await;
+        let pool = &settings.proxy_pool;
+        let state = pool.unavailable_state_at(now);
+        // Waiting only helps if every proxy will come back on its own.
+        let can_wait = pool.enabled
+            && !state.failed_proxies.is_empty()
+            && state
+                .failed_proxies
+                .iter()
+                .all(|p| !p.auto_disabled && p.remaining_cooldown_secs > 0);
+        DrainSnapshot { state, can_wait }
+    }
+}
+
+struct DrainSnapshot {
+    state: AllProxiesFailedState,
+    can_wait: bool,
+}
+
+impl DrainSnapshot {
+    fn no_pool() -> Self {
+        Self {
+            state: AllProxiesFailedState {
+                failed_proxies: vec![],
+                proxy_enabled: false,
+                total_proxies: 0,
+                bad_count: 0,
+                cooldown_count: 0,
+                nearest_cooldown_secs: 0,
+            },
+            can_wait: false,
+        }
+    }
+}
+
+/// Which proxies a run may use. Snapshotted at run start.
+pub struct ProxyPolicy {
+    pub state: Option<Arc<ProxyRotationState>>,
+    /// `!session_bypass && pool.enabled` at run start. When set, an email
+    /// is NEVER sent direct: if no proxy can be selected the run waits for a
+    /// cooldown or pauses itself (B8). Only a bypass/disabled-at-start run
+    /// may fall back to a direct connection.
+    pub require_proxy: bool,
+}
+
+impl ProxyPolicy {
+    #[cfg(test)]
+    pub fn direct() -> Self {
+        Self { state: None, require_proxy: false }
+    }
+}
+
+/// Events a run reports while it executes.
+#[derive(Debug, Clone)]
+pub enum RunEvent {
+    Progress(ValidationResult),
+    /// Every proxy is in cooldown; the run is waiting in place for the
+    /// nearest expiry.
+    WaitingForProxy {
+        proxy_ids: Vec<String>,
+        nearest_cooldown_secs: u64,
+    },
+    /// The run can't dispatch through any proxy and has paused itself.
+    AllProxiesFailed(AllProxiesFailedState),
+}
+
+pub const STOP_PAUSED_NO_PROXY: &str = "paused_no_proxy";
+pub const STOP_CANCELLED: &str = "cancelled";
+
+/// Result of a run. `stop_reason` is None only when every input was
+/// validated; otherwise `results` is a partial subset of the inputs.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunOutcome {
+    pub results: Vec<ValidationResult>,
+    pub stop_reason: Option<String>,
+}
+
+/// How many times a run waits out a full-pool cooldown without a proxy
+/// success in between before pausing for the user.
+const MAX_PROXY_WAIT_CYCLES: u32 = 3;
+
+/// Per-run drain bookkeeping shared by all of the run's email tasks.
+#[derive(Default)]
+struct DrainCoordinator {
+    /// Serializes drain handling so 64 tasks that all see an empty pool
+    /// produce one wait (or one pause), not 64.
+    gate: tokio::sync::Mutex<()>,
+    wait_cycles: AtomicU32,
+    /// Set exactly once, by the task that pauses the run.
+    paused: AtomicBool,
+}
+
+struct RunCtx<'a, V, S> {
+    token: &'a CancellationToken,
+    policy: &'a ProxyPolicy,
+    validator: &'a V,
+    sink: &'a S,
+    drain: &'a DrainCoordinator,
+}
+
+async fn select_for<V, S>(email: &str, ctx: &RunCtx<'_, V, S>) -> Option<(ProxyConfig, DispatchTag)> {
+    match &ctx.policy.state {
+        Some(state) => state.select(email).await,
+        None => None,
+    }
+}
+
+/// Pick the connection for one email at dispatch time. Returns None if the
+/// email must not be dispatched (run cancelled or paused for lack of proxy).
+async fn acquire_dispatch<V, S>(
+    email: &str,
+    ctx: &RunCtx<'_, V, S>,
+) -> Option<(Option<ProxyConfig>, Option<DispatchTag>)>
+where
+    S: Fn(RunEvent),
+{
+    loop {
+        if let Some((proxy, tag)) = select_for(email, ctx).await {
+            return Some((Some(proxy), Some(tag)));
+        }
+        if !ctx.policy.require_proxy {
+            return Some((None, None));
         }
 
-        let mut index = self.rotation_index.lock().unwrap();
-        let mut pool_clone = self.pool.clone();
-        pool_clone.get_proxy_for_email(email, &mut index)
+        // Fail closed: the pool is drained (or was disabled/emptied mid-run).
+        let _gate = tokio::select! {
+            biased;
+            _ = ctx.token.cancelled() => return None,
+            gate = ctx.drain.gate.lock() => gate,
+        };
+        if ctx.token.is_cancelled() {
+            return None;
+        }
+        // Another task may have waited out the cooldown while we queued.
+        if let Some((proxy, tag)) = select_for(email, ctx).await {
+            return Some((Some(proxy), Some(tag)));
+        }
+
+        let snapshot = match &ctx.policy.state {
+            Some(state) => state.drain_snapshot().await,
+            None => DrainSnapshot::no_pool(),
+        };
+        if snapshot.can_wait
+            && ctx.drain.wait_cycles.load(Ordering::SeqCst) < MAX_PROXY_WAIT_CYCLES
+        {
+            ctx.drain.wait_cycles.fetch_add(1, Ordering::SeqCst);
+            let nearest = snapshot.state.nearest_cooldown_secs.max(1);
+            (ctx.sink)(RunEvent::WaitingForProxy {
+                proxy_ids: snapshot.state.failed_proxies.iter().map(|p| p.id.clone()).collect(),
+                nearest_cooldown_secs: nearest,
+            });
+            tokio::select! {
+                biased;
+                _ = ctx.token.cancelled() => return None,
+                _ = sleep(Duration::from_secs(nearest)) => {}
+            }
+            continue;
+        }
+
+        if !ctx.drain.paused.swap(true, Ordering::SeqCst) {
+            (ctx.sink)(RunEvent::AllProxiesFailed(snapshot.state));
+            // Cancel THIS run's token only. ValidationState::cancel() would
+            // act on whatever run is current, which may not be us.
+            ctx.token.cancel();
+        }
+        return None;
     }
+}
+
+async fn process_email<V, Fut, S>(email: String, ctx: &RunCtx<'_, V, S>) -> Option<ValidationResult>
+where
+    V: Fn(String, Option<ProxyConfig>) -> Fut,
+    Fut: Future<Output = ValidationResult>,
+    S: Fn(RunEvent),
+{
+    if ctx.token.is_cancelled() {
+        return None;
+    }
+    let (proxy, tag) = acquire_dispatch(&email, ctx).await?;
+    let result = (ctx.validator)(email, proxy).await;
+    if let (Some(state), Some(tag)) = (&ctx.policy.state, &tag) {
+        if state.record(tag, &result).await == RecordOutcome::Recorded
+            && result.proxy_outcome == ProxyOutcome::Success
+        {
+            // A proxy proved itself again: reset the wait budget.
+            ctx.drain.wait_cycles.store(0, Ordering::SeqCst);
+        }
+    }
+    Some(result)
 }
 
 /// Calculate the minimum interval between dispatches based on rate limiter config.
@@ -623,158 +922,127 @@ pub fn clamp_concurrency(concurrency: usize) -> usize {
     concurrency.clamp(1, 64)
 }
 
-pub async fn validate_emails_bulk_core<F>(
+pub async fn validate_emails_bulk_core<V, Fut, S>(
     emails: Vec<String>,
     concurrency: usize,
     token: CancellationToken,
-    mode: String,
-    proxy_state: Option<Arc<ProxyRotationState>>,
-    on_progress: F,
-) -> Vec<ValidationResult>
+    policy: ProxyPolicy,
+    validator: V,
+    sink: S,
+) -> RunOutcome
 where
-    F: Fn(ValidationResult) + Send + Sync,
+    V: Fn(String, Option<ProxyConfig>) -> Fut + Send + Sync,
+    Fut: Future<Output = ValidationResult> + Send,
+    S: Fn(RunEvent) + Send + Sync,
 {
-    validate_emails_bulk_with_rate_limit(
-        emails,
-        concurrency,
-        token,
-        mode,
-        proxy_state,
-        on_progress,
-        None,
-    ).await
+    validate_emails_bulk_with_rate_limit(emails, concurrency, token, policy, validator, sink, None)
+        .await
 }
 
 /// Core validation with rate limiting support.
-/// When `rate_config` is provided, enforces minimum interval between dispatches.
-/// When `max_emails_per_session` > 0, rejects oversized batches.
-pub async fn validate_emails_bulk_with_rate_limit<F>(
+/// When `rate_config` is provided, dispatches strictly sequentially with the
+/// minimum interval between dispatches (see AGENTS.md: deliberate v1
+/// trade-off). Proxy selection, live health and drain handling are the same
+/// either way.
+pub async fn validate_emails_bulk_with_rate_limit<V, Fut, S>(
     emails: Vec<String>,
     concurrency: usize,
     token: CancellationToken,
-    mode: String,
-    proxy_state: Option<Arc<ProxyRotationState>>,
-    on_progress: F,
+    policy: ProxyPolicy,
+    validator: V,
+    sink: S,
     rate_config: Option<RateLimiterConfig>,
-) -> Vec<ValidationResult>
+) -> RunOutcome
 where
-    F: Fn(ValidationResult) + Send + Sync,
+    V: Fn(String, Option<ProxyConfig>) -> Fut + Send + Sync,
+    Fut: Future<Output = ValidationResult> + Send,
+    S: Fn(RunEvent) + Send + Sync,
 {
     use futures::stream::{self, StreamExt};
-    use tokio::time::sleep;
 
-    // Clamp concurrency: 0 hangs the run, huge values flood port 25 (B9).
-    let concurrency = clamp_concurrency(concurrency);
-
-    let mut results = Vec::with_capacity(emails.len());
-    let mode_clone = mode.clone();
-
-    // Calculate rate limit interval
     let rate_interval = rate_config
         .as_ref()
-        .map(|c| calculate_rate_interval(c))
-        .unwrap_or(Duration::from_millis(0));
-
-    // When rate limiting is active, we process emails sequentially with intervals.
-    // Otherwise, we use the existing concurrent approach.
-    if rate_interval > Duration::from_millis(0) {
-        // Rate-limited sequential processing
-        let mut iter = emails.iter().peekable();
-        while let Some(email) = iter.next() {
-            if token.is_cancelled() {
-                break;
-            }
-
-            let mode = mode_clone.clone();
-            let proxy = proxy_state.as_ref().and_then(|state| state.get_proxy_for_email(email));
-            let result = validate_email(email.clone(), mode, proxy).await;
-            on_progress(result.clone());
-            results.push(result);
-
-            if iter.peek().is_some() {
-                sleep(rate_interval).await;
-            }
-        }
+        .map(calculate_rate_interval)
+        .unwrap_or(Duration::ZERO);
+    // Clamp concurrency: 0 hangs the run, huge values flood port 25 (B9).
+    let concurrency = if rate_interval.is_zero() {
+        clamp_concurrency(concurrency)
     } else {
-        // Original concurrent processing (no rate limiting)
-        let mut stream = stream::iter(emails)
-            .map(|email| {
-                let mode = mode_clone.clone();
-                let proxy = proxy_state.as_ref().and_then(|state| state.get_proxy_for_email(&email));
+        1
+    };
+
+    let total = emails.len();
+    let mut results = Vec::with_capacity(total);
+    let drain = DrainCoordinator::default();
+    let ctx = RunCtx {
+        token: &token,
+        policy: &policy,
+        validator: &validator,
+        sink: &sink,
+        drain: &drain,
+    };
+
+    {
+        let mut stream = stream::iter(emails.into_iter().enumerate())
+            .map(|(i, email)| {
+                let ctx = &ctx;
                 async move {
-                    validate_email(email, mode, proxy).await
+                    if i > 0 && !rate_interval.is_zero() {
+                        tokio::select! {
+                            biased;
+                            _ = ctx.token.cancelled() => return None,
+                            _ = sleep(rate_interval) => {}
+                        }
+                    }
+                    process_email(email, ctx).await
                 }
             })
             .buffer_unordered(concurrency);
 
         loop {
+            // biased: once cancelled, stop emitting even if more results
+            // are ready.
             tokio::select! {
-                result = stream.next() => {
-                    match result {
-                        Some(res) => {
-                            on_progress(res.clone());
-                            results.push(res);
-                        }
-                        None => break,
+                biased;
+                _ = token.cancelled() => break,
+                next = stream.next() => match next {
+                    Some(Some(res)) => {
+                        sink(RunEvent::Progress(res.clone()));
+                        results.push(res);
                     }
-                }
-                _ = token.cancelled() => {
-                    break;
-                }
+                    Some(None) => {}
+                    None => break,
+                },
             }
         }
     }
 
-    results
+    let stop_reason = if drain.paused.load(Ordering::SeqCst) {
+        Some(STOP_PAUSED_NO_PROXY.to_string())
+    } else if results.len() < total {
+        Some(STOP_CANCELLED.to_string())
+    } else {
+        None
+    };
+    RunOutcome { results, stop_reason }
 }
 
-pub async fn revalidate_emails_bulk_core<F>(
+pub async fn revalidate_emails_bulk_core<V, Fut, S>(
     items: Vec<RevalidationRequest>,
     concurrency: usize,
     token: CancellationToken,
-    mode: String,
-    proxy_state: Option<Arc<ProxyRotationState>>,
-    on_progress: F,
-) -> Vec<ValidationResult>
+    policy: ProxyPolicy,
+    validator: V,
+    sink: S,
+) -> RunOutcome
 where
-    F: Fn(ValidationResult) + Send + Sync,
+    V: Fn(String, Option<ProxyConfig>) -> Fut + Send + Sync,
+    Fut: Future<Output = ValidationResult> + Send,
+    S: Fn(RunEvent) + Send + Sync,
 {
-    use futures::stream::{self, StreamExt};
-
-    // Clamp concurrency (B9) — same hang/flood protection as the bulk core.
-    let concurrency = clamp_concurrency(concurrency);
-
-    let mut results = Vec::with_capacity(items.len());
-    let mode_clone = mode.clone();
-
-    let mut stream = stream::iter(items)
-        .map(|item| {
-            let mode = mode_clone.clone();
-            let proxy = proxy_state.as_ref().and_then(|state| state.get_proxy_for_email(&item.email));
-            async move {
-                validate_email(item.email, mode, proxy).await
-            }
-        })
-        .buffer_unordered(concurrency);
-
-    loop {
-        tokio::select! {
-            result = stream.next() => {
-                match result {
-                    Some(res) => {
-                        on_progress(res.clone());
-                        results.push(res);
-                    }
-                    None => break,
-                }
-            }
-            _ = token.cancelled() => {
-                break;
-            }
-        }
-    }
-
-    results
+    let emails = items.into_iter().map(|item| item.email).collect();
+    validate_emails_bulk_with_rate_limit(emails, concurrency, token, policy, validator, sink, None)
+        .await
 }
 
 #[cfg(test)]
@@ -815,63 +1083,63 @@ mod tests {
         assert!(!result.timestamp.is_empty());
     }
 
-    #[test]
-    fn test_proxy_rotation_state_new() {
+    #[tokio::test]
+    async fn test_proxy_rotation_state_new() {
         let mut pool = ProxyPool::new();
         pool.enabled = true;
         pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
 
-        let state = ProxyRotationState::new(pool);
-        assert!(state.pool.enabled);
-        assert_eq!(*state.rotation_index.lock().unwrap(), 0);
+        let state = ProxyRotationState::from_pool(pool);
+        assert!(state.settings.read().await.proxy_pool.enabled);
+        assert_eq!(state.rotation_index.load(Ordering::SeqCst), 0);
     }
 
-    #[test]
-    fn test_proxy_rotation_state_disabled() {
+    #[tokio::test]
+    async fn test_proxy_rotation_state_disabled() {
         let mut pool = ProxyPool::new();
         pool.enabled = false;
         pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
 
-        let state = ProxyRotationState::new(pool);
-        let proxy = state.get_proxy_for_email("test@example.com");
+        let state = ProxyRotationState::from_pool(pool);
+        let proxy = state.get_proxy_for_email("test@example.com").await;
         assert!(proxy.is_none());
     }
 
-    #[test]
-    fn test_proxy_rotation_state_no_proxies() {
+    #[tokio::test]
+    async fn test_proxy_rotation_state_no_proxies() {
         let mut pool = ProxyPool::new();
         pool.enabled = true;
 
-        let state = ProxyRotationState::new(pool);
-        let proxy = state.get_proxy_for_email("test@example.com");
+        let state = ProxyRotationState::from_pool(pool);
+        let proxy = state.get_proxy_for_email("test@example.com").await;
         assert!(proxy.is_none());
     }
 
-    #[test]
-    fn test_proxy_rotation_state_automatic_rotation() {
+    #[tokio::test]
+    async fn test_proxy_rotation_state_automatic_rotation() {
         let mut pool = ProxyPool::new();
         pool.enabled = true;
         pool.rotation_mode = RotationMode::Automatic;
         pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
         pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
 
-        let state = ProxyRotationState::new(pool);
+        let state = ProxyRotationState::from_pool(pool);
 
         // First email should use first proxy
-        let proxy1 = state.get_proxy_for_email("test1@example.com").unwrap();
+        let proxy1 = state.get_proxy_for_email("test1@example.com").await.unwrap();
         assert_eq!(proxy1.host, "192.168.1.1");
 
         // Second email should use second proxy
-        let proxy2 = state.get_proxy_for_email("test2@example.com").unwrap();
+        let proxy2 = state.get_proxy_for_email("test2@example.com").await.unwrap();
         assert_eq!(proxy2.host, "192.168.1.2");
 
         // Third email should wrap back to first proxy
-        let proxy3 = state.get_proxy_for_email("test3@example.com").unwrap();
+        let proxy3 = state.get_proxy_for_email("test3@example.com").await.unwrap();
         assert_eq!(proxy3.host, "192.168.1.1");
     }
 
-    #[test]
-    fn test_proxy_rotation_state_per_domain() {
+    #[tokio::test]
+    async fn test_proxy_rotation_state_per_domain() {
         let mut pool = ProxyPool::new();
         pool.enabled = true;
         pool.rotation_mode = RotationMode::PerDomain;
@@ -879,32 +1147,32 @@ mod tests {
         pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
         pool.assign_domain("gmail.com".to_string(), "192.168.1.1:8080".to_string()).unwrap();
 
-        let state = ProxyRotationState::new(pool);
+        let state = ProxyRotationState::from_pool(pool);
 
         // Gmail should use proxy 1
-        let gmail_proxy = state.get_proxy_for_email("user@gmail.com").unwrap();
+        let gmail_proxy = state.get_proxy_for_email("user@gmail.com").await.unwrap();
         assert_eq!(gmail_proxy.host, "192.168.1.1");
 
         // Other domains should fall back to first proxy
-        let other_proxy = state.get_proxy_for_email("user@other.com").unwrap();
+        let other_proxy = state.get_proxy_for_email("user@other.com").await.unwrap();
         assert_eq!(other_proxy.host, "192.168.1.1");
     }
 
-    #[test]
-    fn test_proxy_rotation_state_manual_mode() {
+    #[tokio::test]
+    async fn test_proxy_rotation_state_manual_mode() {
         let mut pool = ProxyPool::new();
         pool.enabled = true;
         pool.rotation_mode = RotationMode::Manual;
         pool.add_proxy(ProxyConfig::new("192.168.1.1".to_string(), 8080)).unwrap();
         pool.add_proxy(ProxyConfig::new("192.168.1.2".to_string(), 8080)).unwrap();
 
-        let state = ProxyRotationState::new(pool);
+        let state = ProxyRotationState::from_pool(pool);
 
         // Manual mode should always use first proxy
-        let proxy1 = state.get_proxy_for_email("test1@example.com").unwrap();
+        let proxy1 = state.get_proxy_for_email("test1@example.com").await.unwrap();
         assert_eq!(proxy1.host, "192.168.1.1");
 
-        let proxy2 = state.get_proxy_for_email("test2@example.com").unwrap();
+        let proxy2 = state.get_proxy_for_email("test2@example.com").await.unwrap();
         assert_eq!(proxy2.host, "192.168.1.1");
     }
 
@@ -1225,5 +1493,805 @@ mod tests {
             proxy_outcome_for(false, &Err(SmtpError::Socks5(fast_socks5::SocksError::ArgumentInputError("x")))),
             ProxyOutcome::Neutral
         );
+    }
+}
+
+/// Run-core tests (B7/B8). No network: every test injects a scripted
+/// validator, a clock and an event sink.
+#[cfg(test)]
+mod run_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::pin::Pin;
+    use std::sync::atomic::AtomicI64;
+    use std::sync::Mutex as StdMutex;
+
+    const T0: i64 = 1_000_000;
+
+    fn proxy_id(i: u8) -> String {
+        format!("10.0.0.{}:1080", i)
+    }
+
+    fn test_settings(n: u8) -> Arc<RwLock<Settings>> {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.rotation_mode = RotationMode::Automatic;
+        for i in 1..=n {
+            pool.add_proxy(ProxyConfig::new(format!("10.0.0.{}", i), 1080)).unwrap();
+        }
+        Arc::new(RwLock::new(Settings { proxy_pool: pool, ..Settings::default() }))
+    }
+
+    /// A clock frozen at T0 until the test moves it.
+    fn manual_clock() -> (Arc<AtomicI64>, Clock) {
+        let now = Arc::new(AtomicI64::new(T0));
+        let reader = now.clone();
+        (now, Arc::new(move || reader.load(Ordering::SeqCst)))
+    }
+
+    /// A clock that follows tokio's (paused, auto-advancing) virtual time.
+    fn tokio_clock() -> Clock {
+        let start = tokio::time::Instant::now();
+        Arc::new(move || T0 + start.elapsed().as_secs() as i64)
+    }
+
+    fn policy(settings: &Arc<RwLock<Settings>>, clock: Clock, require_proxy: bool) -> ProxyPolicy {
+        ProxyPolicy {
+            state: Some(Arc::new(ProxyRotationState::new(settings.clone(), clock))),
+            require_proxy,
+        }
+    }
+
+    fn emails(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("user{}@example.com", i)).collect()
+    }
+
+    fn fake_result(email: &str, proxy: &Option<ProxyConfig>, outcome: ProxyOutcome) -> ValidationResult {
+        let result = ValidationResult::builder(
+            email,
+            "example.com",
+            "Unknown",
+            "scripted",
+            "standard",
+            5,
+            proxy.as_ref().map(|p| p.id()),
+        );
+        if proxy.is_some() {
+            result.with_proxy_outcome(outcome)
+        } else {
+            result
+        }
+    }
+
+    #[derive(Default)]
+    struct EventLog {
+        progress: AtomicUsize,
+        waiting: AtomicUsize,
+        failed: StdMutex<Vec<AllProxiesFailedState>>,
+    }
+
+    impl EventLog {
+        fn failed_count(&self) -> usize {
+            self.failed.lock().unwrap().len()
+        }
+        fn waiting_count(&self) -> usize {
+            self.waiting.load(Ordering::SeqCst)
+        }
+    }
+
+    fn sink(log: &Arc<EventLog>) -> impl Fn(RunEvent) + Send + Sync {
+        let log = log.clone();
+        move |event| match event {
+            RunEvent::Progress(_) => {
+                log.progress.fetch_add(1, Ordering::SeqCst);
+            }
+            RunEvent::WaitingForProxy { .. } => {
+                log.waiting.fetch_add(1, Ordering::SeqCst);
+            }
+            RunEvent::AllProxiesFailed(state) => log.failed.lock().unwrap().push(state),
+        }
+    }
+
+    type Calls = Arc<StdMutex<Vec<Option<String>>>>;
+    type BoxFut = Pin<Box<dyn Future<Output = ValidationResult> + Send>>;
+
+    /// Validator that records the proxy it was called with (at call time,
+    /// i.e. right at dispatch) and returns `outcome(call_index, proxy)`.
+    fn scripted<F>(
+        calls: &Calls,
+        delay_ms: u64,
+        outcome: F,
+    ) -> impl Fn(String, Option<ProxyConfig>) -> BoxFut + Send + Sync
+    where
+        F: Fn(usize, &Option<ProxyConfig>) -> ProxyOutcome + Send + Sync + 'static,
+    {
+        let calls = calls.clone();
+        move |email, proxy| {
+            let n = {
+                let mut calls = calls.lock().unwrap();
+                calls.push(proxy.as_ref().map(|p| p.id()));
+                calls.len() - 1
+            };
+            let outcome = outcome(n, &proxy);
+            Box::pin(async move {
+                if delay_ms > 0 {
+                    sleep(Duration::from_millis(delay_ms)).await;
+                } else {
+                    tokio::task::yield_now().await;
+                }
+                fake_result(&email, &proxy, outcome)
+            })
+        }
+    }
+
+    fn count_for(calls: &Calls, id: &str) -> usize {
+        calls.lock().unwrap().iter().filter(|c| c.as_deref() == Some(id)).count()
+    }
+
+    fn assert_subset_no_dupes(outcome: &RunOutcome, inputs: &[String]) {
+        let inputs: HashSet<&String> = inputs.iter().collect();
+        let mut seen = HashSet::new();
+        for r in &outcome.results {
+            assert!(inputs.contains(&r.email), "result for unknown email {}", r.email);
+            assert!(seen.insert(r.email.clone()), "duplicate result for {}", r.email);
+        }
+    }
+
+    // 1. With require_proxy, an email is never dispatched direct — even as
+    //    the pool drains under a validator whose every proxy attempt fails.
+    #[tokio::test(start_paused = true)]
+    async fn test_fail_closed_never_dispatches_direct() {
+        for concurrency in [1usize, 10, 64] {
+            let settings = test_settings(2);
+            let (_now, clock) = manual_clock();
+            let calls: Calls = Default::default();
+            let log = Arc::new(EventLog::default());
+            let inputs = emails(300);
+
+            let outcome = validate_emails_bulk_core(
+                inputs.clone(),
+                concurrency,
+                CancellationToken::new(),
+                policy(&settings, clock, true),
+                scripted(&calls, 1, |_, _| ProxyOutcome::Failure),
+                sink(&log),
+            )
+            .await;
+
+            let calls = calls.lock().unwrap();
+            assert!(!calls.is_empty());
+            assert!(
+                calls.iter().all(|c| c.is_some()),
+                "concurrency {}: validator was called with proxy=None",
+                concurrency
+            );
+            assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_PAUSED_NO_PROXY));
+            assert!(outcome.results.len() < inputs.len());
+            assert_eq!(log.failed_count(), 1);
+            assert_subset_no_dupes(&outcome, &inputs);
+        }
+
+        // Pool emptied before the run dispatches anything: still never direct.
+        let settings = test_settings(0);
+        let calls: Calls = Default::default();
+        let log = Arc::new(EventLog::default());
+        let outcome = validate_emails_bulk_core(
+            emails(10),
+            4,
+            CancellationToken::new(),
+            policy(&settings, system_clock(), true),
+            scripted(&calls, 0, |_, _| ProxyOutcome::Success),
+            sink(&log),
+        )
+        .await;
+        assert!(calls.lock().unwrap().is_empty());
+        assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_PAUSED_NO_PROXY));
+        assert_eq!(log.failed_count(), 1);
+    }
+
+    // 2. Health is live: a failing proxy is cooled down mid-run and the
+    //    healthy one carries the rest; stale in-flight failures don't count.
+    #[tokio::test(start_paused = true)]
+    async fn test_live_health_steers_away_from_failing_proxy() {
+        for concurrency in [1usize, 8, 32] {
+            let settings = test_settings(2);
+            let (a, b) = (proxy_id(1), proxy_id(2));
+            let (_now, clock) = manual_clock();
+            let calls: Calls = Default::default();
+            let log = Arc::new(EventLog::default());
+            let a_for_validator = a.clone();
+
+            let outcome = validate_emails_bulk_core(
+                emails(200),
+                concurrency,
+                CancellationToken::new(),
+                policy(&settings, clock, true),
+                scripted(&calls, 2, move |_, p| {
+                    if p.as_ref().map(|p| p.id()) == Some(a_for_validator.clone()) {
+                        ProxyOutcome::Failure
+                    } else {
+                        ProxyOutcome::Success
+                    }
+                }),
+                sink(&log),
+            )
+            .await;
+
+            assert_eq!(outcome.stop_reason, None);
+            assert_eq!(outcome.results.len(), 200);
+            let a_dispatches = count_for(&calls, &a);
+            let b_dispatches = count_for(&calls, &b);
+            assert!(
+                a_dispatches <= 3 + concurrency,
+                "concurrency {}: A got {} dispatches",
+                concurrency,
+                a_dispatches
+            );
+            assert_eq!(a_dispatches + b_dispatches, 200);
+
+            let s = settings.read().await;
+            let a_stats = s.proxy_pool.get_stats(&a);
+            let b_stats = s.proxy_pool.get_stats(&b);
+            // Only failures dispatched before A's cooldown epoch moved on
+            // are recorded: at most the 3 that put it in cooldown.
+            assert_eq!(a_stats.failures as usize, a_dispatches.min(3));
+            assert_eq!(a_stats.attempts, a_stats.failures);
+            assert!(!a_stats.auto_disabled);
+            assert_eq!(b_stats.successes as usize, b_dispatches);
+            assert_eq!(b_stats.attempts as usize, b_dispatches);
+        }
+    }
+
+    // 3. A burst of stale failures (all dispatched before the cooldown) must
+    //    not extend the cooldown or auto-disable; a stale success must not
+    //    clear a newer cooldown.
+    #[tokio::test]
+    async fn test_cooldown_epoch_ignores_stale_burst() {
+        let settings = test_settings(1);
+        let a = proxy_id(1);
+        let (now, clock) = manual_clock();
+        let state = ProxyRotationState::new(settings.clone(), clock);
+
+        let mut tags = Vec::new();
+        for i in 0..64 {
+            let (proxy, tag) = state.select(&format!("u{}@x.com", i)).await.unwrap();
+            assert_eq!(tag.epoch, 0);
+            tags.push((Some(proxy), tag));
+        }
+
+        let mut recorded = 0;
+        let mut stale = 0;
+        for (i, (proxy, tag)) in tags.iter().enumerate() {
+            // Time moves during the burst (so an extension would show), but
+            // stays inside the 60s cooldown.
+            if i < 10 {
+                now.fetch_add(1, Ordering::SeqCst);
+            }
+            match state.record(tag, &fake_result("x@x.com", proxy, ProxyOutcome::Failure)).await {
+                RecordOutcome::Recorded => recorded += 1,
+                RecordOutcome::Stale => stale += 1,
+                other => panic!("unexpected {:?}", other),
+            }
+        }
+        assert_eq!((recorded, stale), (3, 61));
+
+        {
+            let s = settings.read().await;
+            let stats = s.proxy_pool.get_stats(&a);
+            assert_eq!(stats.attempts, 3);
+            assert_eq!(stats.cooldown_epoch, 1);
+            assert!(!stats.auto_disabled);
+            // Entered at the 3rd failure (T0+3) and never extended.
+            assert_eq!(stats.cooldown_until, Some(T0 + 3 + 60));
+        }
+
+        // Stale success (dispatched at epoch 0) does not clear the cooldown.
+        let (proxy, tag) = &tags[0];
+        assert_eq!(
+            state.record(tag, &fake_result("x@x.com", proxy, ProxyOutcome::Success)).await,
+            RecordOutcome::Stale
+        );
+        assert_eq!(settings.read().await.proxy_pool.get_stats(&a).cooldown_until, Some(T0 + 63));
+        assert!(state.select("y@x.com").await.is_none());
+
+        // After expiry, a fresh dispatch carries the new epoch and counts.
+        now.store(T0 + 63, Ordering::SeqCst);
+        let (proxy, tag) = state.select("z@x.com").await.unwrap();
+        assert_eq!(tag.epoch, 1);
+        assert_eq!(
+            state.record(&tag, &fake_result("z@x.com", &Some(proxy), ProxyOutcome::Failure)).await,
+            RecordOutcome::Recorded
+        );
+        let stats = settings.read().await.proxy_pool.get_stats(&a);
+        assert_eq!(stats.attempts, 4);
+        assert_eq!(stats.cooldown_epoch, 2);
+
+        // Control: without the epoch filter the same burst auto-disables.
+        let mut pool = ProxyPool::new();
+        pool.add_proxy(ProxyConfig::new("10.0.0.1".to_string(), 1080)).unwrap();
+        for _ in 0..64 {
+            pool.record_failure_at(&a, T0);
+        }
+        assert!(pool.get_stats(&a).auto_disabled);
+    }
+
+    // 4. A full drain at concurrency 64 produces exactly one pause event
+    //    and one self-cancel, a typed stop reason, and a partial subset.
+    #[tokio::test(start_paused = true)]
+    async fn test_drain_single_event_at_high_concurrency() {
+        // (a) Proxies get auto-disabled: pause immediately, no waiting.
+        let settings = test_settings(3);
+        {
+            let mut s = settings.write().await;
+            s.proxy_pool.auto_disable_threshold.min_attempts = 1;
+            s.proxy_pool.auto_disable_threshold.success_rate_percent = 50;
+        }
+        let (_now, clock) = manual_clock();
+        let calls: Calls = Default::default();
+        let log = Arc::new(EventLog::default());
+        let token = CancellationToken::new();
+        let inputs = emails(500);
+
+        let outcome = validate_emails_bulk_core(
+            inputs.clone(),
+            64,
+            token.clone(),
+            policy(&settings, clock, true),
+            scripted(&calls, 3, |_, _| ProxyOutcome::Failure),
+            sink(&log),
+        )
+        .await;
+
+        assert_eq!(log.failed_count(), 1);
+        assert_eq!(log.waiting_count(), 0);
+        assert!(token.is_cancelled());
+        assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_PAUSED_NO_PROXY));
+        assert!(outcome.results.len() < inputs.len());
+        assert_eq!(log.progress.load(Ordering::SeqCst), outcome.results.len());
+        assert_subset_no_dupes(&outcome, &inputs);
+        let event = &log.failed.lock().unwrap()[0];
+        assert!(event.failed_proxies.iter().all(|p| p.auto_disabled));
+
+        // (b) Cooldown only, but the clock never moves: wait cycles, then
+        //     exactly one final pause.
+        let settings = test_settings(3);
+        let (_now, clock) = manual_clock();
+        let calls: Calls = Default::default();
+        let log = Arc::new(EventLog::default());
+        let token = CancellationToken::new();
+
+        let outcome = validate_emails_bulk_core(
+            inputs.clone(),
+            64,
+            token.clone(),
+            policy(&settings, clock, true),
+            scripted(&calls, 3, |_, _| ProxyOutcome::Failure),
+            sink(&log),
+        )
+        .await;
+
+        assert_eq!(log.waiting_count(), MAX_PROXY_WAIT_CYCLES as usize);
+        assert_eq!(log.failed_count(), 1);
+        assert!(token.is_cancelled());
+        assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_PAUSED_NO_PROXY));
+        assert_subset_no_dupes(&outcome, &inputs);
+    }
+
+    // 5. Destination-side timeouts on every proxy are Neutral and must not
+    //    drain the pool.
+    #[tokio::test(start_paused = true)]
+    async fn test_dead_domain_timeouts_do_not_drain_pool() {
+        let timeout_outcome = proxy_outcome_for(true, &Err(SmtpError::Timeout(Duration::from_secs(10))));
+        assert_eq!(timeout_outcome, ProxyOutcome::Neutral);
+
+        let settings = test_settings(2);
+        let calls: Calls = Default::default();
+        let log = Arc::new(EventLog::default());
+        let outcome = validate_emails_bulk_core(
+            emails(200),
+            16,
+            CancellationToken::new(),
+            policy(&settings, system_clock(), true),
+            scripted(&calls, 2, move |_, _| timeout_outcome.clone()),
+            sink(&log),
+        )
+        .await;
+
+        assert_eq!(outcome.stop_reason, None);
+        assert_eq!(outcome.results.len(), 200);
+        assert_eq!(log.failed_count(), 0);
+        assert_eq!(log.waiting_count(), 0);
+        let s = settings.read().await;
+        assert!(s.proxy_pool.has_available_proxies());
+        assert_eq!(s.proxy_pool.get_stats(&proxy_id(1)).attempts, 0);
+        assert_eq!(s.proxy_pool.get_stats(&proxy_id(2)).attempts, 0);
+    }
+
+    fn draining_settings() -> Arc<RwLock<Settings>> {
+        let settings = test_settings(1);
+        {
+            let mut s = settings.try_write().unwrap();
+            s.proxy_pool.auto_disable_threshold.min_attempts = 1;
+            s.proxy_pool.auto_disable_threshold.success_rate_percent = 50;
+        }
+        settings
+    }
+
+    // 6. A run pausing itself cancels only its own token.
+    #[tokio::test(start_paused = true)]
+    async fn test_self_pause_does_not_cancel_other_run() {
+        // Sequential: A pauses itself, then B begins clean on the same state.
+        let state = ValidationState::default();
+        let (id_a, token_a) = state.begin_run_with_id();
+        let log_a = Arc::new(EventLog::default());
+        let outcome_a = validate_emails_bulk_core(
+            emails(50),
+            8,
+            token_a.clone(),
+            policy(&draining_settings(), system_clock(), true),
+            scripted(&Default::default(), 1, |_, _| ProxyOutcome::Failure),
+            sink(&log_a),
+        )
+        .await;
+        assert_eq!(outcome_a.stop_reason.as_deref(), Some(STOP_PAUSED_NO_PROXY));
+        assert!(token_a.is_cancelled());
+
+        let (id_b, token_b) = state.begin_run_with_id();
+        assert!(id_b > id_a);
+        assert!(!token_b.is_cancelled());
+        assert!(!state.get_token().is_cancelled());
+        let outcome_b = validate_emails_bulk_core(
+            emails(50),
+            8,
+            token_b.clone(),
+            policy(&test_settings(2), system_clock(), true),
+            scripted(&Default::default(), 1, |_, _| ProxyOutcome::Success),
+            sink(&Arc::new(EventLog::default())),
+        )
+        .await;
+        assert_eq!(outcome_b.stop_reason, None);
+        assert!(!token_b.is_cancelled());
+
+        // Concurrent: A drains and pauses while B is still running.
+        let state_a = ValidationState::default();
+        let state_b = ValidationState::default();
+        let token_a = state_a.begin_run();
+        let token_b = state_b.begin_run();
+        let (outcome_a, outcome_b) = tokio::join!(
+            validate_emails_bulk_core(
+                emails(50),
+                8,
+                token_a.clone(),
+                policy(&draining_settings(), system_clock(), true),
+                scripted(&Default::default(), 1, |_, _| ProxyOutcome::Failure),
+                sink(&Arc::new(EventLog::default())),
+            ),
+            validate_emails_bulk_core(
+                emails(100),
+                4,
+                token_b.clone(),
+                policy(&test_settings(2), system_clock(), true),
+                scripted(&Default::default(), 5, |_, _| ProxyOutcome::Success),
+                sink(&Arc::new(EventLog::default())),
+            )
+        );
+        assert_eq!(outcome_a.stop_reason.as_deref(), Some(STOP_PAUSED_NO_PROXY));
+        assert!(token_a.is_cancelled());
+        assert_eq!(outcome_b.stop_reason, None);
+        assert_eq!(outcome_b.results.len(), 100);
+        assert!(!token_b.is_cancelled());
+        assert!(!state_b.get_token().is_cancelled());
+    }
+
+    // 7. Every non-Neutral result with a known proxy is recorded exactly
+    //    once (no post-run double counting).
+    #[tokio::test(start_paused = true)]
+    async fn test_no_double_counting() {
+        // concurrency 1 can't produce stale results, so every non-Neutral
+        // outcome must be recorded; concurrency 10 with no failures likewise.
+        let cases: Vec<(usize, fn(usize) -> ProxyOutcome)> = vec![
+            (1, |n| match n % 4 {
+                0 => ProxyOutcome::Neutral,
+                3 => ProxyOutcome::Failure,
+                _ => ProxyOutcome::Success,
+            }),
+            (10, |n| if n % 3 == 0 { ProxyOutcome::Neutral } else { ProxyOutcome::Success }),
+        ];
+        for (concurrency, script) in cases {
+            let settings = test_settings(2);
+            let (_now, clock) = manual_clock();
+            let outcome = validate_emails_bulk_core(
+                emails(120),
+                concurrency,
+                CancellationToken::new(),
+                policy(&settings, clock, true),
+                scripted(&Default::default(), 1, move |n, _| script(n)),
+                sink(&Arc::new(EventLog::default())),
+            )
+            .await;
+
+            let counted = |want: ProxyOutcome| {
+                outcome
+                    .results
+                    .iter()
+                    .filter(|r| r.proxy_id.is_some() && r.proxy_outcome == want)
+                    .count() as u32
+            };
+            let s = settings.read().await;
+            let (mut attempts, mut successes, mut failures) = (0, 0, 0);
+            for id in [proxy_id(1), proxy_id(2)] {
+                let stats = s.proxy_pool.get_stats(&id);
+                attempts += stats.attempts;
+                successes += stats.successes;
+                failures += stats.failures;
+            }
+            assert_eq!(successes, counted(ProxyOutcome::Success), "concurrency {}", concurrency);
+            assert_eq!(failures, counted(ProxyOutcome::Failure), "concurrency {}", concurrency);
+            assert_eq!(attempts, successes + failures);
+        }
+    }
+
+    // 8a. Disabling the pool mid-run pauses the run; it never goes direct.
+    #[tokio::test(start_paused = true)]
+    async fn test_mid_run_disable_pauses_instead_of_direct() {
+        let settings = test_settings(2);
+        let calls: Calls = Default::default();
+        let log = Arc::new(EventLog::default());
+        let settings_for_validator = settings.clone();
+        let calls_for_validator = calls.clone();
+        let validator = move |email: String, proxy: Option<ProxyConfig>| -> BoxFut {
+            let n = {
+                let mut c = calls_for_validator.lock().unwrap();
+                c.push(proxy.as_ref().map(|p| p.id()));
+                c.len()
+            };
+            let settings = settings_for_validator.clone();
+            Box::pin(async move {
+                if n == 20 {
+                    settings.write().await.proxy_pool.enabled = false;
+                }
+                sleep(Duration::from_millis(2)).await;
+                fake_result(&email, &proxy, ProxyOutcome::Success)
+            })
+        };
+
+        let outcome = validate_emails_bulk_core(
+            emails(200),
+            8,
+            CancellationToken::new(),
+            policy(&settings, system_clock(), true),
+            validator,
+            sink(&log),
+        )
+        .await;
+
+        assert!(calls.lock().unwrap().iter().all(|c| c.is_some()));
+        assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_PAUSED_NO_PROXY));
+        assert!(outcome.results.len() < 200);
+        assert_eq!(log.failed_count(), 1);
+        assert!(!log.failed.lock().unwrap()[0].proxy_enabled);
+    }
+
+    // 8b. Deleting a proxy mid-run: it is never selected afterwards, and
+    //     its in-flight results don't resurrect orphan stats.
+    #[tokio::test(start_paused = true)]
+    async fn test_mid_run_delete_proxy() {
+        let settings = test_settings(2);
+        let a = proxy_id(1);
+        let deleted = Arc::new(AtomicBool::new(false));
+        let used_after_delete = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let validator = {
+            let (settings, deleted, used_after_delete, calls, a) =
+                (settings.clone(), deleted.clone(), used_after_delete.clone(), calls.clone(), a.clone());
+            move |email: String, proxy: Option<ProxyConfig>| -> BoxFut {
+                let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                let is_a = proxy.as_ref().map(|p| p.id()) == Some(a.clone());
+                if is_a && deleted.load(Ordering::SeqCst) {
+                    used_after_delete.store(true, Ordering::SeqCst);
+                }
+                let (settings, deleted, a) = (settings.clone(), deleted.clone(), a.clone());
+                Box::pin(async move {
+                    if n == 10 {
+                        settings.write().await.proxy_pool.remove_proxy(&a);
+                        deleted.store(true, Ordering::SeqCst);
+                    }
+                    sleep(Duration::from_millis(5)).await;
+                    fake_result(&email, &proxy, ProxyOutcome::Success)
+                })
+            }
+        };
+
+        let outcome = validate_emails_bulk_core(
+            emails(100),
+            8,
+            CancellationToken::new(),
+            policy(&settings, system_clock(), true),
+            validator,
+            sink(&Arc::new(EventLog::default())),
+        )
+        .await;
+
+        assert_eq!(outcome.stop_reason, None);
+        assert_eq!(outcome.results.len(), 100);
+        assert!(deleted.load(Ordering::SeqCst));
+        assert!(!used_after_delete.load(Ordering::SeqCst));
+        // In-flight A results finished after the delete; none recreated stats.
+        assert!(outcome.results.iter().any(|r| r.proxy_id.as_deref() == Some(a.as_str())));
+        assert!(!settings.read().await.proxy_pool.proxy_stats.contains_key(&a));
+    }
+
+    // 8c. With the session bypass on (require_proxy=false), direct is allowed.
+    #[tokio::test(start_paused = true)]
+    async fn test_bypass_allows_direct() {
+        // No pool at all.
+        let calls: Calls = Default::default();
+        let outcome = validate_emails_bulk_core(
+            emails(20),
+            4,
+            CancellationToken::new(),
+            ProxyPolicy::direct(),
+            scripted(&calls, 1, |_, _| ProxyOutcome::Success),
+            sink(&Arc::new(EventLog::default())),
+        )
+        .await;
+        assert_eq!(outcome.stop_reason, None);
+        assert!(calls.lock().unwrap().iter().all(|c| c.is_none()));
+
+        // A pool that is unavailable: falls back to direct, no pause.
+        let settings = test_settings(1);
+        settings.write().await.proxy_pool.enabled = false;
+        let calls: Calls = Default::default();
+        let log = Arc::new(EventLog::default());
+        let outcome = validate_emails_bulk_core(
+            emails(20),
+            4,
+            CancellationToken::new(),
+            policy(&settings, system_clock(), false),
+            scripted(&calls, 1, |_, _| ProxyOutcome::Success),
+            sink(&log),
+        )
+        .await;
+        assert_eq!(outcome.stop_reason, None);
+        assert_eq!(outcome.results.len(), 20);
+        assert!(calls.lock().unwrap().iter().all(|c| c.is_none()));
+        assert_eq!(log.failed_count(), 0);
+    }
+
+    // 9. Cooldown expiry is clock-driven: after expiry the proxy is
+    //    selectable again, and a run waits in place for it.
+    #[tokio::test(start_paused = true)]
+    async fn test_cooldown_expiry_makes_proxy_selectable() {
+        let settings = test_settings(1);
+        let (now, clock) = manual_clock();
+        let state = ProxyRotationState::new(settings.clone(), clock);
+        for i in 0..3 {
+            let (proxy, tag) = state.select(&format!("u{}@x.com", i)).await.unwrap();
+            state.record(&tag, &fake_result("x@x.com", &Some(proxy), ProxyOutcome::Failure)).await;
+        }
+        assert!(state.select("a@x.com").await.is_none());
+        now.store(T0 + 59, Ordering::SeqCst);
+        assert!(state.select("a@x.com").await.is_none());
+        now.store(T0 + 60, Ordering::SeqCst);
+        assert!(state.select("a@x.com").await.is_some());
+
+        // In a run: the only proxy fails 3 times, the run waits out the
+        // cooldown (virtual time), then finishes on the recovered proxy.
+        let settings = test_settings(1);
+        let calls: Calls = Default::default();
+        let log = Arc::new(EventLog::default());
+        let outcome = validate_emails_bulk_core(
+            emails(20),
+            1,
+            CancellationToken::new(),
+            policy(&settings, tokio_clock(), true),
+            scripted(&calls, 1, |n, _| if n < 3 { ProxyOutcome::Failure } else { ProxyOutcome::Success }),
+            sink(&log),
+        )
+        .await;
+        assert_eq!(outcome.stop_reason, None);
+        assert_eq!(outcome.results.len(), 20);
+        assert_eq!(log.waiting_count(), 1);
+        assert_eq!(log.failed_count(), 0);
+        assert!(calls.lock().unwrap().iter().all(|c| c.is_some()));
+    }
+
+    // 10. Settings commands take the write lock while a run is selecting
+    //     and recording; nothing may deadlock.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_settings_writes_during_run_do_not_deadlock() {
+        let settings = test_settings(4);
+        let writer = {
+            let settings = settings.clone();
+            tokio::spawn(async move {
+                for i in 0..200 {
+                    {
+                        let mut s = settings.write().await;
+                        s.timeout_ms += 1;
+                        s.proxy_pool.set_cooldown_duration(30 + (i % 10));
+                    }
+                    sleep(Duration::from_millis(1)).await;
+                }
+            })
+        };
+
+        let run = validate_emails_bulk_core(
+            emails(400),
+            32,
+            CancellationToken::new(),
+            policy(&settings, system_clock(), true),
+            scripted(&Default::default(), 1, |n, _| {
+                if n % 7 == 0 { ProxyOutcome::Failure } else { ProxyOutcome::Success }
+            }),
+            sink(&Arc::new(EventLog::default())),
+        );
+
+        let outcome = tokio::time::timeout(Duration::from_secs(30), run)
+            .await
+            .expect("run deadlocked against settings writes");
+        tokio::time::timeout(Duration::from_secs(30), writer)
+            .await
+            .expect("settings writer deadlocked")
+            .unwrap();
+        assert!(outcome.stop_reason.is_none() || outcome.stop_reason.as_deref() == Some(STOP_PAUSED_NO_PROXY));
+        assert_eq!(settings.read().await.timeout_ms, Settings::default().timeout_ms + 200);
+    }
+
+    #[tokio::test]
+    async fn test_external_cancel_reports_cancelled() {
+        let token = CancellationToken::new();
+        let calls: Calls = Default::default();
+        let token_for_validator = token.clone();
+        let calls_for_validator = calls.clone();
+        let validator = move |email: String, proxy: Option<ProxyConfig>| -> BoxFut {
+            calls_for_validator.lock().unwrap().push(None);
+            if calls_for_validator.lock().unwrap().len() == 5 {
+                token_for_validator.cancel();
+            }
+            Box::pin(async move { fake_result(&email, &proxy, ProxyOutcome::Neutral) })
+        };
+        let outcome = validate_emails_bulk_core(
+            emails(50),
+            1,
+            token,
+            ProxyPolicy::direct(),
+            validator,
+            sink(&Arc::new(EventLog::default())),
+        )
+        .await;
+        assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_CANCELLED));
+        assert!(outcome.results.len() < 50);
+    }
+
+    #[test]
+    fn test_run_outcome_serializes_camel_case() {
+        let outcome = RunOutcome {
+            results: vec![],
+            stop_reason: Some(STOP_PAUSED_NO_PROXY.to_string()),
+        };
+        let json = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(json["stopReason"], "paused_no_proxy");
+        assert!(json["results"].is_array());
+    }
+
+    // The rate-limited (sequential) branch shares the same fail-closed path.
+    #[tokio::test(start_paused = true)]
+    async fn test_rate_limited_branch_is_fail_closed() {
+        let calls: Calls = Default::default();
+        let log = Arc::new(EventLog::default());
+        let outcome = validate_emails_bulk_with_rate_limit(
+            emails(30),
+            8,
+            CancellationToken::new(),
+            policy(&draining_settings(), system_clock(), true),
+            scripted(&calls, 1, |_, _| ProxyOutcome::Failure),
+            sink(&log),
+            Some(RateLimiterConfig { max_per_second: 10, max_per_minute: 600 }),
+        )
+        .await;
+        assert!(calls.lock().unwrap().iter().all(|c| c.is_some()));
+        assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_PAUSED_NO_PROXY));
+        assert_eq!(log.failed_count(), 1);
     }
 }

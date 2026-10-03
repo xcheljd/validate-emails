@@ -507,7 +507,7 @@
 
     #[test]
     fn test_get_next_proxy_empty_pool() {
-        let mut pool = ProxyPool::new();
+        let pool = ProxyPool::new();
         let mut index = 0;
 
         let proxy = pool.get_next_proxy(&mut index);
@@ -615,7 +615,7 @@
 
     #[test]
     fn test_get_proxy_for_email_empty_pool() {
-        let mut pool = ProxyPool::new();
+        let pool = ProxyPool::new();
         let mut index = 0;
 
         let proxy = pool.get_proxy_for_email("test@example.com", &mut index);
@@ -2257,6 +2257,7 @@
             remaining_cooldown_secs: 45,
             consecutive_failures: 3,
             success_rate: 50,
+            auto_disabled: false,
         };
         
         let json = serde_json::to_string(&info).unwrap();
@@ -2276,6 +2277,7 @@
                 remaining_cooldown_secs: 45,
                 consecutive_failures: 3,
                 success_rate: 50,
+                auto_disabled: false,
             }],
             proxy_enabled: true,
             total_proxies: 1,

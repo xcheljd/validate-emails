@@ -180,6 +180,87 @@ describe('useEmailValidation retryWithEscalation', () => {
     expect(revalidateCalls[1][1]).toHaveProperty('mode', 'thorough');
   });
 
+  it('should not advance tiers when a tier pauses for lack of a proxy', async () => {
+    const { result } = renderHook(() => useEmailValidation(), { wrapper });
+
+    act(() => {
+      result.current.setResults([
+        makeResult('unknown1@test.com', 'Unknown'),
+        makeResult('unknown2@test.com', 'Unknown'),
+      ]);
+    });
+
+    // The standard tier pauses itself after finishing one email; the other
+    // one is still Unknown only because it was never dispatched.
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
+      if (cmd === 'revalidate_emails_bulk') {
+        return Promise.resolve({
+          results: [makeResult('unknown1@test.com', 'Unknown')],
+          stopReason: 'paused_no_proxy',
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await act(async () => {
+      await result.current.retryWithEscalation('standard', true);
+    });
+
+    const revalidateCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => call[0] === 'revalidate_emails_bulk'
+    );
+    expect(revalidateCalls).toHaveLength(1);
+    expect(revalidateCalls[0][1]).toHaveProperty('mode', 'standard');
+    expect(result.current.status).toBe('paused');
+    expect(result.current.isEscalating).toBe(false);
+  });
+
+  it('should not advance tiers when a tier is cancelled', async () => {
+    const { result } = renderHook(() => useEmailValidation(), { wrapper });
+
+    act(() => {
+      result.current.setResults([makeResult('unknown1@test.com', 'Unknown')]);
+    });
+
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+      results: [],
+      stopReason: 'cancelled',
+    });
+
+    await act(async () => {
+      await result.current.retryWithEscalation('standard', true);
+    });
+
+    const revalidateCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => call[0] === 'revalidate_emails_bulk'
+    );
+    expect(revalidateCalls).toHaveLength(1);
+  });
+
+  it('should escalate through tiers when each tier completes (RunOutcome shape)', async () => {
+    const { result } = renderHook(() => useEmailValidation(), { wrapper });
+
+    act(() => {
+      result.current.setResults([makeResult('unknown1@test.com', 'Unknown')]);
+    });
+
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+      results: [makeResult('unknown1@test.com', 'Unknown')],
+      stopReason: null,
+    });
+
+    await act(async () => {
+      await result.current.retryWithEscalation('standard', true);
+    });
+
+    const revalidateCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => call[0] === 'revalidate_emails_bulk'
+    );
+    expect(revalidateCalls).toHaveLength(2);
+    expect(revalidateCalls[1][1]).toHaveProperty('mode', 'thorough');
+    expect(result.current.status).toBe('idle');
+  });
+
   it('should stop auto-escalation early if all Unknowns are resolved', async () => {
     const { result } = renderHook(() => useEmailValidation(), { wrapper });
 
