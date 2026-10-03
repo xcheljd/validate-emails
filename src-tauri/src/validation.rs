@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use std::future::Future;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::RwLock;
@@ -218,9 +218,16 @@ impl Default for ValidationState {
 }
 
 impl ValidationState {
+    /// Lock the current token, surviving a poisoned mutex (B19). A panic
+    /// while holding the lock can't leave the token half-updated (it is
+    /// swapped by a single assignment), so the inner value is still sound;
+    /// unwrapping would instead make every later Start/Stop/Pause panic.
+    fn token_guard(&self) -> MutexGuard<'_, CancellationToken> {
+        self.token.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     pub fn cancel(&self) {
-        let token = self.token.lock().unwrap();
-        token.cancel();
+        self.token_guard().cancel();
     }
 
     /// Begin a new validation run. Cancels the previous run's token and
@@ -240,7 +247,7 @@ impl ValidationState {
 
     /// `begin_run`, also returning the new run's id.
     pub fn begin_run_with_id(&self) -> (u64, CancellationToken) {
-        let mut token = self.token.lock().unwrap();
+        let mut token = self.token_guard();
         token.cancel();
         *token = CancellationToken::new();
         let run_id = self.run_counter.fetch_add(1, Ordering::SeqCst) + 1;
@@ -249,7 +256,7 @@ impl ValidationState {
 
     #[cfg(test)]
     pub fn get_token(&self) -> CancellationToken {
-        self.token.lock().unwrap().clone()
+        self.token_guard().clone()
     }
 }
 
@@ -1504,6 +1511,29 @@ mod tests {
     }
 
     // B9: concurrency must be clamped to [1, 64].
+    // B19: a panic while holding the token lock poisons it; every accessor
+    // must keep working instead of panicking on each later command.
+    #[test]
+    fn test_validation_state_survives_poisoned_mutex() {
+        let state = ValidationState::default();
+        let (_, before) = state.begin_run_with_id();
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.token.lock().unwrap();
+            panic!("deliberate panic while holding the token lock");
+        }));
+        assert!(poisoned.is_err());
+        assert!(state.token.is_poisoned());
+
+        assert!(!state.get_token().is_cancelled());
+        state.cancel();
+        assert!(before.is_cancelled());
+        let (run_id, fresh) = state.begin_run_with_id();
+        assert_eq!(run_id, 2);
+        assert!(!fresh.is_cancelled());
+        state.cancel();
+        assert!(fresh.is_cancelled());
+    }
+
     #[test]
     fn test_clamp_concurrency() {
         assert_eq!(clamp_concurrency(0), 1);
