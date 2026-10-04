@@ -141,6 +141,10 @@ export interface AppSettings {
   rateLimitMaxPerMinute: number;
   /** Max emails per session (0 = unlimited, default 0) */
   maxEmailsPerSession: number;
+  /** SMTP callout MAIL FROM ('' = built-in default) */
+  fromEmail: string;
+  /** SMTP callout HELO name ('' = built-in default) */
+  helloName: string;
 }
 
 /** Default proxy settings */
@@ -169,4 +173,6 @@ export const defaultSettings: AppSettings = {
   rateLimitMaxPerSecond: 1,
   rateLimitMaxPerMinute: 60,
   maxEmailsPerSession: 0,
+  fromEmail: '',
+  helloName: '',
 };

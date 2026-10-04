@@ -36,6 +36,8 @@ interface BackendSettings {
   history_retention_days: number;
   max_emails_per_session: number;
   rate_limiter: { max_per_second: number; max_per_minute: number };
+  from_email: string;
+  hello_name: string;
 }
 
 interface BackendProxyPool {
@@ -60,6 +62,8 @@ function backendToFrontend(backend: BackendSettings): Partial<AppSettings> {
     maxEmailsPerSession: backend.max_emails_per_session ?? 0,
     rateLimitMaxPerSecond: backend.rate_limiter?.max_per_second ?? 1,
     rateLimitMaxPerMinute: backend.rate_limiter?.max_per_minute ?? 60,
+    fromEmail: backend.from_email ?? '',
+    helloName: backend.hello_name ?? '',
   };
 }
 
@@ -76,6 +80,8 @@ function frontendToBackend(frontend: AppSettings): BackendSettings {
       max_per_second: frontend.rateLimitMaxPerSecond,
       max_per_minute: frontend.rateLimitMaxPerMinute,
     },
+    from_email: frontend.fromEmail.trim(),
+    hello_name: frontend.helloName.trim(),
   };
 }
 

@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Trash2, Save, History, ShieldCheck, Shield, Gauge, Activity } from 'lucide-react';
+import { Trash2, Save, History, ShieldCheck, Shield, Gauge, Activity, Mail } from 'lucide-react';
 import {
   useSettings,
   AppSettings,
@@ -14,6 +14,23 @@ import { toast } from 'sonner';
 import { ProxyList } from './proxy-list';
 import { PerDomainAssignment } from './per-domain-assignment';
 import { ProxyHealthDashboard } from './proxy-health-dashboard';
+
+/**
+ * Mirrors the backend's validate_smtp_identity: both fields may be blank
+ * (built-in default); a from address needs an '@'; neither may contain
+ * whitespace. Returns an error message, or null if valid.
+ */
+export function validateSmtpIdentity(
+  fromEmail: string,
+  helloName: string
+): string | null {
+  const from = fromEmail.trim();
+  const helo = helloName.trim();
+  if (from && !from.includes('@')) return "From email must contain '@'";
+  if (/\s/.test(from)) return 'From email must not contain spaces';
+  if (/\s/.test(helo)) return 'HELO name must not contain spaces';
+  return null;
+}
 
 interface SettingsContentProps {
   onClose?: () => void;
@@ -42,6 +59,14 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
   }, [settings]);
 
   const handleSave = () => {
+    const smtpError = validateSmtpIdentity(
+      localSettings.fromEmail,
+      localSettings.helloName
+    );
+    if (smtpError) {
+      toast.error(smtpError);
+      return;
+    }
     updateSettings(localSettings);
     toast.success('Settings saved successfully');
     if (onClose) onClose();
@@ -393,6 +418,47 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                 <span className="text-xs text-muted-foreground whitespace-nowrap">
                   Saves results every 10 items
                 </span>
+              </div>
+            </div>
+
+            {/* SMTP Callout Section */}
+            <div className="pt-4 border-t">
+              <div className="flex items-center gap-2 mb-4">
+                <Mail className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium">SMTP Callout</h3>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="from-email">From email (SMTP callout)</Label>
+                  <Input
+                    id="from-email"
+                    type="email"
+                    placeholder="verify@example.com"
+                    value={localSettings.fromEmail}
+                    onChange={(e) => handleChange('fromEmail', e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Use an address on a real domain you control. example.com
+                    is rejected by many servers. Leave blank for the default.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="hello-name">HELO name</Label>
+                  <Input
+                    id="hello-name"
+                    type="text"
+                    placeholder="example.com"
+                    value={localSettings.helloName}
+                    onChange={(e) => handleChange('helloName', e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Use a real domain you control, ideally one whose reverse
+                    DNS matches your sending IP. example.com is rejected by
+                    many servers. Leave blank for the default.
+                  </p>
+                </div>
               </div>
             </div>
 

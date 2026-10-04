@@ -36,6 +36,12 @@ pub struct Settings {
     /// Maximum emails per validation session. 0 = unlimited. Default: 0.
     #[serde(default)]
     pub max_emails_per_session: u32,
+    /// MAIL FROM address for the SMTP callout. Empty = built-in default.
+    #[serde(default)]
+    pub from_email: String,
+    /// HELO/EHLO name for the SMTP callout. Empty = built-in default.
+    #[serde(default)]
+    pub hello_name: String,
 }
 
 impl Default for Settings {
@@ -50,8 +56,29 @@ impl Default for Settings {
             rate_limiter: RateLimiterConfig::default(),
             proxy_pool: ProxyPool::default(),
             max_emails_per_session: 0,
+            from_email: String::new(),
+            hello_name: String::new(),
         }
     }
+}
+
+/// Validate the user-supplied SMTP identity. Both fields may be empty
+/// (= use the built-in default). A non-empty `from_email` must look like an
+/// address (contain '@', no whitespace); `hello_name` must not contain
+/// whitespace. Deliberately loose — the MX is the real judge.
+pub fn validate_smtp_identity(from_email: &str, hello_name: &str) -> Result<(), String> {
+    if !from_email.is_empty() {
+        if !from_email.contains('@') {
+            return Err(format!("From email '{}' must contain '@'", from_email));
+        }
+        if from_email.chars().any(char::is_whitespace) {
+            return Err(format!("From email '{}' must not contain whitespace", from_email));
+        }
+    }
+    if hello_name.chars().any(char::is_whitespace) {
+        return Err(format!("HELO name '{}' must not contain whitespace", hello_name));
+    }
+    Ok(())
 }
 
 /// Describes a settings file that could not be loaded at startup. The bad

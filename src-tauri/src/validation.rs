@@ -260,11 +260,59 @@ impl ValidationState {
     }
 }
 
-pub async fn validate_email(email: String, mode: String, proxy: Option<ProxyConfig>) -> ValidationResult {
+/// Built-in SMTP identity, used when the user hasn't configured one.
+pub const DEFAULT_FROM_EMAIL: &str = "verify@example.com";
+pub const DEFAULT_HELLO_NAME: &str = "example.com";
+
+/// Per-run snapshot of the settings that shape each validation. Taken once
+/// under the settings read lock at run start, so a settings save mid-run
+/// doesn't change behaviour halfway through a batch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidationConfig {
+    /// Raw setting; empty = `DEFAULT_FROM_EMAIL`.
+    pub from_email: String,
+    /// Raw setting; empty = `DEFAULT_HELLO_NAME`.
+    pub hello_name: String,
+}
+
+impl ValidationConfig {
+    pub fn from_settings(settings: &Settings) -> Self {
+        Self {
+            from_email: settings.from_email.clone(),
+            hello_name: settings.hello_name.clone(),
+        }
+    }
+}
+
+impl Default for ValidationConfig {
+    fn default() -> Self {
+        Self::from_settings(&Settings::default())
+    }
+}
+
+/// Resolve the (MAIL FROM, HELO) pair: the configured value if non-blank,
+/// else the built-in default.
+pub fn resolve_smtp_identity(from_email: &str, hello_name: &str) -> (String, String) {
+    fn or_default(value: &str, default: &str) -> String {
+        let value = value.trim();
+        if value.is_empty() { default } else { value }.to_string()
+    }
+    (
+        or_default(from_email, DEFAULT_FROM_EMAIL),
+        or_default(hello_name, DEFAULT_HELLO_NAME),
+    )
+}
+
+pub async fn validate_email(
+    email: String,
+    mode: String,
+    proxy: Option<ProxyConfig>,
+    config: ValidationConfig,
+) -> ValidationResult {
     match mode.as_str() {
         "quick" => validate_email_quick(email, mode, proxy).await,
-        "thorough" => validate_email_full(email, mode, proxy, Duration::from_secs(30), 2).await,
-        _ => validate_email_full(email, mode, proxy, Duration::from_secs(10), 1).await,
+        "thorough" => validate_email_full(email, mode, proxy, &config, Duration::from_secs(30), 2).await,
+        _ => validate_email_full(email, mode, proxy, &config, Duration::from_secs(10), 1).await,
     }
 }
 
@@ -377,8 +425,8 @@ async fn validate_email_quick(email: String, mode: String, proxy: Option<ProxyCo
     .with_risk_score(risk_score)
 }
 
-/// Build a `VerifMethod` with the same SMTP config (proxy, port, timeout,
-/// retries) applied to ALL seven provider fields.
+/// Build a `VerifMethod` with the same SMTP config (identity, proxy, port,
+/// timeout, retries) applied to ALL seven provider fields.
 ///
 /// Historically only gmail/yahoo/hotmailb2c received this config and the
 /// rest fell through to `Default` (no proxy, no timeout, 1 retry), which
@@ -388,12 +436,14 @@ async fn validate_email_quick(email: String, mode: String, proxy: Option<ProxyCo
 fn build_verif_method(
     proxies: HashMap<String, CheckEmailInputProxy>,
     proxy_ref: Option<String>,
+    config: &ValidationConfig,
     smtp_timeout: Duration,
     retries: usize,
 ) -> VerifMethod {
+    let (from_email, hello_name) = resolve_smtp_identity(&config.from_email, &config.hello_name);
     let smtp_config = VerifMethodSmtpConfig {
-        from_email: "verify@example.com".to_string(),
-        hello_name: "example.com".to_string(),
+        from_email,
+        hello_name,
         proxy: proxy_ref,
         smtp_port: 25,
         smtp_timeout: Some(smtp_timeout),
@@ -419,6 +469,7 @@ async fn validate_email_full(
     email: String,
     mode: String,
     proxy: Option<ProxyConfig>,
+    config: &ValidationConfig,
     smtp_timeout: Duration,
     retries: usize,
 ) -> ValidationResult {
@@ -438,7 +489,7 @@ async fn validate_email_full(
     };
 
     let verif_method =
-        build_verif_method(proxies, proxy_ref, smtp_timeout, retries);
+        build_verif_method(proxies, proxy_ref, config, smtp_timeout, retries);
 
     let mut builder = CheckEmailInputBuilder::default();
     builder.to_email(email.clone()).verif_method(verif_method).check_gravatar(true);
@@ -1172,13 +1223,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_email_syntax_error() {
-        let result = validate_email("invalid-email".to_string(), "standard".to_string(), None).await;
+        let result = validate_email("invalid-email".to_string(), "standard".to_string(), None, ValidationConfig::default()).await;
         assert!(result.result == "Invalid" || result.result == "Unknown");
     }
 
     #[tokio::test]
     async fn test_validate_email_reachable() {
-        let result = validate_email("test@example.com".to_string(), "standard".to_string(), None).await;
+        let result = validate_email("test@example.com".to_string(), "standard".to_string(), None, ValidationConfig::default()).await;
         assert!(!result.timestamp.is_empty());
     }
 
@@ -1186,7 +1237,7 @@ mod tests {
     async fn test_validate_email_with_proxy() {
         // Test that validation works with a proxy config (won't actually connect)
         let proxy = ProxyConfig::new("192.168.1.1".to_string(), 8080);
-        let result = validate_email("test@example.com".to_string(), "standard".to_string(), Some(proxy)).await;
+        let result = validate_email("test@example.com".to_string(), "standard".to_string(), Some(proxy), ValidationConfig::default()).await;
         // The validation will likely fail due to proxy not being reachable, but should not panic
         assert!(!result.timestamp.is_empty());
     }
@@ -1200,7 +1251,7 @@ mod tests {
             "user".to_string(),
             "pass".to_string(),
         );
-        let result = validate_email("test@example.com".to_string(), "standard".to_string(), Some(proxy)).await;
+        let result = validate_email("test@example.com".to_string(), "standard".to_string(), Some(proxy), ValidationConfig::default()).await;
         assert!(!result.timestamp.is_empty());
     }
 
@@ -1301,7 +1352,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_quick_mode_invalid_syntax() {
-        let result = validate_email("invalid-email".to_string(), "quick".to_string(), None).await;
+        let result = validate_email("invalid-email".to_string(), "quick".to_string(), None, ValidationConfig::default()).await;
         assert_eq!(result.result, "Invalid");
         assert_eq!(result.validation_mode, "quick");
         assert!(!result.is_valid_syntax);
@@ -1314,7 +1365,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_quick_mode_valid_email_skips_smtp() {
-        let result = validate_email("test@gmail.com".to_string(), "quick".to_string(), None).await;
+        let result = validate_email("test@gmail.com".to_string(), "quick".to_string(), None, ValidationConfig::default()).await;
         assert_eq!(result.validation_mode, "quick");
         assert!(result.is_valid_syntax);
         // Quick mode never connects to SMTP
@@ -1332,7 +1383,7 @@ mod tests {
         // For a domain with no MX records, the result depends on the syntax check.
         // mailchecker may reject certain domains as invalid syntax, so the result
         // could be either "Invalid" or "Unknown" depending on the domain.
-        let result = validate_email("test@invalid.nonexistent.tld".to_string(), "quick".to_string(), None).await;
+        let result = validate_email("test@invalid.nonexistent.tld".to_string(), "quick".to_string(), None, ValidationConfig::default()).await;
         assert_eq!(result.validation_mode, "quick");
         // Result should be Invalid (syntax) or Unknown (MX failure) - both are valid for bad domains
         assert!(result.result == "Invalid" || result.result == "Unknown");
@@ -1340,7 +1391,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_standard_mode_default_behavior() {
-        let result = validate_email("test@example.com".to_string(), "standard".to_string(), None).await;
+        let result = validate_email("test@example.com".to_string(), "standard".to_string(), None, ValidationConfig::default()).await;
         assert_eq!(result.validation_mode, "standard");
         assert!(!result.timestamp.is_empty());
         // Standard mode should have attempted SMTP (may or may not succeed)
@@ -1348,7 +1399,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_thorough_mode_stores_mode() {
-        let result = validate_email("test@example.com".to_string(), "thorough".to_string(), None).await;
+        let result = validate_email("test@example.com".to_string(), "thorough".to_string(), None, ValidationConfig::default()).await;
         assert_eq!(result.validation_mode, "thorough");
         assert!(!result.timestamp.is_empty());
     }
@@ -1356,7 +1407,7 @@ mod tests {
     #[tokio::test]
     async fn test_mode_stored_in_result() {
         for mode in &["quick", "standard", "thorough"] {
-            let result = validate_email("test@example.com".to_string(), mode.to_string(), None).await;
+            let result = validate_email("test@example.com".to_string(), mode.to_string(), None, ValidationConfig::default()).await;
             assert_eq!(result.validation_mode, *mode);
         }
     }
@@ -1366,7 +1417,7 @@ mod tests {
         // Quick mode should complete significantly faster than standard
         // since it skips SMTP handshake entirely
         let start = Instant::now();
-        let _ = validate_email("test@gmail.com".to_string(), "quick".to_string(), None).await;
+        let _ = validate_email("test@gmail.com".to_string(), "quick".to_string(), None, ValidationConfig::default()).await;
         let quick_duration = start.elapsed();
 
         // Quick mode should complete in under 5 seconds (no SMTP)
@@ -1376,7 +1427,7 @@ mod tests {
     #[tokio::test]
     async fn test_unknown_mode_defaults_to_standard() {
         // Unknown mode strings should fall through to standard behavior
-        let result = validate_email("test@example.com".to_string(), "unknown".to_string(), None).await;
+        let result = validate_email("test@example.com".to_string(), "unknown".to_string(), None, ValidationConfig::default()).await;
         assert_eq!(result.validation_mode, "unknown");
         assert!(!result.timestamp.is_empty());
     }
@@ -1384,7 +1435,7 @@ mod tests {
     #[tokio::test]
     async fn test_quick_mode_with_proxy() {
         let proxy = ProxyConfig::new("192.168.1.1".to_string(), 8080);
-        let result = validate_email("test@gmail.com".to_string(), "quick".to_string(), Some(proxy)).await;
+        let result = validate_email("test@gmail.com".to_string(), "quick".to_string(), Some(proxy), ValidationConfig::default()).await;
         assert_eq!(result.validation_mode, "quick");
         // B4: quick mode never performs an SMTP conversation, so it does not
         // actually exercise the (rotated) proxy. It must not attribute a
@@ -1454,6 +1505,7 @@ mod tests {
         let vm = build_verif_method(
             proxies,
             Some("proxy1".to_string()),
+            &ValidationConfig::default(),
             Duration::from_secs(30),
             2,
         );
@@ -1480,12 +1532,93 @@ mod tests {
         let vm_no_proxy = build_verif_method(
             HashMap::new(),
             None,
+            &ValidationConfig::default(),
             Duration::from_secs(10),
             1,
         );
         assert!(vm_no_proxy
             .get_proxy(check_if_email_exists::smtp::verif_method::EmailProvider::EverythingElse)
             .is_none());
+    }
+
+    // I2: the SMTP identity comes from settings, falling back to the
+    // built-in default when blank.
+    #[test]
+    fn test_resolve_smtp_identity_falls_back_when_blank() {
+        assert_eq!(
+            resolve_smtp_identity("", ""),
+            (DEFAULT_FROM_EMAIL.to_string(), DEFAULT_HELLO_NAME.to_string())
+        );
+        assert_eq!(
+            resolve_smtp_identity("  ", "\t"),
+            (DEFAULT_FROM_EMAIL.to_string(), DEFAULT_HELLO_NAME.to_string())
+        );
+        assert_eq!(DEFAULT_FROM_EMAIL, "verify@example.com");
+        assert_eq!(DEFAULT_HELLO_NAME, "example.com");
+    }
+
+    #[test]
+    fn test_resolve_smtp_identity_uses_configured_values() {
+        assert_eq!(
+            resolve_smtp_identity("probe@mail.acme.io", "mail.acme.io"),
+            ("probe@mail.acme.io".to_string(), "mail.acme.io".to_string())
+        );
+        // Each field falls back independently.
+        assert_eq!(
+            resolve_smtp_identity("probe@mail.acme.io", ""),
+            ("probe@mail.acme.io".to_string(), DEFAULT_HELLO_NAME.to_string())
+        );
+        assert_eq!(
+            resolve_smtp_identity("", "mail.acme.io"),
+            (DEFAULT_FROM_EMAIL.to_string(), "mail.acme.io".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validation_config_from_settings_snapshots_identity() {
+        let mut settings = Settings::default();
+        settings.from_email = "probe@mail.acme.io".to_string();
+        settings.hello_name = "mail.acme.io".to_string();
+        let config = ValidationConfig::from_settings(&settings);
+        assert_eq!(config.from_email, "probe@mail.acme.io");
+        assert_eq!(config.hello_name, "mail.acme.io");
+
+        let default = ValidationConfig::default();
+        assert_eq!(default.from_email, "");
+        assert_eq!(default.hello_name, "");
+    }
+
+    fn smtp_configs(vm: &VerifMethod) -> Vec<VerifMethodSmtpConfig> {
+        let mut out = Vec::new();
+        if let GmailVerifMethod::Smtp(c) = &vm.gmail { out.push(c.clone()); }
+        if let HotmailB2BVerifMethod::Smtp(c) = &vm.hotmailb2b { out.push(c.clone()); }
+        if let HotmailB2CVerifMethod::Smtp(c) = &vm.hotmailb2c { out.push(c.clone()); }
+        if let MimecastVerifMethod::Smtp(c) = &vm.mimecast { out.push(c.clone()); }
+        if let ProofpointVerifMethod::Smtp(c) = &vm.proofpoint { out.push(c.clone()); }
+        if let YahooVerifMethod::Smtp(c) = &vm.yahoo { out.push(c.clone()); }
+        if let EverythingElseVerifMethod::Smtp(c) = &vm.everything_else { out.push(c.clone()); }
+        assert_eq!(out.len(), 7, "every provider must use the SMTP method");
+        out
+    }
+
+    #[test]
+    fn test_verif_method_uses_configured_smtp_identity() {
+        let config = ValidationConfig {
+            from_email: "probe@mail.acme.io".to_string(),
+            hello_name: "mail.acme.io".to_string(),
+            ..ValidationConfig::default()
+        };
+        let vm = build_verif_method(HashMap::new(), None, &config, Duration::from_secs(10), 1);
+        for c in smtp_configs(&vm) {
+            assert_eq!(c.from_email, "probe@mail.acme.io");
+            assert_eq!(c.hello_name, "mail.acme.io");
+        }
+
+        let vm = build_verif_method(HashMap::new(), None, &ValidationConfig::default(), Duration::from_secs(10), 1);
+        for c in smtp_configs(&vm) {
+            assert_eq!(c.from_email, DEFAULT_FROM_EMAIL);
+            assert_eq!(c.hello_name, DEFAULT_HELLO_NAME);
+        }
     }
 
     // B5/B6: begin_run must hand out a fresh, uncancelled token every time,

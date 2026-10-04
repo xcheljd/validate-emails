@@ -1009,6 +1009,101 @@
     }
 
     // =====================
+    // SMTP identity settings (I2)
+    // =====================
+
+    /// A settings.json written before I2 has no from_email/hello_name; it
+    /// must still load (not be quarantined as corrupt) with empty defaults.
+    #[test]
+    fn test_settings_old_file_without_smtp_identity_loads_defaults() {
+        let dir = SettingsDir::new();
+        std::fs::write(
+            dir.settings_path(),
+            r#"{
+                "validation_mode": "standard",
+                "timeout_ms": 30000,
+                "concurrency": 5,
+                "max_retries": 3,
+                "auto_save_interval": 10,
+                "history_retention_days": 90,
+                "rate_limiter": {"max_per_second": 1, "max_per_minute": 60}
+            }"#,
+        )
+        .unwrap();
+
+        let (loaded, warning) = load_settings_file(&dir.settings_path());
+        assert!(warning.is_none());
+        assert_eq!(loaded.from_email, "");
+        assert_eq!(loaded.hello_name, "");
+    }
+
+    #[test]
+    fn test_settings_smtp_identity_roundtrip() {
+        let mut settings = Settings::default();
+        settings.from_email = "probe@mail.acme.io".to_string();
+        settings.hello_name = "mail.acme.io".to_string();
+        let json = serde_json::to_string(&settings).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.from_email, "probe@mail.acme.io");
+        assert_eq!(back.hello_name, "mail.acme.io");
+    }
+
+    #[test]
+    fn test_validate_smtp_identity_accepts_empty_and_plausible_values() {
+        use super::settings_core::validate_smtp_identity;
+        assert!(validate_smtp_identity("", "").is_ok());
+        assert!(validate_smtp_identity("probe@mail.acme.io", "mail.acme.io").is_ok());
+        assert!(validate_smtp_identity("probe@mail.acme.io", "").is_ok());
+        assert!(validate_smtp_identity("", "mail.acme.io").is_ok());
+    }
+
+    #[test]
+    fn test_validate_smtp_identity_rejects_invalid_values() {
+        use super::settings_core::validate_smtp_identity;
+        assert!(validate_smtp_identity("not-an-address", "").unwrap_err().contains("'@'"));
+        assert!(validate_smtp_identity("probe @acme.io", "").unwrap_err().contains("whitespace"));
+        assert!(validate_smtp_identity("", "mail acme.io").unwrap_err().contains("HELO"));
+        assert!(validate_smtp_identity("", " ").unwrap_err().contains("HELO"));
+        assert!(validate_smtp_identity("", "mail.acme.io\n").unwrap_err().contains("HELO"));
+    }
+
+    #[test]
+    fn test_apply_general_settings_copies_smtp_identity_and_keeps_pool() {
+        let mut current = Settings::default();
+        current.proxy_pool.add_proxy(ProxyConfig::new("10.0.0.1".to_string(), 1080)).unwrap();
+
+        let mut incoming = Settings::default();
+        incoming.timeout_ms = 15000;
+        incoming.from_email = "probe@mail.acme.io".to_string();
+        incoming.hello_name = "mail.acme.io".to_string();
+        apply_general_settings(&mut current, incoming).unwrap();
+
+        assert_eq!(current.timeout_ms, 15000);
+        assert_eq!(current.from_email, "probe@mail.acme.io");
+        assert_eq!(current.hello_name, "mail.acme.io");
+        // B2: the frontend never sends the pool; it must survive a save.
+        assert_eq!(current.proxy_pool.proxies.len(), 1);
+    }
+
+    #[test]
+    fn test_apply_general_settings_rejects_invalid_identity_without_changes() {
+        let mut current = Settings::default();
+        current.from_email = "probe@mail.acme.io".to_string();
+
+        let mut incoming = Settings::default();
+        incoming.timeout_ms = 15000;
+        incoming.from_email = "nope".to_string();
+        assert!(apply_general_settings(&mut current, incoming).is_err());
+        assert_eq!(current.from_email, "probe@mail.acme.io");
+        assert_eq!(current.timeout_ms, Settings::default().timeout_ms, "partial write");
+
+        let mut incoming = Settings::default();
+        incoming.hello_name = "has space".to_string();
+        assert!(apply_general_settings(&mut current, incoming).is_err());
+        assert_eq!(current.hello_name, "");
+    }
+
+    // =====================
     // Proxy Command Logic Tests
     // =====================
 

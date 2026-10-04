@@ -34,6 +34,8 @@ const {
     rateLimitMaxPerSecond: 1,
     rateLimitMaxPerMinute: 60,
     maxEmailsPerSession: 0,
+    fromEmail: '',
+    helloName: '',
   };
   return {
     mockShowWarning: vi.fn(),

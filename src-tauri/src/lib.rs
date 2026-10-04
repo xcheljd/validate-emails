@@ -114,6 +114,14 @@ async fn prepare_proxy_policy(
     Ok(validation::ProxyPolicy { state, require_proxy })
 }
 
+/// Snapshot the per-email validation settings for one run.
+async fn validation_config_snapshot(
+    settings_state: &tauri::State<'_, settings::SettingsState>,
+) -> validation::ValidationConfig {
+    let settings = settings_state.settings.read().await;
+    validation::ValidationConfig::from_settings(&settings)
+}
+
 /// Forward a run's events to the window, stamped with its run id.
 fn run_event_sink(window: tauri::Window, run_id: u64) -> impl Fn(validation::RunEvent) + Send + Sync {
     move |event| match event {
@@ -209,13 +217,14 @@ async fn validate_emails_bulk(
 
     let policy = prepare_proxy_policy(&window, &settings_state, run_id).await?;
     let used_pool = policy.state.is_some();
+    let config = validation_config_snapshot(&settings_state).await;
 
     let outcome = validation::validate_emails_bulk_core(
         emails,
         concurrency,
         token,
         policy,
-        move |email, proxy| validation::validate_email(email, mode.clone(), proxy),
+        move |email, proxy| validation::validate_email(email, mode.clone(), proxy, config.clone()),
         run_event_sink(window.clone(), run_id),
     )
     .await;
@@ -241,13 +250,14 @@ async fn revalidate_emails_bulk(
 
     let policy = prepare_proxy_policy(&window, &settings_state, run_id).await?;
     let used_pool = policy.state.is_some();
+    let config = validation_config_snapshot(&settings_state).await;
 
     let outcome = validation::revalidate_emails_bulk_core(
         items,
         concurrency,
         token,
         policy,
-        move |email, proxy| validation::validate_email(email, mode.clone(), proxy),
+        move |email, proxy| validation::validate_email(email, mode.clone(), proxy, config.clone()),
         run_event_sink(window.clone(), run_id),
     )
     .await;

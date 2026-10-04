@@ -1,4 +1,4 @@
-use super::settings_core::{CorruptSettingsInfo, Settings, SettingsState, RateLimiterConfig};
+use super::settings_core::{validate_smtp_identity, CorruptSettingsInfo, Settings, SettingsState, RateLimiterConfig};
 use super::proxy_config::{ProxyConfig, RotationMode};
 use super::proxy_pool::{ProxyPool, ProxyStats, AutoDisableThreshold, AllProxiesFailedState};
 use std::path::Path;
@@ -29,22 +29,33 @@ pub async fn save_settings(
 ) -> Result<(), String> {
     {
         let mut current = state.settings.write().await;
-        // Update only the general fields. `proxy_pool` is managed by the
-        // dedicated proxy commands and is NOT round-tripped by the frontend,
-        // so the incoming value is always the serde default. Overwriting it
-        // would wipe the live pool (proxies, domain assignments, stats,
-        // cooldowns, enabled flag) on every general-settings save, silently
-        // falling back to a direct connection (B2).
-        current.validation_mode = settings.validation_mode;
-        current.timeout_ms = settings.timeout_ms;
-        current.concurrency = settings.concurrency;
-        current.max_retries = settings.max_retries;
-        current.auto_save_interval = settings.auto_save_interval;
-        current.history_retention_days = settings.history_retention_days;
-        current.rate_limiter = settings.rate_limiter;
-        current.max_emails_per_session = settings.max_emails_per_session;
+        apply_general_settings(&mut current, settings)?;
     } // write lock released before I/O
     persist_settings(state).await
+}
+
+/// Copy the general (frontend-edited) fields of `incoming` into `current`,
+/// after validating them. Nothing is changed if validation fails.
+///
+/// `proxy_pool` is managed by the dedicated proxy commands and is NOT
+/// round-tripped by the frontend, so the incoming value is always the serde
+/// default. Overwriting it would wipe the live pool (proxies, domain
+/// assignments, stats, cooldowns, enabled flag) on every general-settings
+/// save, silently falling back to a direct connection (B2).
+pub fn apply_general_settings(current: &mut Settings, incoming: Settings) -> Result<(), String> {
+    validate_smtp_identity(&incoming.from_email, &incoming.hello_name)?;
+
+    current.validation_mode = incoming.validation_mode;
+    current.timeout_ms = incoming.timeout_ms;
+    current.concurrency = incoming.concurrency;
+    current.max_retries = incoming.max_retries;
+    current.auto_save_interval = incoming.auto_save_interval;
+    current.history_retention_days = incoming.history_retention_days;
+    current.rate_limiter = incoming.rate_limiter;
+    current.max_emails_per_session = incoming.max_emails_per_session;
+    current.from_email = incoming.from_email;
+    current.hello_name = incoming.hello_name;
+    Ok(())
 }
 
 /// Serialize the current settings — including the live proxy pool — to disk.
