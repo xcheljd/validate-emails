@@ -1104,6 +1104,63 @@
     }
 
     // =====================
+    // Gravatar opt-in (I9)
+    // =====================
+
+    #[test]
+    fn test_settings_old_file_without_check_gravatar_defaults_off() {
+        let dir = SettingsDir::new();
+        std::fs::write(
+            dir.settings_path(),
+            r#"{
+                "validation_mode": "standard",
+                "timeout_ms": 30000,
+                "concurrency": 5,
+                "max_retries": 3,
+                "auto_save_interval": 10,
+                "history_retention_days": 90,
+                "rate_limiter": {"max_per_second": 1, "max_per_minute": 60}
+            }"#,
+        )
+        .unwrap();
+
+        let (loaded, warning) = load_settings_file(&dir.settings_path());
+        assert!(warning.is_none());
+        assert!(!loaded.check_gravatar);
+        assert!(!Settings::default().check_gravatar);
+    }
+
+    #[test]
+    fn test_settings_check_gravatar_explicit_true_loads() {
+        let json = r#"{
+            "validation_mode": "standard",
+            "timeout_ms": 30000,
+            "concurrency": 5,
+            "max_retries": 3,
+            "auto_save_interval": 10,
+            "history_retention_days": 90,
+            "rate_limiter": {"max_per_second": 1, "max_per_minute": 60},
+            "check_gravatar": true
+        }"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert!(settings.check_gravatar);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert!(back.check_gravatar);
+    }
+
+    #[test]
+    fn test_apply_general_settings_copies_check_gravatar() {
+        let mut current = Settings::default();
+        let mut incoming = Settings::default();
+        incoming.check_gravatar = true;
+        apply_general_settings(&mut current, incoming).unwrap();
+        assert!(current.check_gravatar);
+
+        apply_general_settings(&mut current, Settings::default()).unwrap();
+        assert!(!current.check_gravatar);
+    }
+
+    // =====================
     // Proxy Command Logic Tests
     // =====================
 

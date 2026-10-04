@@ -42,6 +42,10 @@ pub struct Settings {
     /// HELO/EHLO name for the SMTP callout. Empty = built-in default.
     #[serde(default)]
     pub hello_name: String,
+    /// Look up a Gravatar profile per address. Off by default: it sends an
+    /// MD5 of each address to gravatar.com directly, bypassing the proxies.
+    #[serde(default)]
+    pub check_gravatar: bool,
 }
 
 impl Default for Settings {
@@ -58,6 +62,7 @@ impl Default for Settings {
             max_emails_per_session: 0,
             from_email: String::new(),
             hello_name: String::new(),
+            check_gravatar: false,
         }
     }
 }

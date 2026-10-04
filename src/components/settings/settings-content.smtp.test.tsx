@@ -155,6 +155,54 @@ describe('SMTP callout settings', () => {
   });
 });
 
+describe('Gravatar lookup setting', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', memoryStorage());
+    vi.clearAllMocks();
+  });
+
+  it('renders the toggle off by default with privacy guidance', async () => {
+    await renderSettings();
+    const toggle = screen.getByRole('switch', {
+      name: 'Look up Gravatar profiles',
+    });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect(
+      screen.getByText(/MD5 hash of each address to gravatar\.com/i)
+    ).toBeInTheDocument();
+  });
+
+  it('saves check_gravatar false when left untouched', async () => {
+    await renderSettings();
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Settings'));
+    });
+    expect(savedSettings().check_gravatar).toBe(false);
+  });
+
+  it('saves check_gravatar true after toggling on', async () => {
+    await renderSettings();
+    const toggle = screen.getByRole('switch', {
+      name: 'Look up Gravatar profiles',
+    });
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Settings'));
+    });
+    expect(savedSettings().check_gravatar).toBe(true);
+  });
+
+  it('loads a saved true value from the backend', async () => {
+    await renderSettings({ check_gravatar: true });
+    expect(
+      screen.getByRole('switch', { name: 'Look up Gravatar profiles' })
+    ).toHaveAttribute('aria-checked', 'true');
+  });
+});
+
 describe('validateSmtpIdentity', () => {
   it('accepts blank and plausible values', () => {
     expect(validateSmtpIdentity('', '')).toBeNull();

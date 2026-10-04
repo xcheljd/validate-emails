@@ -36,6 +36,7 @@ const {
     maxEmailsPerSession: 0,
     fromEmail: '',
     helloName: '',
+    checkGravatar: false,
   };
   return {
     mockShowWarning: vi.fn(),

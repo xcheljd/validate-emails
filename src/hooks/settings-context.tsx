@@ -38,6 +38,7 @@ interface BackendSettings {
   rate_limiter: { max_per_second: number; max_per_minute: number };
   from_email: string;
   hello_name: string;
+  check_gravatar: boolean;
 }
 
 interface BackendProxyPool {
@@ -64,6 +65,7 @@ function backendToFrontend(backend: BackendSettings): Partial<AppSettings> {
     rateLimitMaxPerMinute: backend.rate_limiter?.max_per_minute ?? 60,
     fromEmail: backend.from_email ?? '',
     helloName: backend.hello_name ?? '',
+    checkGravatar: backend.check_gravatar ?? false,
   };
 }
 
@@ -82,6 +84,7 @@ function frontendToBackend(frontend: AppSettings): BackendSettings {
     },
     from_email: frontend.fromEmail.trim(),
     hello_name: frontend.helloName.trim(),
+    check_gravatar: frontend.checkGravatar,
   };
 }
 

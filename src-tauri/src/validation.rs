@@ -9,7 +9,7 @@ use tokio::time::sleep;
 use chrono::Utc;
 use std::time::{Instant, Duration};
 use std::collections::HashMap;
-use check_if_email_exists::{check_email, CheckEmailInputBuilder, CheckEmailInputProxy, CheckEmailOutput, Reachable};
+use check_if_email_exists::{check_email, CheckEmailInput, CheckEmailInputBuilder, CheckEmailInputBuilderError, CheckEmailInputProxy, CheckEmailOutput, Reachable};
 use check_if_email_exists::syntax::check_syntax;
 use check_if_email_exists::mx::{check_mx, MxDetails, MxError};
 use check_if_email_exists::misc::{check_misc, MiscDetails};
@@ -278,6 +278,8 @@ pub struct ValidationConfig {
     /// Raw setting (retries after the first connection); resolved per mode
     /// by `resolve_smtp_params`.
     pub max_retries: usize,
+    /// Gravatar lookup (direct HTTPS, not proxied). Off by default.
+    pub check_gravatar: bool,
 }
 
 impl ValidationConfig {
@@ -287,6 +289,7 @@ impl ValidationConfig {
             hello_name: settings.hello_name.clone(),
             timeout_ms: settings.timeout_ms,
             max_retries: settings.max_retries,
+            check_gravatar: settings.check_gravatar,
         }
     }
 }
@@ -500,6 +503,22 @@ fn build_verif_method(
     }
 }
 
+/// Build the library input for one address. Gravatar is opt-in (I9): the
+/// lookup sends an MD5 of the address to gravatar.com directly, not through
+/// the proxy.
+fn build_check_email_input(
+    email: &str,
+    verif_method: VerifMethod,
+    config: &ValidationConfig,
+) -> Result<CheckEmailInput, CheckEmailInputBuilderError> {
+    let mut builder = CheckEmailInputBuilder::default();
+    builder
+        .to_email(email.to_string())
+        .verif_method(verif_method)
+        .check_gravatar(config.check_gravatar);
+    builder.build()
+}
+
 /// Full SMTP verification (Standard and Thorough modes). Timeout and
 /// connection count come from `resolve_smtp_params`.
 async fn validate_email_full(
@@ -528,10 +547,7 @@ async fn validate_email_full(
     let verif_method =
         build_verif_method(proxies, proxy_ref, config, smtp_timeout, retries);
 
-    let mut builder = CheckEmailInputBuilder::default();
-    builder.to_email(email.clone()).verif_method(verif_method).check_gravatar(true);
-
-    let input = builder.build();
+    let input = build_check_email_input(&email, verif_method, config);
 
     let output = match input {
         Ok(input) => check_email(&input).await,
@@ -1721,6 +1737,23 @@ mod tests {
         let default = ValidationConfig::default();
         assert_eq!(default.timeout_ms, 30_000);
         assert_eq!(default.max_retries, 3);
+    }
+
+    // I9: Gravatar is opt-in and reaches the library input.
+    #[test]
+    fn test_check_email_input_gravatar_follows_setting() {
+        let vm = || build_verif_method(HashMap::new(), None, &ValidationConfig::default(), Duration::from_secs(10), 1);
+
+        let input = build_check_email_input("a@acme.io", vm(), &ValidationConfig::default()).unwrap();
+        assert!(!input.check_gravatar, "Gravatar must be off by default");
+        assert_eq!(input.to_email, "a@acme.io");
+
+        let mut settings = Settings::default();
+        settings.check_gravatar = true;
+        let config = ValidationConfig::from_settings(&settings);
+        assert!(config.check_gravatar);
+        let input = build_check_email_input("a@acme.io", vm(), &config).unwrap();
+        assert!(input.check_gravatar);
     }
 
     // B5/B6: begin_run must hand out a fresh, uncancelled token every time,

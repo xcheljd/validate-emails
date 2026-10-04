@@ -145,6 +145,8 @@ export interface AppSettings {
   fromEmail: string;
   /** SMTP callout HELO name ('' = built-in default) */
   helloName: string;
+  /** Look up Gravatar profiles (direct, unproxied; default off) */
+  checkGravatar: boolean;
 }
 
 /** Default proxy settings */
@@ -175,4 +177,5 @@ export const defaultSettings: AppSettings = {
   maxEmailsPerSession: 0,
   fromEmail: '',
   helloName: '',
+  checkGravatar: false,
 };
