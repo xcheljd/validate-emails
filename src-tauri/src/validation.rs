@@ -273,6 +273,11 @@ pub struct ValidationConfig {
     pub from_email: String,
     /// Raw setting; empty = `DEFAULT_HELLO_NAME`.
     pub hello_name: String,
+    /// Raw setting; resolved per mode by `resolve_smtp_params`.
+    pub timeout_ms: u64,
+    /// Raw setting (retries after the first connection); resolved per mode
+    /// by `resolve_smtp_params`.
+    pub max_retries: usize,
 }
 
 impl ValidationConfig {
@@ -280,6 +285,8 @@ impl ValidationConfig {
         Self {
             from_email: settings.from_email.clone(),
             hello_name: settings.hello_name.clone(),
+            timeout_ms: settings.timeout_ms,
+            max_retries: settings.max_retries,
         }
     }
 }
@@ -303,6 +310,34 @@ pub fn resolve_smtp_identity(from_email: &str, hello_name: &str) -> (String, Str
     )
 }
 
+/// Bounds applied to the user's timeout/retry settings.
+pub const MIN_SMTP_TIMEOUT_MS: u64 = 1_000;
+pub const MAX_SMTP_TIMEOUT_MS: u64 = 300_000;
+pub const MAX_SMTP_RETRIES: usize = 10;
+/// Thorough mode never uses a shorter SMTP timeout than this. Upstream
+/// documents a 45s timeout for slow MXs (SmtpTimeout45s) but never applies
+/// it itself, so it is baked in here.
+pub const THOROUGH_MIN_TIMEOUT_MS: u64 = 45_000;
+
+/// Derive the per-connection SMTP timeout and the library's `retries` value
+/// (= TOTAL connections, despite the name) from the user's settings.
+///
+/// - timeout is clamped to `MIN..=MAX_SMTP_TIMEOUT_MS`; thorough raises it
+///   to at least `THOROUGH_MIN_TIMEOUT_MS`.
+/// - `max_retries` counts retries AFTER the first attempt and is clamped to
+///   `MAX_SMTP_RETRIES`, so 0 → 1 connection, 3 → 4 connections.
+///
+/// Quick mode never opens an SMTP connection; it is resolved like standard
+/// but the values are unused.
+pub fn resolve_smtp_params(mode: &str, timeout_ms: u64, max_retries: usize) -> (Duration, usize) {
+    let mut timeout_ms = timeout_ms.clamp(MIN_SMTP_TIMEOUT_MS, MAX_SMTP_TIMEOUT_MS);
+    if mode == "thorough" {
+        timeout_ms = timeout_ms.max(THOROUGH_MIN_TIMEOUT_MS);
+    }
+    let connections = max_retries.min(MAX_SMTP_RETRIES) + 1;
+    (Duration::from_millis(timeout_ms), connections)
+}
+
 pub async fn validate_email(
     email: String,
     mode: String,
@@ -311,8 +346,11 @@ pub async fn validate_email(
 ) -> ValidationResult {
     match mode.as_str() {
         "quick" => validate_email_quick(email, mode, proxy).await,
-        "thorough" => validate_email_full(email, mode, proxy, &config, Duration::from_secs(30), 2).await,
-        _ => validate_email_full(email, mode, proxy, &config, Duration::from_secs(10), 1).await,
+        _ => {
+            let (smtp_timeout, connections) =
+                resolve_smtp_params(&mode, config.timeout_ms, config.max_retries);
+            validate_email_full(email, mode, proxy, &config, smtp_timeout, connections).await
+        }
     }
 }
 
@@ -462,9 +500,8 @@ fn build_verif_method(
     }
 }
 
-/// Full SMTP verification (Standard and Thorough modes).
-/// Standard: default timeout (~10s), 1 retry.
-/// Thorough: higher timeout (30s), 2 retries.
+/// Full SMTP verification (Standard and Thorough modes). Timeout and
+/// connection count come from `resolve_smtp_params`.
 async fn validate_email_full(
     email: String,
     mode: String,
@@ -1619,6 +1656,71 @@ mod tests {
             assert_eq!(c.from_email, DEFAULT_FROM_EMAIL);
             assert_eq!(c.hello_name, DEFAULT_HELLO_NAME);
         }
+    }
+
+    // I3: timeout/retry settings are honoured per mode.
+    #[test]
+    fn test_resolve_smtp_params_defaults() {
+        let s = Settings::default();
+        assert_eq!((s.timeout_ms, s.max_retries), (30_000, 3));
+        assert_eq!(
+            resolve_smtp_params("standard", s.timeout_ms, s.max_retries),
+            (Duration::from_millis(30_000), 4)
+        );
+        // 30s is below the thorough floor.
+        assert_eq!(
+            resolve_smtp_params("thorough", s.timeout_ms, s.max_retries),
+            (Duration::from_millis(45_000), 4)
+        );
+    }
+
+    #[test]
+    fn test_resolve_smtp_params_custom_values() {
+        assert_eq!(resolve_smtp_params("standard", 12_000, 1), (Duration::from_millis(12_000), 2));
+        assert_eq!(resolve_smtp_params("thorough", 90_000, 2), (Duration::from_millis(90_000), 3));
+        // Unknown modes fall through to standard in validate_email.
+        assert_eq!(resolve_smtp_params("unknown", 12_000, 1), (Duration::from_millis(12_000), 2));
+    }
+
+    #[test]
+    fn test_resolve_smtp_params_thorough_floor_is_45s() {
+        assert_eq!(resolve_smtp_params("thorough", 30_000, 3).0, Duration::from_millis(45_000));
+        assert_eq!(resolve_smtp_params("standard", 30_000, 3).0, Duration::from_millis(30_000));
+        assert_eq!(resolve_smtp_params("thorough", 45_000, 3).0, Duration::from_millis(45_000));
+        assert_eq!(resolve_smtp_params("thorough", 60_000, 3).0, Duration::from_millis(60_000));
+    }
+
+    #[test]
+    fn test_resolve_smtp_params_zero_retries_is_one_connection() {
+        assert_eq!(resolve_smtp_params("standard", 30_000, 0).1, 1);
+        assert_eq!(resolve_smtp_params("thorough", 30_000, 0).1, 1);
+    }
+
+    #[test]
+    fn test_resolve_smtp_params_clamps_out_of_range_values() {
+        // Retries capped at 10 (= 11 total connections).
+        assert_eq!(resolve_smtp_params("standard", 30_000, 25).1, MAX_SMTP_RETRIES + 1);
+        assert_eq!(resolve_smtp_params("standard", 30_000, usize::MAX).1, 11);
+        // Timeout clamped to 1s..=300s.
+        assert_eq!(resolve_smtp_params("standard", 500, 3).0, Duration::from_millis(1_000));
+        assert_eq!(resolve_smtp_params("standard", 0, 3).0, Duration::from_millis(1_000));
+        assert_eq!(resolve_smtp_params("standard", u64::MAX, 3).0, Duration::from_millis(300_000));
+        // The thorough floor still applies after clamping a tiny value.
+        assert_eq!(resolve_smtp_params("thorough", 500, 3).0, Duration::from_millis(45_000));
+    }
+
+    #[test]
+    fn test_validation_config_from_settings_snapshots_timeout_and_retries() {
+        let mut settings = Settings::default();
+        settings.timeout_ms = 12_000;
+        settings.max_retries = 0;
+        let config = ValidationConfig::from_settings(&settings);
+        assert_eq!(config.timeout_ms, 12_000);
+        assert_eq!(config.max_retries, 0);
+
+        let default = ValidationConfig::default();
+        assert_eq!(default.timeout_ms, 30_000);
+        assert_eq!(default.max_retries, 3);
     }
 
     // B5/B6: begin_run must hand out a fresh, uncancelled token every time,
