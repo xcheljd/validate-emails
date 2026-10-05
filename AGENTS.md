@@ -30,8 +30,8 @@
 ### Sequential Async Patterns in Validation Hooks
 When implementing sequential operations that must await each result before proceeding (e.g., auto-escalation retry), use direct `invoke()` calls instead of React Query mutations. React Query mutations are fire-and-forget with callbacks, while direct `invoke()` allows proper `await` and try/catch error handling. See `src/hooks/use-email-validation.ts` `retryWithEscalation` for reference.
 
-### Rate Limiting Performance Trade-off
-The current rate limiting implementation switches from concurrent to strictly sequential processing when rate limiting is active. This is a deliberate v1 trade-off for simplicity. Future workers extending rate limiting should consider token bucket or semaphore approaches to maintain concurrency while respecting rate limits. See `src-tauri/src/validation.rs` rate-limited path.
+### Rate Limiting (I1)
+Rate limiting is opt-in (`rate_limiter.enabled`, off by default) and gates only the moment of dispatch, so `buffer_unordered` concurrency is unchanged. Each egress (proxy id, or the direct connection) gets a sliding-window limiter enforcing both `max_per_second` and `max_per_minute`; quick mode uses one global limiter. The wait races the run's cancellation token. See `RunLimiter`/`EgressLimiter` in `src-tauri/src/validation.rs`.
 
 ### Screenshot Strategy for Documentation
 When documenting features that require Tauri backend (session persistence, validation execution), use real screenshots for UI-only components and descriptive SVG placeholders for backend-dependent features. Browser-only mode (Vite dev server) cannot execute Tauri commands. See `docs/screenshots/` for Mission 2 examples.

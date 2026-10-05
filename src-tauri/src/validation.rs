@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 use tokio::time::sleep;
 use chrono::Utc;
 use std::time::{Instant, Duration};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use check_if_email_exists::{check_email, CheckEmailInput, CheckEmailInputBuilder, CheckEmailInputBuilderError, CheckEmailInputProxy, CheckEmailOutput, Reachable};
 use check_if_email_exists::syntax::check_syntax;
 use check_if_email_exists::mx::{check_mx, MxDetails, MxError};
@@ -280,6 +280,9 @@ pub struct ValidationConfig {
     pub max_retries: usize,
     /// Gravatar lookup (direct HTTPS, not proxied). Off by default.
     pub check_gravatar: bool,
+    /// Dispatch rate limit; None = unthrottled (limiter disabled, or both
+    /// limits 0).
+    pub rate_limiter: Option<RateLimiterConfig>,
 }
 
 impl ValidationConfig {
@@ -290,8 +293,15 @@ impl ValidationConfig {
             timeout_ms: settings.timeout_ms,
             max_retries: settings.max_retries,
             check_gravatar: settings.check_gravatar,
+            rate_limiter: active_rate_limit(&settings.rate_limiter),
         }
     }
+}
+
+/// The limiter config a run should apply, or None if it would never wait.
+fn active_rate_limit(config: &RateLimiterConfig) -> Option<RateLimiterConfig> {
+    let limits = config.max_per_second > 0 || config.max_per_minute > 0;
+    (config.enabled && limits).then(|| config.clone())
 }
 
 impl Default for ValidationConfig {
@@ -1035,6 +1045,7 @@ struct RunCtx<'a, V, S> {
     validator: &'a V,
     sink: &'a S,
     drain: &'a DrainCoordinator,
+    limiter: Option<&'a RunLimiter>,
 }
 
 async fn select_for<V, S>(email: &str, ctx: &RunCtx<'_, V, S>) -> Option<(ProxyConfig, DispatchTag)> {
@@ -1116,6 +1127,13 @@ where
         return None;
     }
     let (proxy, tag) = acquire_dispatch(&email, ctx).await?;
+    if let Some(limiter) = ctx.limiter {
+        // The tag's epoch predates this wait; a cooldown that starts during
+        // it makes the result Stale (ignored), never misattributed.
+        if !limiter.acquire(tag.as_ref().map(|t| t.proxy_id.as_str()), ctx.token).await {
+            return None;
+        }
+    }
     let result = (ctx.validator)(email, proxy).await;
     if let (Some(state), Some(tag)) = (&ctx.policy.state, &tag) {
         if state.record(tag, &result).await == RecordOutcome::Recorded
@@ -1128,13 +1146,117 @@ where
     Some(result)
 }
 
-/// Calculate the minimum interval between dispatches based on rate limiter config.
-/// Returns the minimum Duration between consecutive email validations.
-pub fn calculate_rate_interval(config: &RateLimiterConfig) -> Duration {
-    if config.max_per_second == 0 {
-        return Duration::from_millis(0);
+/// Rate limit for one run (I1).
+pub struct RateLimit {
+    pub config: RateLimiterConfig,
+    /// Give each proxy its own limiter. False (quick mode, which never opens
+    /// an SMTP session through the proxy) puts every dispatch on the single
+    /// direct/global limiter.
+    pub per_proxy: bool,
+}
+
+/// At most `max` dispatches in any `window` (sliding window log).
+struct WindowLimit {
+    max: usize,
+    window: Duration,
+    stamps: VecDeque<tokio::time::Instant>,
+}
+
+impl WindowLimit {
+    fn new(max: u32, window: Duration) -> Option<Self> {
+        (max > 0).then(|| Self { max: max as usize, window, stamps: VecDeque::new() })
     }
-    Duration::from_millis(1000 / config.max_per_second as u64)
+
+    /// How long until a dispatch fits; zero if it fits now.
+    fn wait_at(&mut self, now: tokio::time::Instant) -> Duration {
+        while self.stamps.front().is_some_and(|t| now - *t >= self.window) {
+            self.stamps.pop_front();
+        }
+        if self.stamps.len() < self.max {
+            Duration::ZERO
+        } else {
+            // Full: room opens when the oldest dispatch leaves the window.
+            self.stamps[0] + self.window - now
+        }
+    }
+}
+
+/// Dispatch rate limiter for one egress (a proxy, or the direct
+/// connection): at most `max_per_second` dispatches in any 1s window AND at
+/// most `max_per_minute` in any 60s window.
+///
+/// A sliding-window log (one timestamp per dispatch, per window) rather than
+/// a token bucket: a bucket of capacity C refilling at C/60s lets up to 2C
+/// through in some 60s window (full burst, then a minute of refill), which
+/// is exactly the overshoot that gets a proxy IP blocklisted. The log never
+/// exceeds either cap in ANY window and still allows a burst up to the
+/// per-second cap. Memory is bounded by the caps (≤ max_per_minute stamps).
+struct EgressLimiter {
+    windows: Vec<WindowLimit>,
+}
+
+impl EgressLimiter {
+    fn new(config: &RateLimiterConfig) -> Self {
+        let windows = [
+            WindowLimit::new(config.max_per_second, Duration::from_secs(1)),
+            WindowLimit::new(config.max_per_minute, Duration::from_secs(60)),
+        ];
+        Self { windows: windows.into_iter().flatten().collect() }
+    }
+
+    /// Record a dispatch at `now` if every window has room; otherwise how
+    /// long to wait before trying again.
+    fn try_acquire(&mut self, now: tokio::time::Instant) -> Result<(), Duration> {
+        let wait = self.windows.iter_mut().map(|w| w.wait_at(now)).max().unwrap_or_default();
+        if !wait.is_zero() {
+            return Err(wait);
+        }
+        for w in &mut self.windows {
+            w.stamps.push_back(now);
+        }
+        Ok(())
+    }
+}
+
+/// Run-scoped limiters, one per egress, created on first use. It gates only
+/// the moment of DISPATCH: tasks waiting on it occupy their
+/// `buffer_unordered` slot, but validations already running are untouched,
+/// so the run's concurrency is unchanged.
+struct RunLimiter {
+    rate: RateLimit,
+    /// Keyed by proxy id (`host:port`); None = direct connection, also used
+    /// for every dispatch when `per_proxy` is false.
+    egress: Mutex<HashMap<Option<String>, EgressLimiter>>,
+}
+
+impl RunLimiter {
+    fn new(rate: RateLimit) -> Self {
+        Self { rate, egress: Mutex::new(HashMap::new()) }
+    }
+
+    /// Wait for a dispatch slot on `proxy_id`'s egress. False if the run was
+    /// cancelled while waiting (the wait races the token, B14).
+    async fn acquire(&self, proxy_id: Option<&str>, token: &CancellationToken) -> bool {
+        let key = proxy_id.filter(|_| self.rate.per_proxy).map(str::to_owned);
+        loop {
+            let wait = {
+                // Never held across an await; survives poisoning like B19.
+                let mut egress = self.egress.lock().unwrap_or_else(PoisonError::into_inner);
+                let limiter = egress
+                    .entry(key.clone())
+                    .or_insert_with(|| EgressLimiter::new(&self.rate.config));
+                match limiter.try_acquire(tokio::time::Instant::now()) {
+                    Ok(()) => return true,
+                    Err(wait) => wait,
+                }
+            };
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => return false,
+                _ = sleep(wait) => {}
+            }
+        }
+    }
 }
 
 /// Clamp the user-supplied concurrency to a safe range (B9).
@@ -1145,6 +1267,8 @@ pub fn clamp_concurrency(concurrency: usize) -> usize {
     concurrency.clamp(1, 64)
 }
 
+/// Unthrottled run (no rate limit); test shorthand.
+#[cfg(test)]
 pub async fn validate_emails_bulk_core<V, Fut, S>(
     emails: Vec<String>,
     concurrency: usize,
@@ -1162,13 +1286,13 @@ where
         .await
 }
 
-/// Core validation with rate limiting support.
-/// When `rate_config` is provided, dispatches strictly sequentially with the
-/// minimum interval between dispatches (see AGENTS.md: deliberate v1
-/// trade-off). Proxy selection, live health and drain handling are the same
-/// either way, and so is cancellation (B14): the rate-limit sleep races the
-/// token, and on cancel the outer loop drops the stream, so an in-flight
-/// validation is abandoned rather than awaited.
+/// Core validation with optional rate limiting (I1).
+/// With `rate` set, each dispatch first takes a slot from its egress's
+/// `RunLimiter` (see `EgressLimiter`); concurrency is NOT reduced. With None
+/// there is no limiter at all. Proxy selection, live health and drain
+/// handling are the same either way, and so is cancellation (B14): the
+/// limiter wait races the token, and on cancel the outer loop drops the
+/// stream, so an in-flight validation is abandoned rather than awaited.
 pub async fn validate_emails_bulk_with_rate_limit<V, Fut, S>(
     emails: Vec<String>,
     concurrency: usize,
@@ -1176,7 +1300,7 @@ pub async fn validate_emails_bulk_with_rate_limit<V, Fut, S>(
     policy: ProxyPolicy,
     validator: V,
     sink: S,
-    rate_config: Option<RateLimiterConfig>,
+    rate: Option<RateLimit>,
 ) -> RunOutcome
 where
     V: Fn(String, Option<ProxyConfig>) -> Fut + Send + Sync,
@@ -1185,16 +1309,9 @@ where
 {
     use futures::stream::{self, StreamExt};
 
-    let rate_interval = rate_config
-        .as_ref()
-        .map(calculate_rate_interval)
-        .unwrap_or(Duration::ZERO);
     // Clamp concurrency: 0 hangs the run, huge values flood port 25 (B9).
-    let concurrency = if rate_interval.is_zero() {
-        clamp_concurrency(concurrency)
-    } else {
-        1
-    };
+    let concurrency = clamp_concurrency(concurrency);
+    let limiter = rate.map(RunLimiter::new);
 
     let total = emails.len();
     let mut results = Vec::with_capacity(total);
@@ -1205,23 +1322,12 @@ where
         validator: &validator,
         sink: &sink,
         drain: &drain,
+        limiter: limiter.as_ref(),
     };
 
     {
-        let mut stream = stream::iter(emails.into_iter().enumerate())
-            .map(|(i, email)| {
-                let ctx = &ctx;
-                async move {
-                    if i > 0 && !rate_interval.is_zero() {
-                        tokio::select! {
-                            biased;
-                            _ = ctx.token.cancelled() => return None,
-                            _ = sleep(rate_interval) => {}
-                        }
-                    }
-                    process_email(email, ctx).await
-                }
-            })
+        let mut stream = stream::iter(emails)
+            .map(|email| process_email(email, &ctx))
             .buffer_unordered(concurrency);
 
         loop {
@@ -1259,6 +1365,7 @@ pub async fn revalidate_emails_bulk_core<V, Fut, S>(
     policy: ProxyPolicy,
     validator: V,
     sink: S,
+    rate: Option<RateLimit>,
 ) -> RunOutcome
 where
     V: Fn(String, Option<ProxyConfig>) -> Fut + Send + Sync,
@@ -1266,7 +1373,7 @@ where
     S: Fn(RunEvent) + Send + Sync,
 {
     let emails = items.into_iter().map(|item| item.email).collect();
-    validate_emails_bulk_with_rate_limit(emails, concurrency, token, policy, validator, sink, None)
+    validate_emails_bulk_with_rate_limit(emails, concurrency, token, policy, validator, sink, rate)
         .await
 }
 
@@ -1516,25 +1623,67 @@ mod tests {
 
     // === Rate Limiting Tests ===
 
-    #[test]
-    fn test_rate_limiter_calculate_interval_max_per_second() {
-        let config = RateLimiterConfig { max_per_second: 1, max_per_minute: 60 };
-        let interval = calculate_rate_interval(&config);
-        assert_eq!(interval, Duration::from_millis(1000));
+    fn limiter_config(max_per_second: u32, max_per_minute: u32) -> RateLimiterConfig {
+        RateLimiterConfig { enabled: true, max_per_second, max_per_minute }
     }
 
     #[test]
-    fn test_rate_limiter_calculate_interval_high_rate() {
-        let config = RateLimiterConfig { max_per_second: 10, max_per_minute: 60 };
-        let interval = calculate_rate_interval(&config);
-        assert_eq!(interval, Duration::from_millis(100));
+    fn test_egress_limiter_burst_then_waits_for_oldest() {
+        let mut limiter = EgressLimiter::new(&limiter_config(10, 600));
+        let t0 = tokio::time::Instant::now();
+        for _ in 0..10 {
+            assert_eq!(limiter.try_acquire(t0), Ok(()));
+        }
+        assert_eq!(limiter.try_acquire(t0), Err(Duration::from_secs(1)));
+        let t = t0 + Duration::from_millis(400);
+        assert_eq!(limiter.try_acquire(t), Err(Duration::from_millis(600)));
+        // The oldest dispatch leaves the window exactly 1s later.
+        assert_eq!(limiter.try_acquire(t0 + Duration::from_secs(1)), Ok(()));
     }
 
     #[test]
-    fn test_rate_limiter_calculate_interval_zero() {
-        let config = RateLimiterConfig { max_per_second: 0, max_per_minute: 60 };
-        let interval = calculate_rate_interval(&config);
-        assert_eq!(interval, Duration::from_millis(0));
+    fn test_egress_limiter_minute_window_binds() {
+        let mut limiter = EgressLimiter::new(&limiter_config(1000, 60));
+        let t0 = tokio::time::Instant::now();
+        for i in 0..60 {
+            assert_eq!(limiter.try_acquire(t0 + Duration::from_millis(i * 10)), Ok(()));
+        }
+        // Per-second room exists, but the minute is spent until the first
+        // dispatch ages out.
+        let t = t0 + Duration::from_secs(1);
+        assert_eq!(limiter.try_acquire(t), Err(Duration::from_secs(59)));
+        assert_eq!(limiter.try_acquire(t0 + Duration::from_secs(60)), Ok(()));
+    }
+
+    #[test]
+    fn test_egress_limiter_zero_disables_that_window() {
+        let mut limiter = EgressLimiter::new(&limiter_config(0, 5));
+        let t0 = tokio::time::Instant::now();
+        for _ in 0..5 {
+            assert_eq!(limiter.try_acquire(t0), Ok(()));
+        }
+        assert_eq!(limiter.try_acquire(t0), Err(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn test_active_rate_limit_requires_enabled_and_a_limit() {
+        // Off by default: a default run is unthrottled.
+        assert_eq!(ValidationConfig::default().rate_limiter, None);
+        let off = RateLimiterConfig { enabled: false, ..limiter_config(5, 60) };
+        assert_eq!(active_rate_limit(&off), None);
+        assert_eq!(active_rate_limit(&limiter_config(0, 0)), None);
+        assert_eq!(active_rate_limit(&limiter_config(5, 60)), Some(limiter_config(5, 60)));
+        assert_eq!(active_rate_limit(&limiter_config(0, 60)), Some(limiter_config(0, 60)));
+    }
+
+    #[test]
+    fn test_rate_limiter_config_without_enabled_deserializes_off() {
+        // Settings files written before I1 have no `enabled` key.
+        let config: RateLimiterConfig =
+            serde_json::from_value(serde_json::json!({"max_per_second": 1, "max_per_minute": 60}))
+                .unwrap();
+        assert!(!config.enabled);
+        assert_eq!(config.max_per_second, 1);
     }
 
     /// Regression test: the proxy, timeout and retries must be applied to
@@ -2864,7 +3013,7 @@ mod run_tests {
         assert!(json["results"].is_array());
     }
 
-    // The rate-limited (sequential) branch shares the same fail-closed path.
+    // The rate-limited path shares the same fail-closed handling.
     #[tokio::test(start_paused = true)]
     async fn test_rate_limited_branch_is_fail_closed() {
         let calls: Calls = Default::default();
@@ -2876,7 +3025,7 @@ mod run_tests {
             policy(&draining_settings(), system_clock(), true),
             scripted(&calls, 1, |_, _| ProxyOutcome::Failure),
             sink(&log),
-            Some(RateLimiterConfig { max_per_second: 10, max_per_minute: 600 }),
+            rate(10, 600, true),
         )
         .await;
         assert!(calls.lock().unwrap().iter().all(|c| c.is_some()));
@@ -2903,19 +3052,28 @@ mod run_tests {
         }
     }
 
-    fn one_per_second() -> Option<RateLimiterConfig> {
-        Some(RateLimiterConfig { max_per_second: 1, max_per_minute: 60 })
+    fn rate(max_per_second: u32, max_per_minute: u32, per_proxy: bool) -> Option<RateLimit> {
+        Some(RateLimit {
+            config: RateLimiterConfig { enabled: true, max_per_second, max_per_minute },
+            per_proxy,
+        })
     }
 
-    // B14: Stop during an in-flight validation in the rate-limited branch
-    // returns at once with the partial results; the in-flight validator is
+    fn one_per_second() -> Option<RateLimit> {
+        rate(1, 60, true)
+    }
+
+    // B14: Stop during an in-flight validation in a rate-limited run
+    // returns at once with the partial results; in-flight validations are
     // dropped, not awaited, and nothing else is dispatched.
     #[tokio::test(start_paused = true)]
     async fn test_rate_limited_cancel_mid_validation() {
         let token = CancellationToken::new();
         let started = Arc::new(AtomicUsize::new(0));
         let completed = Arc::new(AtomicUsize::new(0));
-        // email0 runs t=0..10, 1s gap, email1 starts at t=11; Stop at t=15.
+        // 1/s with 4 slots: emails 0..3 dispatch at t=0,1,2,3 and finish at
+        // t=10..13; each freed slot dispatches the next at once (4..7 at
+        // t=10..13, the window is clear). Stop at t=15 lands mid-flight.
         let canceller = token.clone();
         tokio::spawn(async move {
             sleep(Duration::from_secs(15)).await;
@@ -2935,40 +3093,45 @@ mod run_tests {
         let elapsed = t0.elapsed();
 
         assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_CANCELLED));
-        assert_eq!(outcome.results.len(), 1);
-        assert_eq!(outcome.results[0].email, "user0@example.com");
-        // Returned at the Stop, not when email1's validation (t=21) finished.
+        let done: Vec<_> = outcome.results.iter().map(|r| r.email.as_str()).collect();
+        assert_eq!(
+            done,
+            ["user0@example.com", "user1@example.com", "user2@example.com", "user3@example.com"]
+        );
+        // Returned at the Stop, not when email4's validation (t=20) finished.
         assert_eq!(elapsed, Duration::from_secs(15));
-        assert_eq!(started.load(Ordering::SeqCst), 2);
-        assert_eq!(completed.load(Ordering::SeqCst), 1);
+        assert_eq!(started.load(Ordering::SeqCst), 8);
+        assert_eq!(completed.load(Ordering::SeqCst), 4);
 
-        // Long after: the dropped validation never completed, and no further
-        // email was dispatched.
+        // Long after: the dropped validations never completed, and no
+        // further email was dispatched.
         sleep(Duration::from_secs(120)).await;
-        assert_eq!(started.load(Ordering::SeqCst), 2);
-        assert_eq!(completed.load(Ordering::SeqCst), 1);
+        assert_eq!(started.load(Ordering::SeqCst), 8);
+        assert_eq!(completed.load(Ordering::SeqCst), 4);
     }
 
-    // B14: Stop during the inter-email rate-limit sleep returns at once and
-    // never dispatches the next email.
+    // B14: Stop while tasks wait on the limiter returns at once and never
+    // dispatches the waiting emails.
     #[tokio::test(start_paused = true)]
     async fn test_rate_limited_cancel_during_rate_sleep() {
         let token = CancellationToken::new();
         let started = Arc::new(AtomicUsize::new(0));
         let completed = Arc::new(AtomicUsize::new(0));
-        // email0 runs t=0..2, then a 1s rate gap; Stop at t=2.5 lands in it.
+        // email0 dispatches at t=0 and finishes at t=0.1; emails 1..3 hold
+        // slots waiting for the limiter until t=1. Stop at t=0.5 lands in
+        // that wait.
         let canceller = token.clone();
         tokio::spawn(async move {
-            sleep(Duration::from_millis(2500)).await;
+            sleep(Duration::from_millis(500)).await;
             canceller.cancel();
         });
         let t0 = tokio::time::Instant::now();
         let outcome = validate_emails_bulk_with_rate_limit(
             emails(10),
-            1,
+            4,
             token,
             ProxyPolicy::direct(),
-            counting_slow(&started, &completed, Duration::from_secs(2)),
+            counting_slow(&started, &completed, Duration::from_millis(100)),
             sink(&Arc::new(EventLog::default())),
             one_per_second(),
         )
@@ -2976,9 +3139,223 @@ mod run_tests {
 
         assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_CANCELLED));
         assert_eq!(outcome.results.len(), 1);
-        assert_eq!(t0.elapsed(), Duration::from_millis(2500));
+        assert_eq!(t0.elapsed(), Duration::from_millis(500));
         sleep(Duration::from_secs(60)).await;
         assert_eq!(started.load(Ordering::SeqCst), 1);
         assert_eq!(completed.load(Ordering::SeqCst), 1);
+    }
+
+    // === I1: rate limiter in the run ===
+
+    type Stamps = Arc<StdMutex<Vec<(Duration, Option<String>)>>>;
+
+    /// Validator that records (virtual time since `t0`, proxy id) at
+    /// dispatch and takes `delay` to finish.
+    fn stamping(
+        stamps: &Stamps,
+        t0: tokio::time::Instant,
+        delay: Duration,
+    ) -> impl Fn(String, Option<ProxyConfig>) -> BoxFut + Send + Sync {
+        let stamps = stamps.clone();
+        move |email, proxy| {
+            stamps.lock().unwrap().push((t0.elapsed(), proxy.as_ref().map(|p| p.id())));
+            Box::pin(async move {
+                if delay.is_zero() {
+                    tokio::task::yield_now().await;
+                } else {
+                    sleep(delay).await;
+                }
+                fake_result(&email, &proxy, ProxyOutcome::Neutral)
+            })
+        }
+    }
+
+    /// Dispatch times, optionally only those through `proxy`.
+    fn times(stamps: &Stamps, proxy: Option<&str>) -> Vec<Duration> {
+        let mut times: Vec<_> = stamps
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, p)| proxy.is_none() || p.as_deref() == proxy)
+            .map(|(t, _)| *t)
+            .collect();
+        times.sort();
+        times
+    }
+
+    /// The most dispatches in any half-open window of length `window`.
+    fn max_in_window(times: &[Duration], window: Duration) -> usize {
+        let mut best = 0;
+        let mut lo = 0;
+        for hi in 0..times.len() {
+            while times[hi] - times[lo] >= window {
+                lo += 1;
+            }
+            best = best.max(hi - lo + 1);
+        }
+        best
+    }
+
+    fn count_before(times: &[Duration], t: Duration) -> usize {
+        times.iter().filter(|x| **x < t).count()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_rate_limit_bursts_then_paces() {
+        let stamps: Stamps = Default::default();
+        let t0 = tokio::time::Instant::now();
+        let outcome = validate_emails_bulk_with_rate_limit(
+            emails(100),
+            64,
+            CancellationToken::new(),
+            ProxyPolicy::direct(),
+            stamping(&stamps, t0, Duration::ZERO),
+            sink(&Arc::new(EventLog::default())),
+            rate(10, 6000, true),
+        )
+        .await;
+
+        assert_eq!(outcome.stop_reason, None);
+        assert_eq!(outcome.results.len(), 100);
+        let times = times(&stamps, None);
+        // A full burst at t=0, then 10 per second.
+        assert_eq!(count_before(&times, Duration::from_millis(1)), 10);
+        assert_eq!(count_before(&times, Duration::from_secs(1)), 10);
+        assert_eq!(count_before(&times, Duration::from_secs(5)), 50);
+        assert_eq!(max_in_window(&times, Duration::from_secs(1)), 10);
+        assert_eq!(*times.last().unwrap(), Duration::from_secs(9));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_rate_limit_none_does_not_pace() {
+        let stamps: Stamps = Default::default();
+        let t0 = tokio::time::Instant::now();
+        let outcome = validate_emails_bulk_with_rate_limit(
+            emails(100),
+            64,
+            CancellationToken::new(),
+            ProxyPolicy::direct(),
+            stamping(&stamps, t0, Duration::ZERO),
+            sink(&Arc::new(EventLog::default())),
+            None,
+        )
+        .await;
+
+        assert_eq!(outcome.results.len(), 100);
+        assert!(times(&stamps, None).iter().all(|t| t.is_zero()));
+        assert!(t0.elapsed().is_zero());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_rate_limit_minute_window_binds() {
+        let stamps: Stamps = Default::default();
+        let t0 = tokio::time::Instant::now();
+        let outcome = validate_emails_bulk_with_rate_limit(
+            emails(150),
+            64,
+            CancellationToken::new(),
+            ProxyPolicy::direct(),
+            stamping(&stamps, t0, Duration::ZERO),
+            sink(&Arc::new(EventLog::default())),
+            rate(1000, 60, true),
+        )
+        .await;
+
+        assert_eq!(outcome.results.len(), 150);
+        let times = times(&stamps, None);
+        // 60/min binds over 1000/s: never more than 60 in any minute, so 150
+        // emails take two full minutes.
+        assert_eq!(max_in_window(&times, Duration::from_secs(60)), 60);
+        assert_eq!(count_before(&times, Duration::from_secs(60)), 60);
+        assert_eq!(count_before(&times, Duration::from_secs(120)), 120);
+        assert_eq!(*times.last().unwrap(), Duration::from_secs(120));
+    }
+
+    // One hot domain pinned to proxy 1 is paced on proxy 1's limiter while
+    // proxy 2's traffic flows at its own rate, not behind it.
+    #[tokio::test(start_paused = true)]
+    async fn test_rate_limit_is_per_proxy() {
+        let settings = test_settings(2);
+        {
+            let mut s = settings.write().await;
+            s.proxy_pool.rotation_mode = RotationMode::PerDomain;
+            s.proxy_pool.assign_domain("hot.com".to_string(), proxy_id(1)).unwrap();
+            s.proxy_pool.assign_domain("cold.com".to_string(), proxy_id(2)).unwrap();
+        }
+        let mut inputs: Vec<String> = (0..30).map(|i| format!("u{}@hot.com", i)).collect();
+        inputs.extend((0..10).map(|i| format!("u{}@cold.com", i)));
+        let stamps: Stamps = Default::default();
+        let t0 = tokio::time::Instant::now();
+        let outcome = validate_emails_bulk_with_rate_limit(
+            inputs,
+            64,
+            CancellationToken::new(),
+            policy(&settings, tokio_clock(), true),
+            stamping(&stamps, t0, Duration::ZERO),
+            sink(&Arc::new(EventLog::default())),
+            rate(10, 600, true),
+        )
+        .await;
+
+        assert_eq!(outcome.results.len(), 40);
+        let hot = times(&stamps, Some(&proxy_id(1)));
+        let cold = times(&stamps, Some(&proxy_id(2)));
+        assert_eq!((hot.len(), cold.len()), (30, 10));
+        assert_eq!(max_in_window(&hot, Duration::from_secs(1)), 10);
+        assert_eq!(count_before(&hot, Duration::from_secs(1)), 10);
+        // Proxy 2's whole share went out at t=0 on its own budget.
+        assert!(cold.iter().all(|t| t.is_zero()));
+        // 20 dispatches in the first second: more than one egress's cap.
+        assert_eq!(count_before(&times(&stamps, None), Duration::from_secs(1)), 20);
+    }
+
+    // Quick mode (per_proxy = false) paces every dispatch on one global
+    // limiter, whatever proxy was selected.
+    #[tokio::test(start_paused = true)]
+    async fn test_rate_limit_global_when_not_per_proxy() {
+        let settings = test_settings(2);
+        let stamps: Stamps = Default::default();
+        let t0 = tokio::time::Instant::now();
+        let outcome = validate_emails_bulk_with_rate_limit(
+            emails(40),
+            64,
+            CancellationToken::new(),
+            policy(&settings, tokio_clock(), true),
+            stamping(&stamps, t0, Duration::ZERO),
+            sink(&Arc::new(EventLog::default())),
+            rate(10, 600, false),
+        )
+        .await;
+
+        assert_eq!(outcome.results.len(), 40);
+        let all = times(&stamps, None);
+        assert_eq!(max_in_window(&all, Duration::from_secs(1)), 10);
+        assert_eq!(*all.last().unwrap(), Duration::from_secs(3));
+        // Both proxies were still used.
+        assert_eq!(times(&stamps, Some(&proxy_id(1))).len(), 20);
+        assert_eq!(times(&stamps, Some(&proxy_id(2))).len(), 20);
+    }
+
+    // The limiter gates dispatch only: slow validations still overlap up to
+    // the configured concurrency.
+    #[tokio::test(start_paused = true)]
+    async fn test_rate_limit_keeps_concurrency() {
+        let stamps: Stamps = Default::default();
+        let t0 = tokio::time::Instant::now();
+        let outcome = validate_emails_bulk_with_rate_limit(
+            emails(16),
+            8,
+            CancellationToken::new(),
+            ProxyPolicy::direct(),
+            stamping(&stamps, t0, Duration::from_secs(10)),
+            sink(&Arc::new(EventLog::default())),
+            rate(100, 6000, true),
+        )
+        .await;
+
+        assert_eq!(outcome.results.len(), 16);
+        // Two waves of 8 parallel 10s validations, not 16 sequential ones.
+        assert_eq!(t0.elapsed(), Duration::from_secs(20));
+        assert_eq!(count_before(&times(&stamps, None), Duration::from_millis(1)), 8);
     }
 }

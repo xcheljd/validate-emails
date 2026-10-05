@@ -7,8 +7,14 @@ use std::io::ErrorKind;
 
 use super::proxy_pool::ProxyPool;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Dispatch rate limit applied per egress IP (each proxy, or the direct
+/// connection) during a run. A 0 limit means "no limit" for that window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RateLimiterConfig {
+    /// Off by default (and for settings files written before I1), so runs
+    /// are unthrottled unless the user opts in.
+    #[serde(default)]
+    pub enabled: bool,
     pub max_per_second: u32,
     pub max_per_minute: u32,
 }
@@ -16,6 +22,7 @@ pub struct RateLimiterConfig {
 impl Default for RateLimiterConfig {
     fn default() -> Self {
         Self {
+            enabled: false,
             max_per_second: 1,
             max_per_minute: 60,
         }

@@ -122,6 +122,16 @@ async fn validation_config_snapshot(
     validation::ValidationConfig::from_settings(&settings)
 }
 
+/// The run's dispatch rate limit (I1), if enabled. Quick mode never opens an
+/// SMTP session through the proxy, so it is paced on one global limiter
+/// instead of per proxy.
+fn run_rate_limit(config: &validation::ValidationConfig, mode: &str) -> Option<validation::RateLimit> {
+    config.rate_limiter.clone().map(|config| validation::RateLimit {
+        config,
+        per_proxy: mode != "quick",
+    })
+}
+
 /// Forward a run's events to the window, stamped with its run id.
 fn run_event_sink(window: tauri::Window, run_id: u64) -> impl Fn(validation::RunEvent) + Send + Sync {
     move |event| match event {
@@ -218,14 +228,16 @@ async fn validate_emails_bulk(
     let policy = prepare_proxy_policy(&window, &settings_state, run_id).await?;
     let used_pool = policy.state.is_some();
     let config = validation_config_snapshot(&settings_state).await;
+    let rate = run_rate_limit(&config, &mode);
 
-    let outcome = validation::validate_emails_bulk_core(
+    let outcome = validation::validate_emails_bulk_with_rate_limit(
         emails,
         concurrency,
         token,
         policy,
         move |email, proxy| validation::validate_email(email, mode.clone(), proxy, config.clone()),
         run_event_sink(window.clone(), run_id),
+        rate,
     )
     .await;
 
@@ -251,6 +263,7 @@ async fn revalidate_emails_bulk(
     let policy = prepare_proxy_policy(&window, &settings_state, run_id).await?;
     let used_pool = policy.state.is_some();
     let config = validation_config_snapshot(&settings_state).await;
+    let rate = run_rate_limit(&config, &mode);
 
     let outcome = validation::revalidate_emails_bulk_core(
         items,
@@ -259,6 +272,7 @@ async fn revalidate_emails_bulk(
         policy,
         move |email, proxy| validation::validate_email(email, mode.clone(), proxy, config.clone()),
         run_event_sink(window.clone(), run_id),
+        rate,
     )
     .await;
 
