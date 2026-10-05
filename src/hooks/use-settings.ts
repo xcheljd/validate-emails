@@ -135,6 +135,8 @@ export interface AppSettings {
   sessionRetentionDays: number;
   sidebarCollapsed: boolean;
   proxy: ProxySettings;
+  /** Pace dispatches per proxy (or globally when direct); default off */
+  rateLimitEnabled: boolean;
   /** Rate limit: max emails per second (default 1) */
   rateLimitMaxPerSecond: number;
   /** Rate limit: max emails per minute (default 60) */
@@ -172,6 +174,7 @@ export const defaultSettings: AppSettings = {
   sessionRetentionDays: 90,
   sidebarCollapsed: false,
   proxy: defaultProxySettings,
+  rateLimitEnabled: false,
   rateLimitMaxPerSecond: 1,
   rateLimitMaxPerMinute: 60,
   maxEmailsPerSession: 0,

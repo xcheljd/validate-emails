@@ -502,6 +502,39 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
               </div>
 
               <div className="space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="rate-limit-enabled">
+                      Limit dispatch rate
+                    </Label>
+                    <p className="text-[10px] text-muted-foreground">
+                      Caps how fast emails are sent through each proxy (or
+                      your own connection when no proxy is used), to keep
+                      IPs off blocklists. Off = no limit.
+                    </p>
+                  </div>
+                  <button
+                    id="rate-limit-enabled"
+                    type="button"
+                    role="switch"
+                    aria-checked={localSettings.rateLimitEnabled}
+                    onClick={() =>
+                      handleChange('rateLimitEnabled', !localSettings.rateLimitEnabled)
+                    }
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+                      localSettings.rateLimitEnabled ? 'bg-primary' : 'bg-input'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                        localSettings.rateLimitEnabled
+                          ? 'translate-x-5'
+                          : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
                 <div className="space-y-2">
                   <Label htmlFor="max-per-second">Max Per Second</Label>
                   <div className="flex items-center gap-4">
@@ -509,6 +542,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                       id="max-per-second"
                       type="number"
                       value={localSettings.rateLimitMaxPerSecond}
+                      disabled={!localSettings.rateLimitEnabled}
                       onChange={(e) =>
                         handleChange('rateLimitMaxPerSecond', parseInt(e.target.value) || 1)
                       }
@@ -528,6 +562,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                       id="max-per-minute"
                       type="number"
                       value={localSettings.rateLimitMaxPerMinute}
+                      disabled={!localSettings.rateLimitEnabled}
                       onChange={(e) =>
                         handleChange('rateLimitMaxPerMinute', parseInt(e.target.value) || 60)
                       }

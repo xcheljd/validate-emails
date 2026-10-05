@@ -31,6 +31,7 @@ const {
         minAttempts: 10,
       },
     },
+    rateLimitEnabled: false,
     rateLimitMaxPerSecond: 1,
     rateLimitMaxPerMinute: 60,
     maxEmailsPerSession: 0,

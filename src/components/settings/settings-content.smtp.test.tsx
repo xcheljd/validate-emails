@@ -203,6 +203,63 @@ describe('Gravatar lookup setting', () => {
   });
 });
 
+describe('Rate limiter setting', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', memoryStorage());
+    vi.clearAllMocks();
+  });
+
+  it('renders the toggle off by default with the limit inputs disabled', async () => {
+    await renderSettings();
+    const toggle = screen.getByRole('switch', { name: 'Limit dispatch rate' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByLabelText('Max Per Second')).toBeDisabled();
+    expect(screen.getByLabelText('Max Per Minute')).toBeDisabled();
+  });
+
+  it('saves rate_limiter.enabled false when left untouched', async () => {
+    await renderSettings();
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Settings'));
+    });
+    expect(savedSettings().rate_limiter).toEqual({
+      enabled: false,
+      max_per_second: 1,
+      max_per_minute: 60,
+    });
+  });
+
+  it('saves enabled limits after toggling on and editing', async () => {
+    await renderSettings();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('switch', { name: 'Limit dispatch rate' }));
+    });
+    const perSecond = screen.getByLabelText('Max Per Second');
+    expect(perSecond).toBeEnabled();
+    await act(async () => {
+      fireEvent.change(perSecond, { target: { value: '5' } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Settings'));
+    });
+    expect(savedSettings().rate_limiter).toEqual({
+      enabled: true,
+      max_per_second: 5,
+      max_per_minute: 60,
+    });
+  });
+
+  it('loads a saved enabled value from the backend', async () => {
+    await renderSettings({
+      rate_limiter: { enabled: true, max_per_second: 2, max_per_minute: 30 },
+    });
+    expect(
+      screen.getByRole('switch', { name: 'Limit dispatch rate' })
+    ).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByLabelText('Max Per Second')).toHaveValue(2);
+  });
+});
+
 describe('validateSmtpIdentity', () => {
   it('accepts blank and plausible values', () => {
     expect(validateSmtpIdentity('', '')).toBeNull();

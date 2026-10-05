@@ -35,7 +35,11 @@ interface BackendSettings {
   auto_save_interval: number;
   history_retention_days: number;
   max_emails_per_session: number;
-  rate_limiter: { max_per_second: number; max_per_minute: number };
+  rate_limiter: {
+    enabled?: boolean;
+    max_per_second: number;
+    max_per_minute: number;
+  };
   from_email: string;
   hello_name: string;
   check_gravatar: boolean;
@@ -61,6 +65,7 @@ function backendToFrontend(backend: BackendSettings): Partial<AppSettings> {
     sessionRetentionDays: backend.history_retention_days,
     sidebarCollapsed: false,
     maxEmailsPerSession: backend.max_emails_per_session ?? 0,
+    rateLimitEnabled: backend.rate_limiter?.enabled ?? false,
     rateLimitMaxPerSecond: backend.rate_limiter?.max_per_second ?? 1,
     rateLimitMaxPerMinute: backend.rate_limiter?.max_per_minute ?? 60,
     fromEmail: backend.from_email ?? '',
@@ -79,6 +84,7 @@ function frontendToBackend(frontend: AppSettings): BackendSettings {
     history_retention_days: frontend.sessionRetentionDays,
     max_emails_per_session: frontend.maxEmailsPerSession,
     rate_limiter: {
+      enabled: frontend.rateLimitEnabled,
       max_per_second: frontend.rateLimitMaxPerSecond,
       max_per_minute: frontend.rateLimitMaxPerMinute,
     },
