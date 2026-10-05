@@ -167,7 +167,7 @@ export const defaultSettings: AppSettings = {
   validationMode: 'standard',
   concurrency: 5,
   timeout: 30,
-  maxRetries: 3,
+  maxRetries: 1,
   autoSaveInterval: 10,
   sessionRetentionDays: 90,
   sidebarCollapsed: false,

@@ -54,7 +54,7 @@ impl Default for Settings {
             validation_mode: "standard".to_string(),
             timeout_ms: 30000,
             concurrency: 5,
-            max_retries: 3,
+            max_retries: 1,
             auto_save_interval: 10,
             history_retention_days: 90,
             rate_limiter: RateLimiterConfig::default(),

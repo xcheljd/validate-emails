@@ -1678,15 +1678,15 @@ mod tests {
     #[test]
     fn test_resolve_smtp_params_defaults() {
         let s = Settings::default();
-        assert_eq!((s.timeout_ms, s.max_retries), (30_000, 3));
+        assert_eq!((s.timeout_ms, s.max_retries), (30_000, 1));
         assert_eq!(
             resolve_smtp_params("standard", s.timeout_ms, s.max_retries),
-            (Duration::from_millis(30_000), 4)
+            (Duration::from_millis(30_000), 2)
         );
         // 30s is below the thorough floor.
         assert_eq!(
             resolve_smtp_params("thorough", s.timeout_ms, s.max_retries),
-            (Duration::from_millis(45_000), 4)
+            (Duration::from_millis(45_000), 2)
         );
     }
 
@@ -1736,7 +1736,7 @@ mod tests {
 
         let default = ValidationConfig::default();
         assert_eq!(default.timeout_ms, 30_000);
-        assert_eq!(default.max_retries, 3);
+        assert_eq!(default.max_retries, 1);
     }
 
     // I9: Gravatar is opt-in and reaches the library input.

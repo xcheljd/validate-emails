@@ -8,7 +8,7 @@ export function ValidationSettings() {
   >('standard');
   const [concurrency, setConcurrency] = useState(5);
   const [timeout, setTimeout] = useState(30);
-  const [maxRetries, setMaxRetries] = useState(3);
+  const [maxRetries, setMaxRetries] = useState(1);
   const [autoSaveInterval, setAutoSaveInterval] = useState(10);
 
   return (
@@ -31,7 +31,7 @@ export function ValidationSettings() {
           >
             <option value="quick">Quick (10s)</option>
             <option value="standard">Standard (30s)</option>
-            <option value="thorough">Thorough (60s)</option>
+            <option value="thorough">Thorough (45s+)</option>
           </select>
         </div>
 

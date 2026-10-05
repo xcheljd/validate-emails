@@ -1131,6 +1131,30 @@
     }
 
     #[test]
+    fn test_settings_default_max_retries_is_one_saved_value_kept() {
+        assert_eq!(Settings::default().max_retries, 1);
+
+        // A file saved under the old default keeps its value.
+        let dir = SettingsDir::new();
+        std::fs::write(
+            dir.settings_path(),
+            r#"{
+                "validation_mode": "standard",
+                "timeout_ms": 30000,
+                "concurrency": 5,
+                "max_retries": 3,
+                "auto_save_interval": 10,
+                "history_retention_days": 90,
+                "rate_limiter": {"max_per_second": 1, "max_per_minute": 60}
+            }"#,
+        )
+        .unwrap();
+        let (loaded, warning) = load_settings_file(&dir.settings_path());
+        assert!(warning.is_none());
+        assert_eq!(loaded.max_retries, 3);
+    }
+
+    #[test]
     fn test_settings_check_gravatar_explicit_true_loads() {
         let json = r#"{
             "validation_mode": "standard",

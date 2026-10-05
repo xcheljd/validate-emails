@@ -336,7 +336,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
               >
                 <option value="quick">Quick (10s)</option>
                 <option value="standard">Standard (30s)</option>
-                <option value="thorough">Thorough (60s)</option>
+                <option value="thorough">Thorough (45s+)</option>
               </select>
             </div>
 
@@ -362,7 +362,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="timeout">Timeout (seconds per email)</Label>
+              <Label htmlFor="timeout">Timeout (seconds per SMTP connection)</Label>
               <div className="flex items-center gap-4">
                 <Input
                   id="timeout"
@@ -375,7 +375,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                   max="120"
                 />
                 <span className="text-xs text-muted-foreground whitespace-nowrap">
-                  Default: 30s
+                  Thorough mode uses at least 45s
                 </span>
               </div>
             </div>
@@ -394,7 +394,7 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                   max="5"
                 />
                 <span className="text-xs text-muted-foreground whitespace-nowrap">
-                  On temporary failures
+                  On temporary failures (default: 1)
                 </span>
               </div>
             </div>
