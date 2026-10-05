@@ -135,12 +135,14 @@ fn run_rate_limit(config: &validation::ValidationConfig, mode: &str) -> Option<v
 
 /// The run's shared MX state (I5): one resolver, a per-domain MX cache and
 /// the per-MX session cap, all dropped when the run ends. Bound to the run's
-/// token so a wait on an MX slot ends on Stop/Pause.
+/// token so a wait on an MX slot ends on Stop/Pause, and to the run's rate
+/// limiter so an MX fallback (I6) is paced like a dispatch.
 fn run_mx(
     config: &validation::ValidationConfig,
     token: &tokio_util::sync::CancellationToken,
+    limiter: &Option<Arc<validation::RunLimiter>>,
 ) -> Arc<mx::MxRun> {
-    Arc::new(mx::MxRun::new(config.mx_concurrency, token.clone()))
+    Arc::new(mx::MxRun::new(config.mx_concurrency, token.clone(), limiter.clone()))
 }
 
 /// Forward a run's events to the window, stamped with its run id.
@@ -239,10 +241,10 @@ async fn validate_emails_bulk(
     let policy = prepare_proxy_policy(&window, &settings_state, run_id).await?;
     let used_pool = policy.state.is_some();
     let config = validation_config_snapshot(&settings_state).await;
-    let rate = run_rate_limit(&config, &mode);
-    let mx = run_mx(&config, &token);
+    let limiter = run_rate_limit(&config, &mode).map(|rate| Arc::new(validation::RunLimiter::new(rate)));
+    let mx = run_mx(&config, &token, &limiter);
 
-    let outcome = validation::validate_emails_bulk_with_rate_limit(
+    let outcome = validation::validate_emails_bulk_with_limiter(
         emails,
         concurrency,
         token,
@@ -251,7 +253,7 @@ async fn validate_emails_bulk(
             validation::validate_email_in_run(email, mode.clone(), proxy, config.clone(), mx.clone())
         },
         run_event_sink(window.clone(), run_id),
-        rate,
+        limiter,
     )
     .await;
 
@@ -277,8 +279,8 @@ async fn revalidate_emails_bulk(
     let policy = prepare_proxy_policy(&window, &settings_state, run_id).await?;
     let used_pool = policy.state.is_some();
     let config = validation_config_snapshot(&settings_state).await;
-    let rate = run_rate_limit(&config, &mode);
-    let mx = run_mx(&config, &token);
+    let limiter = run_rate_limit(&config, &mode).map(|rate| Arc::new(validation::RunLimiter::new(rate)));
+    let mx = run_mx(&config, &token, &limiter);
 
     let outcome = validation::revalidate_emails_bulk_core(
         items,
@@ -289,7 +291,7 @@ async fn revalidate_emails_bulk(
             validation::validate_email_in_run(email, mode.clone(), proxy, config.clone(), mx.clone())
         },
         run_event_sink(window.clone(), run_id),
-        rate,
+        limiter,
     )
     .await;
 

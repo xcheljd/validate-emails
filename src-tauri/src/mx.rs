@@ -12,6 +12,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use crate::validation::{classify_smtp_error_detail, is_mx_transport_error, RunLimiter};
 use check_if_email_exists::mx::MxError;
 use check_if_email_exists::smtp::{SmtpDetails, SmtpError};
 use hickory_resolver::error::ResolveErrorKind;
@@ -30,6 +31,10 @@ pub const MAX_MX_CONCURRENCY: u32 = 16;
 pub fn clamp_mx_concurrency(cap: u32) -> usize {
     cap.clamp(1, MAX_MX_CONCURRENCY) as usize
 }
+
+/// SMTP attempts per email across the domain's MX hosts (I6): the primary
+/// plus at most two fallbacks.
+pub const MAX_MX_ATTEMPTS: usize = 3;
 
 /// How long a failed lookup (DNS error, not "no MX") is reused before the
 /// domain is resolved again. Records and "no MX" are kept for the whole run;
@@ -185,6 +190,22 @@ impl MxHostLimiter {
     }
 }
 
+/// One SMTP attempt of a fallback chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MxAttempt {
+    pub host: MxHost,
+    /// `classify_smtp_error_detail` category; None = the session completed.
+    pub error_type: Option<&'static str>,
+}
+
+/// The SMTP step's outcome: the last attempt's result, and every attempt
+/// made (more than one only if the earlier MX hosts failed in transport).
+#[derive(Debug)]
+pub struct SmtpChain {
+    pub result: Result<SmtpDetails, SmtpError>,
+    pub attempts: Vec<MxAttempt>,
+}
+
 /// MX state shared by every email of one run.
 pub struct MxRun {
     cache: MxCache,
@@ -194,15 +215,23 @@ pub struct MxRun {
     /// hickory resolver shares its connection pool and cache; borrowing it
     /// is enough here).
     resolver: OnceCell<TokioAsyncResolver>,
+    /// The run's dispatch limiter (I1). A fallback attempt is a fresh SMTP
+    /// session from the same egress IP, so it takes a slot like a dispatch.
+    limiter: Option<Arc<RunLimiter>>,
 }
 
 impl MxRun {
-    pub fn new(mx_concurrency: u32, token: CancellationToken) -> Self {
+    pub fn new(
+        mx_concurrency: u32,
+        token: CancellationToken,
+        limiter: Option<Arc<RunLimiter>>,
+    ) -> Self {
         Self {
             cache: MxCache::default(),
             hosts: MxHostLimiter::new(clamp_mx_concurrency(mx_concurrency)),
             token,
             resolver: OnceCell::new(),
+            limiter,
         }
     }
 
@@ -215,21 +244,56 @@ impl MxRun {
         self.cache.get_or_resolve(domain, resolve, &self.token).await
     }
 
-    /// Run the SMTP step against the primary (lowest-preference) MX, holding
-    /// one of that host's session slots for its duration. `hosts` must be
-    /// non-empty. None if the run is cancelled while waiting or mid-session.
-    pub async fn smtp<A, Fut>(&self, hosts: &[MxHost], attempt: A) -> Option<Result<SmtpDetails, SmtpError>>
+    /// Run the SMTP step against the domain's MX hosts in preference order
+    /// (I6). Starts with the primary; moves to the next distinct host only
+    /// when an attempt fails in transport (timeout / connection-level I/O,
+    /// see `is_mx_transport_error`), at most `MAX_MX_ATTEMPTS` attempts in
+    /// all. Any other outcome — a completed session, an SMTP reply, or a
+    /// proxy-blamed error — ends the chain: a reply is the MX's answer, and
+    /// a proxy fault would follow us to every MX.
+    ///
+    /// Each attempt holds one of its host's session slots (released before
+    /// the next host's is taken, so chains can't deadlock on each other),
+    /// and each fallback first takes a dispatch slot on `proxy_id`'s egress.
+    /// `hosts` must be non-empty. None if the run is cancelled.
+    pub async fn smtp<A, Fut>(
+        &self,
+        hosts: &[MxHost],
+        proxy_id: Option<&str>,
+        attempt: A,
+    ) -> Option<SmtpChain>
     where
         A: Fn(&MxHost) -> Fut,
         Fut: Future<Output = Result<SmtpDetails, SmtpError>>,
     {
-        let host = hosts.first()?;
-        let _permit = self.hosts.acquire(host, &self.token).await?;
-        tokio::select! {
-            biased;
-            _ = self.token.cancelled() => None,
-            result = attempt(host) => Some(result),
+        let mut chain = distinct_hosts(hosts).peekable();
+        let mut attempts = Vec::new();
+        while let Some(host) = chain.next() {
+            if !attempts.is_empty() {
+                if let Some(limiter) = &self.limiter {
+                    if !limiter.acquire(proxy_id, &self.token).await {
+                        return None;
+                    }
+                }
+            }
+            let result = {
+                let _permit = self.hosts.acquire(host, &self.token).await?;
+                tokio::select! {
+                    biased;
+                    _ = self.token.cancelled() => return None,
+                    result = attempt(host) => result,
+                }
+            };
+            let error_type = result.as_ref().err().map(|e| classify_smtp_error_detail(e).0);
+            attempts.push(MxAttempt { host: host.clone(), error_type });
+            let fall_back = matches!(&result, Err(e) if is_mx_transport_error(e))
+                && attempts.len() < MAX_MX_ATTEMPTS
+                && chain.peek().is_some();
+            if !fall_back {
+                return Some(SmtpChain { result, attempts });
+            }
         }
+        None
     }
 
     /// Production lookup through the run's shared system resolver, mapped
@@ -255,6 +319,13 @@ impl MxRun {
             },
         }
     }
+}
+
+/// `hosts` in order, skipping repeats of an exchange already listed (two
+/// records for one host would make a pointless fallback).
+fn distinct_hosts(hosts: &[MxHost]) -> impl Iterator<Item = &MxHost> {
+    let mut seen = std::collections::HashSet::new();
+    hosts.iter().filter(move |h| seen.insert(h.key()))
 }
 
 #[cfg(test)]

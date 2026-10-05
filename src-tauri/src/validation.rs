@@ -363,7 +363,7 @@ pub async fn validate_email(
     proxy: Option<ProxyConfig>,
     config: ValidationConfig,
 ) -> ValidationResult {
-    let run = Arc::new(MxRun::new(config.mx_concurrency, CancellationToken::new()));
+    let run = Arc::new(MxRun::new(config.mx_concurrency, CancellationToken::new(), None));
     validate_email_in_run(email, mode, proxy, config, run).await
 }
 
@@ -717,16 +717,40 @@ where
             host: host.clone(),
         })
     };
-    let Some(smtp) = run.smtp(hosts, call).await else {
+    let Some(chain) = run.smtp(hosts, proxy_id.as_deref(), call).await else {
         return cancelled_result(&email, &domain, &mode, start_time, proxy_id);
     };
 
+    // Everything below reflects the LAST attempt. Proxy health is recorded
+    // once, from it, by the run loop; that is the same as recording every
+    // attempt, since an attempt only falls back on a Neutral (not
+    // proxy-blamed) error, which records nothing.
+    let smtp = chain.result;
     if smtp.is_err() {
         get_similar_mail_provider(&mut syntax);
     }
     let reachable = calculate_reachable(&misc, &smtp);
     let parts = FullParts { syntax, mx: mx.clone(), misc: Some(misc), smtp, reachable };
-    full_mode_result(&email, &mode, start_time, proxy_id, parts)
+    with_mx_fallback(full_mode_result(&email, &mode, start_time, proxy_id, parts), &chain.attempts)
+}
+
+/// Note an MX fallback (I6) on the result: a short suffix on the reason,
+/// e.g. "Deliverable (MX fallback: Timeout → ok)", and the hosts tried in
+/// `logs`. Results without a fallback are untouched.
+fn with_mx_fallback(mut result: ValidationResult, attempts: &[crate::mx::MxAttempt]) -> ValidationResult {
+    if attempts.len() < 2 {
+        return result;
+    }
+    let label = |a: &crate::mx::MxAttempt| a.error_type.unwrap_or("ok");
+    let steps: Vec<&str> = attempts.iter().map(label).collect();
+    result.reason = format!("{} (MX fallback: {})", result.reason, steps.join(" → "));
+    result.logs.extend(
+        attempts
+            .iter()
+            .enumerate()
+            .map(|(i, a)| format!("MX attempt {}: {} → {}", i + 1, a.host.exchange, label(a))),
+    );
+    result
 }
 
 /// The pipeline's findings for one email, in upstream's output shape.
@@ -915,7 +939,7 @@ fn smtp_verdict_reason(reachable: &Reachable, smtp: &SmtpDetails, misc: Option<&
 /// mailbox busy) and SmtpPermanent a 5xx reply, neither carrying an
 /// IP-reputation description; IO is a connection-level failure. Only the
 /// error's Display text (truncated) is kept — never the SMTP transcript.
-fn classify_smtp_error_detail(err: &SmtpError) -> (&'static str, String) {
+pub(crate) fn classify_smtp_error_detail(err: &SmtpError) -> (&'static str, String) {
     use async_smtp::error::Error as AsyncSmtpError;
 
     let detail = truncate_chars(&err.to_string(), MAX_REASON_DETAIL_CHARS);
@@ -961,6 +985,18 @@ fn proxy_outcome_for(
         // actually exercised, so it's neutral (no success, no failure).
         Ok(_) => ProxyOutcome::Neutral,
     }
+}
+
+/// Whether an SMTP error warrants trying the domain's next MX (I6): a
+/// transport failure — timeout or connection-level I/O — that is NOT the
+/// proxy's fault. Those are what a firewalled, dead or tarpitting primary
+/// MX produces. Excluded: SMTP replies (SmtpTransient / SmtpPermanent are
+/// the MX answering; backups share its policy), the upstream catch-all
+/// (Other), and everything `classify_smtp_error` blames on the proxy
+/// (Socks, SmtpBlacklisted, NeedsRDNS), since a bad proxy fails on every MX.
+pub(crate) fn is_mx_transport_error(err: &SmtpError) -> bool {
+    classify_smtp_error(err) == ProxyOutcome::Neutral
+        && matches!(classify_smtp_error_detail(err).0, "Timeout" | "IO")
 }
 
 /// Decide whether an SMTP error is the PROXY's fault.
@@ -1393,7 +1429,7 @@ impl EgressLimiter {
 /// the moment of DISPATCH: tasks waiting on it occupy their
 /// `buffer_unordered` slot, but validations already running are untouched,
 /// so the run's concurrency is unchanged.
-struct RunLimiter {
+pub struct RunLimiter {
     rate: RateLimit,
     /// Keyed by proxy id (`host:port`); None = direct connection, also used
     /// for every dispatch when `per_proxy` is false.
@@ -1401,13 +1437,13 @@ struct RunLimiter {
 }
 
 impl RunLimiter {
-    fn new(rate: RateLimit) -> Self {
+    pub fn new(rate: RateLimit) -> Self {
         Self { rate, egress: Mutex::new(HashMap::new()) }
     }
 
     /// Wait for a dispatch slot on `proxy_id`'s egress. False if the run was
     /// cancelled while waiting (the wait races the token, B14).
-    async fn acquire(&self, proxy_id: Option<&str>, token: &CancellationToken) -> bool {
+    pub async fn acquire(&self, proxy_id: Option<&str>, token: &CancellationToken) -> bool {
         let key = proxy_id.filter(|_| self.rate.per_proxy).map(str::to_owned);
         loop {
             let wait = {
@@ -1453,7 +1489,7 @@ where
     Fut: Future<Output = ValidationResult> + Send,
     S: Fn(RunEvent) + Send + Sync,
 {
-    validate_emails_bulk_with_rate_limit(emails, concurrency, token, policy, validator, sink, None)
+    validate_emails_bulk_with_limiter(emails, concurrency, token, policy, validator, sink, None)
         .await
 }
 
@@ -1464,6 +1500,7 @@ where
 /// handling are the same either way, and so is cancellation (B14): the
 /// limiter wait races the token, and on cancel the outer loop drops the
 /// stream, so an in-flight validation is abandoned rather than awaited.
+#[cfg(test)]
 pub async fn validate_emails_bulk_with_rate_limit<V, Fut, S>(
     emails: Vec<String>,
     concurrency: usize,
@@ -1478,11 +1515,31 @@ where
     Fut: Future<Output = ValidationResult> + Send,
     S: Fn(RunEvent) + Send + Sync,
 {
+    let limiter = rate.map(|rate| Arc::new(RunLimiter::new(rate)));
+    validate_emails_bulk_with_limiter(emails, concurrency, token, policy, validator, sink, limiter)
+        .await
+}
+
+/// `validate_emails_bulk_with_rate_limit` with a limiter the caller built,
+/// so the run's MX fallbacks (I6) can share it.
+pub async fn validate_emails_bulk_with_limiter<V, Fut, S>(
+    emails: Vec<String>,
+    concurrency: usize,
+    token: CancellationToken,
+    policy: ProxyPolicy,
+    validator: V,
+    sink: S,
+    limiter: Option<Arc<RunLimiter>>,
+) -> RunOutcome
+where
+    V: Fn(String, Option<ProxyConfig>) -> Fut + Send + Sync,
+    Fut: Future<Output = ValidationResult> + Send,
+    S: Fn(RunEvent) + Send + Sync,
+{
     use futures::stream::{self, StreamExt};
 
     // Clamp concurrency: 0 hangs the run, huge values flood port 25 (B9).
     let concurrency = clamp_concurrency(concurrency);
-    let limiter = rate.map(RunLimiter::new);
 
     let total = emails.len();
     let mut results = Vec::with_capacity(total);
@@ -1493,7 +1550,7 @@ where
         validator: &validator,
         sink: &sink,
         drain: &drain,
-        limiter: limiter.as_ref(),
+        limiter: limiter.as_deref(),
     };
 
     {
@@ -1536,7 +1593,7 @@ pub async fn revalidate_emails_bulk_core<V, Fut, S>(
     policy: ProxyPolicy,
     validator: V,
     sink: S,
-    rate: Option<RateLimit>,
+    limiter: Option<Arc<RunLimiter>>,
 ) -> RunOutcome
 where
     V: Fn(String, Option<ProxyConfig>) -> Fut + Send + Sync,
@@ -1544,7 +1601,7 @@ where
     S: Fn(RunEvent) + Send + Sync,
 {
     let emails = items.into_iter().map(|item| item.email).collect();
-    validate_emails_bulk_with_rate_limit(emails, concurrency, token, policy, validator, sink, rate)
+    validate_emails_bulk_with_limiter(emails, concurrency, token, policy, validator, sink, limiter)
         .await
 }
 
@@ -3589,6 +3646,8 @@ mod mx_tests {
         hosts: Arc<StdMutex<Vec<String>>>,
         in_flight: Arc<AtomicUsize>,
         peak: Arc<AtomicUsize>,
+        /// host → (in flight, peak)
+        per_host: Arc<StdMutex<HashMap<String, (usize, usize)>>>,
     }
 
     impl FakeSmtp {
@@ -3599,6 +3658,7 @@ mod mx_tests {
                 hosts: Default::default(),
                 in_flight: Default::default(),
                 peak: Default::default(),
+                per_host: Default::default(),
             }
         }
         fn attempt(&self, call: SmtpCall) -> BoxFut<SmtpResult> {
@@ -3608,12 +3668,19 @@ mod mx_tests {
                 this.hosts.lock().unwrap().push(host.clone());
                 let now = this.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 this.peak.fetch_max(now, Ordering::SeqCst);
+                {
+                    let mut per_host = this.per_host.lock().unwrap();
+                    let (cur, peak) = per_host.entry(host.clone()).or_default();
+                    *cur += 1;
+                    *peak = (*peak).max(*cur);
+                }
                 if this.delay.is_zero() {
                     tokio::task::yield_now().await;
                 } else {
                     sleep(this.delay).await;
                 }
                 this.in_flight.fetch_sub(1, Ordering::SeqCst);
+                this.per_host.lock().unwrap().get_mut(&host).unwrap().0 -= 1;
                 (this.respond)(&host)
             })
         }
@@ -3623,14 +3690,43 @@ mod mx_tests {
         fn peak(&self) -> usize {
             self.peak.load(Ordering::SeqCst)
         }
+        fn host_peak(&self) -> usize {
+            self.per_host.lock().unwrap().values().map(|(_, peak)| *peak).max().unwrap_or(0)
+        }
     }
 
     fn deliverable() -> SmtpResult {
         Ok(SmtpDetails { can_connect_smtp: true, is_deliverable: true, ..Default::default() })
     }
 
+    fn timeout() -> SmtpResult {
+        Err(SmtpError::Timeout(Duration::from_secs(10)))
+    }
+
+    fn io_error() -> SmtpResult {
+        Err(SmtpError::IOError(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused")))
+    }
+
+    fn socks_error() -> SmtpResult {
+        Err(SmtpError::Socks5(fast_socks5::SocksError::ArgumentInputError("proxy down")))
+    }
+
+    fn greylisted() -> SmtpResult {
+        use async_smtp::response::{Category, Code, Detail, Response, Severity};
+        let code = Code::new(Severity::TransientNegativeCompletion, Category::MailSystem, Detail::Zero);
+        let reply = Response::new(code, vec!["4.7.1 Greylisted, try again later".to_string()]);
+        Err(SmtpError::AsyncSmtpError(async_smtp::error::Error::Transient(reply)))
+    }
+
+    /// Four MX hosts: mx1..mx4.<domain>, preference 10..40.
+    fn four_mx(domain: &str) -> MxResolution {
+        MxResolution::from_hosts(
+            (1..=4).map(|i| test_host(i * 10, &format!("mx{}.{}.", i, domain))).collect(),
+        )
+    }
+
     fn run_with_cap(cap: u32, token: &CancellationToken) -> Arc<MxRun> {
-        Arc::new(MxRun::new(cap, token.clone()))
+        Arc::new(MxRun::new(cap, token.clone(), None))
     }
 
     /// One email through the real full-mode pipeline.
@@ -3666,6 +3762,22 @@ mod mx_tests {
             let (run, dns, smtp) = (run.clone(), dns.clone(), smtp.clone());
             Box::pin(async move { validate(&email, proxy, &run, &dns, &smtp).await })
         }
+    }
+
+    fn proxied_policy(n: u8) -> (Arc<RwLock<Settings>>, ProxyPolicy) {
+        let mut pool = ProxyPool::new();
+        pool.enabled = true;
+        pool.rotation_mode = RotationMode::Automatic;
+        for i in 1..=n {
+            pool.add_proxy(ProxyConfig::new(format!("10.0.0.{}", i), 1080)).unwrap();
+        }
+        let settings = Arc::new(RwLock::new(Settings { proxy_pool: pool, ..Settings::default() }));
+        let state = Arc::new(ProxyRotationState::new(settings.clone(), system_clock()));
+        (settings, ProxyPolicy { state: Some(state), require_proxy: true })
+    }
+
+    async fn stats(settings: &Arc<RwLock<Settings>>) -> crate::settings::ProxyStats {
+        settings.read().await.proxy_pool.get_stats(&proxy().id())
     }
 
     fn proxy() -> ProxyConfig {
@@ -3884,5 +3996,267 @@ mod mx_tests {
         assert_eq!(held.error_type.as_deref(), Some("Cancelled"), "in-flight session abandoned too");
         assert_eq!(waited.proxy_outcome, ProxyOutcome::Neutral);
         assert_eq!(smtp.attempts().len(), 1);
+    }
+
+    // Test 4 (I6): primary MX times out, backup answers → the result is the
+    // backup's verdict, the reason notes the fallback, the proxy is credited
+    // with a normal success, and the cached MX list serves every email.
+    #[tokio::test]
+    async fn test_mx_fallback_to_backup_on_transport_error() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(3, &token);
+        let dns = FakeDns::new(three_mx);
+        let smtp = FakeSmtp::new(Duration::ZERO, |host| {
+            if host.starts_with("mx1.") { timeout() } else { deliverable() }
+        });
+        let (settings, policy) = proxied_policy(1);
+        let inputs: Vec<String> = (0..4).map(|i| format!("u{}@fw.test", i)).collect();
+
+        let outcome = validate_emails_bulk_core(
+            inputs,
+            2,
+            token,
+            policy,
+            validator(&run, &dns, &smtp),
+            |_| {},
+        )
+        .await;
+
+        assert_eq!(outcome.results.len(), 4);
+        for r in &outcome.results {
+            assert_eq!(r.result, "Safe");
+            assert_eq!(r.reason, "Deliverable (MX fallback: Timeout → ok)");
+            assert_eq!(r.error_type, None);
+            assert!(r.can_connect_smtp);
+            assert_eq!(r.mx_record_count, 3);
+            assert_eq!(r.proxy_outcome, ProxyOutcome::Success);
+            assert_eq!(
+                r.logs,
+                ["MX attempt 1: mx1.fw.test. → Timeout", "MX attempt 2: mx2.fw.test. → ok"]
+            );
+        }
+        let attempts = smtp.attempts();
+        assert_eq!(attempts.iter().filter(|h| h.starts_with("mx1.")).count(), 4);
+        assert_eq!(attempts.iter().filter(|h| h.starts_with("mx2.")).count(), 4);
+        assert!(!attempts.iter().any(|h| h.starts_with("mx3.")), "stopped at the first success");
+        assert_eq!(dns.count(), 1, "fallback reuses the cached MX list");
+        let st = stats(&settings).await;
+        assert_eq!((st.successes, st.failures, st.consecutive_failures), (4, 0, 0));
+    }
+
+    // Test 5 (I6): every MX fails in transport → exactly 3 attempts even with
+    // 4 MX hosts, and the result reflects the LAST attempt. Neutral for the
+    // proxy: nothing recorded.
+    #[tokio::test]
+    async fn test_mx_fallback_capped_at_three_attempts() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(3, &token);
+        let dns = FakeDns::new(four_mx);
+        let smtp = FakeSmtp::new(Duration::ZERO, |host| {
+            if host.starts_with("mx3.") { io_error() } else { timeout() }
+        });
+        let (settings, policy) = proxied_policy(1);
+
+        let outcome = validate_emails_bulk_core(
+            vec!["a@dead.test".to_string()],
+            1,
+            token,
+            policy,
+            validator(&run, &dns, &smtp),
+            |_| {},
+        )
+        .await;
+
+        assert_eq!(smtp.attempts(), ["mx1.dead.test", "mx2.dead.test", "mx3.dead.test"]);
+        let r = &outcome.results[0];
+        assert_eq!(r.result, "Unknown");
+        assert_eq!(r.error_type.as_deref(), Some("IO"), "last attempt's error");
+        assert!(r.reason.starts_with("I/O error"), "{}", r.reason);
+        assert!(r.reason.ends_with("(MX fallback: Timeout → Timeout → IO)"), "{}", r.reason);
+        assert_eq!(r.logs.len(), 3);
+        assert_eq!(r.mx_record_count, 4);
+        assert_eq!(r.proxy_outcome, ProxyOutcome::Neutral);
+        let st = stats(&settings).await;
+        assert_eq!((st.successes, st.failures), (0, 0));
+    }
+
+    // Test 6 (I6): a proxy-blamed error on the primary does NOT fall back
+    // (the proxy would fail on every MX); the existing failure path runs and
+    // the proxy failure is recorded.
+    #[tokio::test]
+    async fn test_proxy_blamed_error_does_not_fall_back() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(3, &token);
+        let dns = FakeDns::new(three_mx);
+        let smtp = FakeSmtp::new(Duration::ZERO, |_| socks_error());
+        let (settings, policy) = proxied_policy(1);
+
+        let outcome = validate_emails_bulk_core(
+            vec!["a@any.test".to_string()],
+            1,
+            token,
+            policy,
+            validator(&run, &dns, &smtp),
+            |_| {},
+        )
+        .await;
+
+        assert_eq!(smtp.attempts(), ["mx1.any.test"]);
+        let r = &outcome.results[0];
+        assert_eq!(r.result, "Unknown");
+        assert_eq!(r.error_type.as_deref(), Some("Socks"));
+        assert!(!r.reason.contains("MX fallback"), "{}", r.reason);
+        assert!(r.logs.is_empty());
+        assert_eq!(r.proxy_outcome, ProxyOutcome::Failure);
+        let st = stats(&settings).await;
+        assert_eq!((st.failures, st.consecutive_failures), (1, 1));
+    }
+
+    // An SMTP reply (greylisting 4xx) is the MX answering: no fallback.
+    #[tokio::test]
+    async fn test_smtp_reply_does_not_fall_back() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(3, &token);
+        let dns = FakeDns::new(three_mx);
+        let smtp = FakeSmtp::new(Duration::ZERO, |_| greylisted());
+        let r = validate("a@grey.test", Some(proxy()), &run, &dns, &smtp).await;
+        assert_eq!(smtp.attempts(), ["mx1.grey.test"]);
+        assert_eq!(r.error_type.as_deref(), Some("SmtpTransient"));
+        assert!(!r.reason.contains("MX fallback"));
+    }
+
+    // Single-MX domain: a transport failure has nowhere to fall back to and
+    // keeps its pre-I6 result exactly.
+    #[tokio::test]
+    async fn test_single_mx_transport_error_unchanged() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(3, &token);
+        let dns = FakeDns::new(|d| MxResolution::from_hosts(vec![test_host(10, &format!("mx.{}.", d))]));
+        let smtp = FakeSmtp::new(Duration::ZERO, |_| timeout());
+        let r = validate("a@one.test", Some(proxy()), &run, &dns, &smtp).await;
+        assert_eq!(smtp.attempts().len(), 1);
+        assert_eq!(r.reason, "SMTP connection/operation timed out");
+        assert_eq!(r.error_type.as_deref(), Some("Timeout"));
+        assert!(r.logs.is_empty());
+    }
+
+    // Duplicate records for one exchange aren't a fallback target.
+    #[tokio::test]
+    async fn test_mx_fallback_skips_duplicate_hosts() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(3, &token);
+        let dns = FakeDns::new(|_| {
+            MxResolution::from_hosts(vec![
+                test_host(10, "mx.dup.test."),
+                test_host(20, "MX.dup.test."),
+                test_host(30, "backup.dup.test."),
+            ])
+        });
+        let smtp = FakeSmtp::new(Duration::ZERO, |host| {
+            if host == "mx.dup.test" { timeout() } else { deliverable() }
+        });
+        let r = validate("a@dup.test", None, &run, &dns, &smtp).await;
+        assert_eq!(smtp.attempts(), ["mx.dup.test", "backup.dup.test"]);
+        assert_eq!(r.result, "Safe");
+    }
+
+    // A fallback is a fresh SMTP session from the same egress, so it takes a
+    // slot from the run's rate limiter like a dispatch: at 1/s per proxy, an
+    // email whose primary fails needs a second slot ~1s later.
+    #[tokio::test(start_paused = true)]
+    async fn test_mx_fallback_takes_rate_limiter_slot() {
+        let token = CancellationToken::new();
+        let limiter = Arc::new(RunLimiter::new(RateLimit {
+            config: RateLimiterConfig { enabled: true, max_per_second: 1, max_per_minute: 0 },
+            per_proxy: true,
+        }));
+        let run = Arc::new(MxRun::new(3, token.clone(), Some(limiter.clone())));
+        let dns = FakeDns::new(three_mx);
+        let smtp = FakeSmtp::new(Duration::ZERO, |host| {
+            if host.starts_with("mx1.") { io_error() } else { deliverable() }
+        });
+        let (_settings, policy) = proxied_policy(1);
+
+        let started = tokio::time::Instant::now();
+        let outcome = validate_emails_bulk_with_limiter(
+            vec!["a@paced.test".to_string()],
+            1,
+            token,
+            policy,
+            validator(&run, &dns, &smtp),
+            |_| {},
+            Some(limiter),
+        )
+        .await;
+
+        assert_eq!(outcome.results[0].result, "Safe");
+        assert_eq!(smtp.attempts().len(), 2);
+        let elapsed = started.elapsed();
+        assert!(elapsed >= Duration::from_secs(1), "fallback was not paced: {:?}", elapsed);
+        assert!(elapsed < Duration::from_secs(2), "{:?}", elapsed);
+    }
+
+    // Fallback attempts respect the per-MX cap on the backup host too.
+    #[tokio::test(start_paused = true)]
+    async fn test_mx_fallback_respects_backup_host_cap() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(1, &token);
+        let dns = FakeDns::new(three_mx);
+        let smtp = FakeSmtp::new(Duration::from_millis(100), |host| {
+            if host.starts_with("mx1.") { timeout() } else { deliverable() }
+        });
+        let inputs: Vec<String> = (0..6).map(|i| format!("u{}@capped.test", i)).collect();
+
+        let outcome = validate_emails_bulk_core(
+            inputs,
+            6,
+            token,
+            ProxyPolicy::direct(),
+            validator(&run, &dns, &smtp),
+            |_| {},
+        )
+        .await;
+
+        assert_eq!(outcome.results.len(), 6);
+        assert!(outcome.results.iter().all(|r| r.result == "Safe"));
+        assert_eq!(smtp.host_peak(), 1, "no host ever had 2 sessions");
+        assert_eq!(smtp.peak(), 2, "primary and backup sessions overlap");
+    }
+
+    // Cancel while a fallback waits for the backup host's slot.
+    #[tokio::test(start_paused = true)]
+    async fn test_cancel_during_fallback_wait() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(1, &token);
+        // other.test's only MX is hold.test's backup.
+        let dns = FakeDns::new(|d| match d {
+            "other.test" => MxResolution::from_hosts(vec![test_host(10, "mx2.hold.test.")]),
+            _ => MxResolution::from_hosts(vec![
+                test_host(10, "mx1.hold.test."),
+                test_host(20, "mx2.hold.test."),
+            ]),
+        });
+        let slow = FakeSmtp::new(Duration::from_secs(3600), |_| deliverable());
+        let holder = {
+            let (run, dns, slow) = (run.clone(), dns.clone(), slow.clone());
+            tokio::spawn(async move { validate("h@other.test", None, &run, &dns, &slow).await })
+        };
+        sleep(Duration::from_millis(1)).await;
+        assert_eq!(slow.attempts(), ["mx2.hold.test"], "holder owns the backup's only slot");
+
+        let smtp = FakeSmtp::new(Duration::from_millis(10), |host| {
+            if host.starts_with("mx1.") { timeout() } else { deliverable() }
+        });
+        let canceller = token.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(500)).await;
+            canceller.cancel();
+        });
+        let started = tokio::time::Instant::now();
+        let r = validate("a@hold.test", None, &run, &dns, &smtp).await;
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        assert_eq!(r.error_type.as_deref(), Some("Cancelled"));
+        assert_eq!(smtp.attempts(), ["mx1.hold.test"], "fallback never started its session");
+        assert_eq!(holder.await.unwrap().error_type.as_deref(), Some("Cancelled"));
     }
 }
