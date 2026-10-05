@@ -400,6 +400,28 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
             </div>
 
             <div className="space-y-2">
+              <Label htmlFor="mx-concurrency">Max Sessions per Mail Server</Label>
+              <div className="flex items-center gap-4">
+                <Input
+                  id="mx-concurrency"
+                  type="number"
+                  value={localSettings.mxConcurrency}
+                  onChange={(e) =>
+                    handleChange(
+                      'mxConcurrency',
+                      Math.min(16, Math.max(1, parseInt(e.target.value) || 1))
+                    )
+                  }
+                  min="1"
+                  max="16"
+                />
+                <span className="text-xs text-muted-foreground whitespace-nowrap">
+                  Parallel SMTP sessions to one MX host (default: 3)
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="autosave">Auto-Save Interval (batch size)</Label>
               <div className="flex items-center gap-4">
                 <Input

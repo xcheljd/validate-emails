@@ -38,6 +38,7 @@ const {
     fromEmail: '',
     helloName: '',
     checkGravatar: false,
+    mxConcurrency: 3,
   };
   return {
     mockShowWarning: vi.fn(),

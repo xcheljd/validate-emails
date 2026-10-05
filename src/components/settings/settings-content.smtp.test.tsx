@@ -260,6 +260,39 @@ describe('Rate limiter setting', () => {
   });
 });
 
+describe('MX sessions setting', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', memoryStorage());
+    vi.clearAllMocks();
+  });
+
+  it('defaults to 3 when the backend has no value', async () => {
+    await renderSettings();
+    expect(screen.getByLabelText('Max Sessions per Mail Server')).toHaveValue(3);
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Settings'));
+    });
+    expect(savedSettings().mx_concurrency).toBe(3);
+  });
+
+  it('loads a saved value and saves an edited one, clamped to 1-16', async () => {
+    await renderSettings({ mx_concurrency: 5 });
+    const input = screen.getByLabelText('Max Sessions per Mail Server');
+    expect(input).toHaveValue(5);
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '40' } });
+    });
+    expect(input).toHaveValue(16);
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '2' } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Settings'));
+    });
+    expect(savedSettings().mx_concurrency).toBe(2);
+  });
+});
+
 describe('validateSmtpIdentity', () => {
   it('accepts blank and plausible values', () => {
     expect(validateSmtpIdentity('', '')).toBeNull();

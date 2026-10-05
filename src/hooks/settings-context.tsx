@@ -43,6 +43,7 @@ interface BackendSettings {
   from_email: string;
   hello_name: string;
   check_gravatar: boolean;
+  mx_concurrency?: number;
 }
 
 interface BackendProxyPool {
@@ -71,6 +72,7 @@ function backendToFrontend(backend: BackendSettings): Partial<AppSettings> {
     fromEmail: backend.from_email ?? '',
     helloName: backend.hello_name ?? '',
     checkGravatar: backend.check_gravatar ?? false,
+    mxConcurrency: backend.mx_concurrency ?? 3,
   };
 }
 
@@ -91,6 +93,7 @@ function frontendToBackend(frontend: AppSettings): BackendSettings {
     from_email: frontend.fromEmail.trim(),
     hello_name: frontend.helloName.trim(),
     check_gravatar: frontend.checkGravatar,
+    mx_concurrency: frontend.mxConcurrency,
   };
 }
 

@@ -149,6 +149,8 @@ export interface AppSettings {
   helloName: string;
   /** Look up Gravatar profiles (direct, unproxied; default off) */
   checkGravatar: boolean;
+  /** Concurrent SMTP sessions per MX host per run (1-16, default 3) */
+  mxConcurrency: number;
 }
 
 /** Default proxy settings */
@@ -181,4 +183,5 @@ export const defaultSettings: AppSettings = {
   fromEmail: '',
   helloName: '',
   checkGravatar: false,
+  mxConcurrency: 3,
 };
