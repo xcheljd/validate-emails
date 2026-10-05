@@ -56,6 +56,7 @@ pub fn apply_general_settings(current: &mut Settings, incoming: Settings) -> Res
     current.from_email = incoming.from_email;
     current.hello_name = incoming.hello_name;
     current.check_gravatar = incoming.check_gravatar;
+    current.mx_concurrency = crate::mx::clamp_mx_concurrency(incoming.mx_concurrency) as u32;
     Ok(())
 }
 

@@ -53,6 +53,14 @@ pub struct Settings {
     /// MD5 of each address to gravatar.com directly, bypassing the proxies.
     #[serde(default)]
     pub check_gravatar: bool,
+    /// Concurrent SMTP sessions per MX host per run (I5). Clamped to 1..=16
+    /// at run start; settings files written before I5 get the default.
+    #[serde(default = "default_mx_concurrency")]
+    pub mx_concurrency: u32,
+}
+
+fn default_mx_concurrency() -> u32 {
+    crate::mx::DEFAULT_MX_CONCURRENCY
 }
 
 impl Default for Settings {
@@ -70,6 +78,7 @@ impl Default for Settings {
             from_email: String::new(),
             hello_name: String::new(),
             check_gravatar: false,
+            mx_concurrency: default_mx_concurrency(),
         }
     }
 }

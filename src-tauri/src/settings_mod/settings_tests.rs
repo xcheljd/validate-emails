@@ -1185,6 +1185,36 @@
     }
 
     // =====================
+    // Per-MX session cap (I5)
+    // =====================
+
+    #[test]
+    fn test_settings_old_file_without_mx_concurrency_defaults_to_3() {
+        assert_eq!(Settings::default().mx_concurrency, 3);
+        let json = r#"{
+            "validation_mode": "standard",
+            "timeout_ms": 30000,
+            "concurrency": 5,
+            "max_retries": 1,
+            "auto_save_interval": 10,
+            "history_retention_days": 90,
+            "rate_limiter": {"max_per_second": 1, "max_per_minute": 60}
+        }"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.mx_concurrency, 3);
+    }
+
+    #[test]
+    fn test_apply_general_settings_clamps_mx_concurrency() {
+        let mut current = Settings::default();
+        for (incoming_cap, stored) in [(5, 5), (0, 1), (99, 16)] {
+            let incoming = Settings { mx_concurrency: incoming_cap, ..Settings::default() };
+            apply_general_settings(&mut current, incoming).unwrap();
+            assert_eq!(current.mx_concurrency, stored, "incoming {}", incoming_cap);
+        }
+    }
+
+    // =====================
     // Proxy Command Logic Tests
     // =====================
 

@@ -9,11 +9,11 @@ use tokio::time::sleep;
 use chrono::Utc;
 use std::time::{Instant, Duration};
 use std::collections::{HashMap, VecDeque};
-use check_if_email_exists::{check_email, CheckEmailInput, CheckEmailInputBuilder, CheckEmailInputBuilderError, CheckEmailInputProxy, CheckEmailOutput, Reachable};
-use check_if_email_exists::syntax::check_syntax;
-use check_if_email_exists::mx::{check_mx, MxDetails, MxError};
+use check_if_email_exists::{initialize_crypto_provider, CheckEmailInput, CheckEmailInputBuilder, CheckEmailInputBuilderError, CheckEmailInputProxy, EmailAddress, Reachable};
+use check_if_email_exists::syntax::{check_syntax, get_similar_mail_provider, SyntaxDetails};
 use check_if_email_exists::misc::{check_misc, MiscDetails};
-use check_if_email_exists::smtp::{SmtpDetails, SmtpError, SmtpErrorDesc};
+use check_if_email_exists::smtp::{check_smtp, SmtpDetails, SmtpError, SmtpErrorDesc};
+use crate::mx::{MxHost, MxResolution, MxRun};
 use check_if_email_exists::smtp::verif_method::{
     VerifMethod,
     VerifMethodSmtpConfig,
@@ -283,6 +283,9 @@ pub struct ValidationConfig {
     /// Dispatch rate limit; None = unthrottled (limiter disabled, or both
     /// limits 0).
     pub rate_limiter: Option<RateLimiterConfig>,
+    /// Raw setting: concurrent SMTP sessions per MX host (I5); clamped by
+    /// `mx::clamp_mx_concurrency`.
+    pub mx_concurrency: u32,
 }
 
 impl ValidationConfig {
@@ -294,6 +297,7 @@ impl ValidationConfig {
             max_retries: settings.max_retries,
             check_gravatar: settings.check_gravatar,
             rate_limiter: active_rate_limit(&settings.rate_limiter),
+            mx_concurrency: settings.mx_concurrency,
         }
     }
 }
@@ -351,25 +355,62 @@ pub fn resolve_smtp_params(mode: &str, timeout_ms: u64, max_retries: usize) -> (
     (Duration::from_millis(timeout_ms), connections)
 }
 
+/// One-off validation outside a run, with its own MX cache and resolver.
+#[cfg(test)]
 pub async fn validate_email(
     email: String,
     mode: String,
     proxy: Option<ProxyConfig>,
     config: ValidationConfig,
 ) -> ValidationResult {
+    let run = Arc::new(MxRun::new(config.mx_concurrency, CancellationToken::new()));
+    validate_email_in_run(email, mode, proxy, config, run).await
+}
+
+/// Validate one email of a run, sharing the run's resolver, MX cache and
+/// per-MX session cap (I5).
+pub async fn validate_email_in_run(
+    email: String,
+    mode: String,
+    proxy: Option<ProxyConfig>,
+    config: ValidationConfig,
+    run: Arc<MxRun>,
+) -> ValidationResult {
+    let resolve = |domain| run.system_lookup(domain);
     match mode.as_str() {
-        "quick" => validate_email_quick(email, mode, proxy).await,
+        "quick" => validate_email_quick(email, mode, proxy, &run, resolve).await,
         _ => {
             let (smtp_timeout, connections) =
                 resolve_smtp_params(&mode, config.timeout_ms, config.max_retries);
-            validate_email_full(email, mode, proxy, &config, smtp_timeout, connections).await
+            validate_email_full(
+                email,
+                mode,
+                proxy,
+                &config,
+                smtp_timeout,
+                connections,
+                &run,
+                resolve,
+                upstream_smtp_attempt,
+            )
+            .await
         }
     }
 }
 
 /// Quick mode: syntax check + MX lookup + misc only (skip SMTP handshake).
 /// ~10x faster than full verification.
-async fn validate_email_quick(email: String, mode: String, proxy: Option<ProxyConfig>) -> ValidationResult {
+async fn validate_email_quick<R, RF>(
+    email: String,
+    mode: String,
+    proxy: Option<ProxyConfig>,
+    run: &MxRun,
+    resolve: R,
+) -> ValidationResult
+where
+    R: FnOnce(String) -> RF,
+    RF: Future<Output = MxResolution>,
+{
     let start_time = Instant::now();
     // Quick mode never performs an SMTP conversation, so the (rotated) proxy
     // is not actually exercised here. Do NOT attribute a proxy_id: doing so
@@ -398,19 +439,14 @@ async fn validate_email_quick(email: String, mode: String, proxy: Option<ProxyCo
         .with_risk_score(100);
     }
 
-    // Step 2: MX lookup
-    let mx_result = check_mx(&syntax).await;
-    let mx_record_count = match &mx_result {
-        Ok(mx) => match &mx.lookup {
-            Ok(lookup) => lookup.iter().count() as u32,
-            Err(_) => 0,
-        },
-        Err(_) => 0,
+    // Step 2: MX lookup (run cache)
+    let Some(mx) = run.resolve(&domain, resolve).await else {
+        return cancelled_result(&email, &domain, &mode, start_time, proxy_id);
     };
+    let mx_record_count = mx.record_count();
 
     // If MX lookup failed entirely, return Unknown
-    let mx_failed = mx_result.is_err();
-    if mx_failed {
+    if matches!(*mx, MxResolution::Failed(_)) {
         return ValidationResult::builder(
             &email,
             &domain,
@@ -427,8 +463,7 @@ async fn validate_email_quick(email: String, mode: String, proxy: Option<ProxyCo
     }
 
     // If no MX records found, email is Invalid
-    let mx_ok = mx_result.as_ref().unwrap();
-    if mx_ok.lookup.is_err() {
+    if *mx == MxResolution::NoRecords {
         return ValidationResult::builder(
             &email,
             &domain,
@@ -529,16 +564,88 @@ fn build_check_email_input(
     builder.build()
 }
 
+/// Everything one SMTP attempt needs, owned (cheap clones) so the attempt's
+/// future borrows nothing from the pipeline.
+#[derive(Clone)]
+pub struct SmtpCall {
+    pub input: Arc<CheckEmailInput>,
+    pub to: EmailAddress,
+    pub domain: String,
+    pub host: MxHost,
+}
+
+/// Production SMTP attempt: upstream's `check_smtp` against one MX host.
+/// Provider dispatch, the catch-all probe and in-host retries are all
+/// upstream's, unchanged.
+async fn upstream_smtp_attempt(call: SmtpCall) -> Result<SmtpDetails, SmtpError> {
+    initialize_crypto_provider();
+    check_smtp(&call.to, &call.host.exchange, &call.domain, &call.input).await.0
+}
+
+/// Upstream's private `calculate_reachable` (v0.11.6), verbatim.
+fn calculate_reachable(misc: &MiscDetails, smtp: &Result<SmtpDetails, SmtpError>) -> Reachable {
+    if let Ok(smtp) = smtp {
+        if misc.is_disposable || misc.is_role_account || smtp.is_catch_all || smtp.has_full_inbox {
+            return Reachable::Risky;
+        }
+        if !smtp.is_deliverable || !smtp.can_connect_smtp || smtp.is_disabled {
+            return Reachable::Invalid;
+        }
+        Reachable::Safe
+    } else {
+        Reachable::Unknown
+    }
+}
+
+/// Stand-in result for an email abandoned mid-pipeline because the run was
+/// cancelled. The run loop stops emitting once its token is cancelled, so
+/// this is never reported; the validator just has to return something.
+fn cancelled_result(
+    email: &str,
+    domain: &str,
+    mode: &str,
+    start_time: Instant,
+    proxy_id: Option<String>,
+) -> ValidationResult {
+    ValidationResult::builder(
+        email,
+        domain,
+        "Unknown",
+        "Cancelled",
+        mode,
+        start_time.elapsed().as_millis() as u64,
+        proxy_id,
+    )
+    .with_error_type("Cancelled")
+    .with_risk_score(50)
+}
+
 /// Full SMTP verification (Standard and Thorough modes). Timeout and
 /// connection count come from `resolve_smtp_params`.
-async fn validate_email_full(
+///
+/// This is upstream's `check_email` (v0.11.6) driven step by step, so the
+/// MX step can use the run's cache and the SMTP step the per-MX session cap
+/// (I5). Steps, short-circuits and output shapes are upstream's: syntax →
+/// MX → misc → SMTP on the lowest-preference MX → reachability, with the
+/// similar-provider suggestion on MX failure, no MX, or SMTP error.
+#[allow(clippy::too_many_arguments)]
+async fn validate_email_full<R, RF, A, AF>(
     email: String,
     mode: String,
     proxy: Option<ProxyConfig>,
     config: &ValidationConfig,
     smtp_timeout: Duration,
     retries: usize,
-) -> ValidationResult {
+    run: &MxRun,
+    resolve: R,
+    attempt: A,
+) -> ValidationResult
+where
+    R: FnOnce(String) -> RF,
+    RF: Future<Output = MxResolution>,
+    A: Fn(SmtpCall) -> AF,
+    AF: Future<Output = Result<SmtpDetails, SmtpError>>,
+{
     let start_time = Instant::now();
 
     // Track proxy ID for stats
@@ -557,10 +664,8 @@ async fn validate_email_full(
     let verif_method =
         build_verif_method(proxies, proxy_ref, config, smtp_timeout, retries);
 
-    let input = build_check_email_input(&email, verif_method, config);
-
-    let output = match input {
-        Ok(input) => check_email(&input).await,
+    let input = match build_check_email_input(&email, verif_method, config) {
+        Ok(input) => Arc::new(input),
         Err(e) => {
             return ValidationResult::builder(
                 &email,
@@ -576,7 +681,82 @@ async fn validate_email_full(
         }
     };
 
-    let result_str = match output.is_reachable {
+    let mut syntax = check_syntax(&input.to_email);
+    if !syntax.is_valid_syntax {
+        let parts = FullParts::gate(syntax, Arc::new(MxResolution::NoRecords), Reachable::Invalid);
+        return full_mode_result(&email, &mode, start_time, proxy_id, parts);
+    }
+
+    let Some(mx) = run.resolve(&syntax.domain, resolve).await else {
+        return cancelled_result(&email, &syntax.domain, &mode, start_time, proxy_id);
+    };
+    let hosts = match mx.as_ref() {
+        MxResolution::Records(hosts) => hosts,
+        // Internal DNS error → Unknown; no MX records → Invalid. Neither
+        // touches misc or SMTP (nor the proxy).
+        gate => {
+            let reachable = match gate {
+                MxResolution::Failed(_) => Reachable::Unknown,
+                _ => Reachable::Invalid,
+            };
+            get_similar_mail_provider(&mut syntax);
+            let parts = FullParts::gate(syntax, mx.clone(), reachable);
+            return full_mode_result(&email, &mode, start_time, proxy_id, parts);
+        }
+    };
+
+    let misc = check_misc(&syntax, config.check_gravatar, None).await;
+
+    let to = syntax.address.clone().expect("valid syntax has an address");
+    let domain = syntax.domain.clone();
+    let call = |host: &MxHost| {
+        attempt(SmtpCall {
+            input: input.clone(),
+            to: to.clone(),
+            domain: domain.clone(),
+            host: host.clone(),
+        })
+    };
+    let Some(smtp) = run.smtp(hosts, call).await else {
+        return cancelled_result(&email, &domain, &mode, start_time, proxy_id);
+    };
+
+    if smtp.is_err() {
+        get_similar_mail_provider(&mut syntax);
+    }
+    let reachable = calculate_reachable(&misc, &smtp);
+    let parts = FullParts { syntax, mx: mx.clone(), misc: Some(misc), smtp, reachable };
+    full_mode_result(&email, &mode, start_time, proxy_id, parts)
+}
+
+/// The pipeline's findings for one email, in upstream's output shape.
+struct FullParts {
+    syntax: SyntaxDetails,
+    mx: Arc<MxResolution>,
+    /// None when the pipeline stopped before the misc step (upstream leaves
+    /// its default then).
+    misc: Option<MiscDetails>,
+    smtp: Result<SmtpDetails, SmtpError>,
+    reachable: Reachable,
+}
+
+impl FullParts {
+    /// Stopped before misc/SMTP (invalid syntax, MX failure, no MX).
+    fn gate(syntax: SyntaxDetails, mx: Arc<MxResolution>, reachable: Reachable) -> Self {
+        Self { syntax, mx, misc: None, smtp: Ok(SmtpDetails::default()), reachable }
+    }
+}
+
+fn full_mode_result(
+    email: &str,
+    mode: &str,
+    start_time: Instant,
+    proxy_id: Option<String>,
+    parts: FullParts,
+) -> ValidationResult {
+    let FullParts { syntax, mx, misc, smtp, reachable } = parts;
+
+    let result_str = match reachable {
         Reachable::Safe => "Safe",
         Reachable::Invalid => "Invalid",
         Reachable::Risky => "Risky",
@@ -585,26 +765,23 @@ async fn validate_email_full(
 
     // Short reason + error_type, never a {:?} dump of the whole output:
     // every reason is persisted in the session JSON (B16).
-    let (error_type, reason) = full_mode_reason(&output);
+    let (error_type, reason) =
+        full_mode_reason(syntax.is_valid_syntax, &mx, &smtp, &reachable, misc.as_ref());
 
-    let domain = output.syntax.domain;
-    let is_valid_syntax = output.syntax.is_valid_syntax;
-    let suggestion = output.syntax.suggestion;
+    let mx_record_count = mx.record_count();
 
-    let mx_record_count = full_mode_mx_record_count(&output.mx);
-
-    let (is_disposable, is_role_account, is_b2c, gravatar_url, haveibeenpwned) = match &output.misc {
-        Ok(misc) => (
+    let (is_disposable, is_role_account, is_b2c, gravatar_url, haveibeenpwned) = match misc {
+        Some(misc) => (
             misc.is_disposable,
             misc.is_role_account,
             misc.is_b2c,
-            misc.gravatar_url.clone(),
+            misc.gravatar_url,
             misc.haveibeenpwned,
         ),
-        Err(_) => (false, false, false, None, None),
+        None => (false, false, false, None, None),
     };
 
-    let (is_catch_all, is_deliverable, is_disabled, has_full_inbox, can_connect_smtp) = match &output.smtp {
+    let (is_catch_all, is_deliverable, is_disabled, has_full_inbox, can_connect_smtp) = match &smtp {
         Ok(smtp) => (
             smtp.is_catch_all,
             smtp.is_deliverable,
@@ -621,16 +798,16 @@ async fn validate_email_full(
     // errors — was counted as a proxy failure, so a healthy proxy died after
     // a handful of invalid addresses. A definitive RCPT verdict (even
     // "Invalid") means the proxy carried a full SMTP conversation = success.
-    let proxy_outcome = proxy_outcome_for(proxy_id.is_some(), &output.smtp);
+    let proxy_outcome = proxy_outcome_for(proxy_id.is_some(), &smtp);
 
     let risk_score = calculate_risk_score(result_str, is_disposable, is_catch_all, is_disabled, has_full_inbox);
 
     let result = ValidationResult::builder(
-        &email,
-        &domain,
+        email,
+        &syntax.domain,
         result_str,
         &reason,
-        &mode,
+        mode,
         start_time.elapsed().as_millis() as u64,
         proxy_id,
     )
@@ -642,9 +819,9 @@ async fn validate_email_full(
     .with_disabled(is_disabled)
     .with_full_inbox(has_full_inbox)
     .with_can_connect_smtp(can_connect_smtp)
-    .with_valid_syntax(is_valid_syntax)
+    .with_valid_syntax(syntax.is_valid_syntax)
     .with_b2c(is_b2c)
-    .with_suggestion(suggestion)
+    .with_suggestion(syntax.suggestion)
     .with_gravatar_url(gravatar_url)
     .with_haveibeenpwned(haveibeenpwned)
     .with_risk_score(risk_score)
@@ -653,18 +830,6 @@ async fn validate_email_full(
     match error_type {
         Some(t) => result.with_error_type(t),
         None => result,
-    }
-}
-
-/// Number of MX records found. A failed lookup (`Err` — DNS error) means
-/// zero known records, same as an empty/NXDOMAIN lookup (B15).
-fn full_mode_mx_record_count(mx: &Result<MxDetails, MxError>) -> u32 {
-    match mx {
-        Ok(mx) => match &mx.lookup {
-            Ok(lookup) => lookup.iter().count() as u32,
-            Err(_) => 0,
-        },
-        Err(_) => 0,
     }
 }
 
@@ -684,24 +849,30 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// Concise (error_type, reason) for a full-mode result. `error_type` is set
 /// only for failures (MX lookup error, SMTP error) so results can be
 /// filtered by cause.
-fn full_mode_reason(output: &CheckEmailOutput) -> (Option<&'static str>, String) {
-    if !output.syntax.is_valid_syntax {
+fn full_mode_reason(
+    syntax_valid: bool,
+    mx: &MxResolution,
+    smtp: &Result<SmtpDetails, SmtpError>,
+    reachable: &Reachable,
+    misc: Option<&MiscDetails>,
+) -> (Option<&'static str>, String) {
+    if !syntax_valid {
         return (None, "Invalid syntax".to_string());
     }
-    match &output.mx {
-        Err(e) => {
-            let detail = truncate_chars(&e.to_string(), MAX_REASON_DETAIL_CHARS);
+    match mx {
+        MxResolution::Failed(e) => {
+            let detail = truncate_chars(e, MAX_REASON_DETAIL_CHARS);
             return (Some("MxLookupError"), format!("MX lookup failed: {}", detail));
         }
-        Ok(mx) if mx.lookup.is_err() => return (None, "No MX records found".to_string()),
-        Ok(_) => {}
+        MxResolution::NoRecords => return (None, "No MX records found".to_string()),
+        MxResolution::Records(_) => {}
     }
-    match &output.smtp {
+    match smtp {
         Err(e) => {
             let (error_type, reason) = classify_smtp_error_detail(e);
             (Some(error_type), reason)
         }
-        Ok(smtp) => (None, smtp_verdict_reason(&output.is_reachable, smtp, output.misc.as_ref().ok())),
+        Ok(smtp) => (None, smtp_verdict_reason(reachable, smtp, misc)),
     }
 }
 
@@ -1963,12 +2134,17 @@ mod tests {
     // A failed MX lookup (DNS error) is 0 known MX records, not 1 (B15).
     #[test]
     fn test_full_mode_mx_record_count_dns_failure_is_zero() {
+        use check_if_email_exists::mx::MxError;
         use std::io;
-        let dns_err: Result<MxDetails, MxError> =
-            Err(MxError::IoError(io::Error::new(io::ErrorKind::Other, "dns failure")));
-        assert_eq!(full_mode_mx_record_count(&dns_err), 0);
-        // Lookup ran but found nothing (default lookup is Err) → 0.
-        assert_eq!(full_mode_mx_record_count(&Ok(MxDetails::default())), 0);
+        let dns_err = MxError::IoError(io::Error::new(io::ErrorKind::Other, "dns failure"));
+        assert_eq!(MxResolution::Failed(dns_err.to_string()).record_count(), 0);
+        // Lookup ran but found nothing → 0.
+        assert_eq!(MxResolution::NoRecords.record_count(), 0);
+        let two = MxResolution::from_hosts(vec![
+            crate::mx::test_host(10, "a.example.com."),
+            crate::mx::test_host(20, "b.example.com."),
+        ]);
+        assert_eq!(two.record_count(), 2);
     }
 
     // SMTP failures get a real error_type and a short reason (B16). The
@@ -2099,24 +2275,21 @@ mod tests {
 
     #[test]
     fn test_full_mode_reason_is_concise() {
-        use check_if_email_exists::syntax::SyntaxDetails;
+        use check_if_email_exists::mx::MxError;
         use std::io;
 
-        let valid = || SyntaxDetails { is_valid_syntax: true, ..Default::default() };
+        let ok = Ok(SmtpDetails::default());
+        let reason = |syntax_valid: bool, mx: &MxResolution| {
+            full_mode_reason(syntax_valid, mx, &ok, &Reachable::Unknown, None)
+        };
 
         // Invalid syntax / MX failure / no MX records gate before SMTP.
-        let out = CheckEmailOutput::default();
-        assert_eq!(full_mode_reason(&out), (None, "Invalid syntax".to_string()));
-        let out = CheckEmailOutput {
-            syntax: valid(),
-            mx: Err(MxError::IoError(io::Error::new(io::ErrorKind::Other, "dns down"))),
-            ..Default::default()
-        };
-        let (t, r) = full_mode_reason(&out);
+        assert_eq!(reason(false, &MxResolution::NoRecords), (None, "Invalid syntax".to_string()));
+        let dns_down = MxError::IoError(io::Error::new(io::ErrorKind::Other, "dns down"));
+        let (t, r) = reason(true, &MxResolution::Failed(dns_down.to_string()));
         assert_eq!(t, Some("MxLookupError"));
         assert!(r.starts_with("MX lookup failed"), "{}", r);
-        let out = CheckEmailOutput { syntax: valid(), ..Default::default() };
-        assert_eq!(full_mode_reason(&out), (None, "No MX records found".to_string()));
+        assert_eq!(reason(true, &MxResolution::NoRecords), (None, "No MX records found".to_string()));
 
         // SMTP verdicts.
         let ok = SmtpDetails { can_connect_smtp: true, is_deliverable: true, ..Default::default() };
@@ -3357,5 +3530,359 @@ mod run_tests {
         // Two waves of 8 parallel 10s validations, not 16 sequential ones.
         assert_eq!(t0.elapsed(), Duration::from_secs(20));
         assert_eq!(count_before(&times(&stamps, None), Duration::from_millis(1)), 8);
+    }
+}
+
+/// MX cache, per-MX session cap and MX fallback (I5/I6), driven through the
+/// real pipeline (`validate_email_full`) and run core with an injected
+/// resolver and SMTP attempt — no network.
+#[cfg(test)]
+mod mx_tests {
+    use super::*;
+    use crate::mx::test_host;
+    use std::pin::Pin;
+    use std::sync::Mutex as StdMutex;
+
+    type BoxFut<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+
+    /// Resolver backed by a static table; records every domain it's asked.
+    #[derive(Clone)]
+    struct FakeDns {
+        table: Arc<dyn Fn(&str) -> MxResolution + Send + Sync>,
+        calls: Arc<StdMutex<Vec<String>>>,
+    }
+
+    impl FakeDns {
+        fn new(table: impl Fn(&str) -> MxResolution + Send + Sync + 'static) -> Self {
+            Self { table: Arc::new(table), calls: Default::default() }
+        }
+        fn lookup(&self, domain: String) -> BoxFut<MxResolution> {
+            self.calls.lock().unwrap().push(domain.clone());
+            let resolution = (self.table)(&domain);
+            Box::pin(async move {
+                tokio::task::yield_now().await;
+                resolution
+            })
+        }
+        fn count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    /// Three MX hosts per domain: mx1/mx2/mx3.<domain>, preference 10/20/30.
+    fn three_mx(domain: &str) -> MxResolution {
+        MxResolution::from_hosts(vec![
+            test_host(30, &format!("mx3.{}.", domain)),
+            test_host(10, &format!("mx1.{}.", domain)),
+            test_host(20, &format!("mx2.{}.", domain)),
+        ])
+    }
+
+    type SmtpResult = Result<SmtpDetails, SmtpError>;
+
+    /// SMTP attempt that records the host of every attempt, tracks peak
+    /// concurrency, sleeps `delay`, then answers `respond(host_key)`.
+    #[derive(Clone)]
+    struct FakeSmtp {
+        respond: Arc<dyn Fn(&str) -> SmtpResult + Send + Sync>,
+        delay: Duration,
+        hosts: Arc<StdMutex<Vec<String>>>,
+        in_flight: Arc<AtomicUsize>,
+        peak: Arc<AtomicUsize>,
+    }
+
+    impl FakeSmtp {
+        fn new(delay: Duration, respond: impl Fn(&str) -> SmtpResult + Send + Sync + 'static) -> Self {
+            Self {
+                respond: Arc::new(respond),
+                delay,
+                hosts: Default::default(),
+                in_flight: Default::default(),
+                peak: Default::default(),
+            }
+        }
+        fn attempt(&self, call: SmtpCall) -> BoxFut<SmtpResult> {
+            let this = self.clone();
+            Box::pin(async move {
+                let host = call.host.key();
+                this.hosts.lock().unwrap().push(host.clone());
+                let now = this.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                this.peak.fetch_max(now, Ordering::SeqCst);
+                if this.delay.is_zero() {
+                    tokio::task::yield_now().await;
+                } else {
+                    sleep(this.delay).await;
+                }
+                this.in_flight.fetch_sub(1, Ordering::SeqCst);
+                (this.respond)(&host)
+            })
+        }
+        fn attempts(&self) -> Vec<String> {
+            self.hosts.lock().unwrap().clone()
+        }
+        fn peak(&self) -> usize {
+            self.peak.load(Ordering::SeqCst)
+        }
+    }
+
+    fn deliverable() -> SmtpResult {
+        Ok(SmtpDetails { can_connect_smtp: true, is_deliverable: true, ..Default::default() })
+    }
+
+    fn run_with_cap(cap: u32, token: &CancellationToken) -> Arc<MxRun> {
+        Arc::new(MxRun::new(cap, token.clone()))
+    }
+
+    /// One email through the real full-mode pipeline.
+    async fn validate(
+        email: &str,
+        proxy: Option<ProxyConfig>,
+        run: &MxRun,
+        dns: &FakeDns,
+        smtp: &FakeSmtp,
+    ) -> ValidationResult {
+        validate_email_full(
+            email.to_string(),
+            "standard".to_string(),
+            proxy,
+            &ValidationConfig::default(),
+            Duration::from_secs(10),
+            1,
+            run,
+            |d| dns.lookup(d),
+            |call| smtp.attempt(call),
+        )
+        .await
+    }
+
+    /// Run-core validator using the real pipeline with the fakes.
+    fn validator(
+        run: &Arc<MxRun>,
+        dns: &FakeDns,
+        smtp: &FakeSmtp,
+    ) -> impl Fn(String, Option<ProxyConfig>) -> BoxFut<ValidationResult> + Send + Sync {
+        let (run, dns, smtp) = (run.clone(), dns.clone(), smtp.clone());
+        move |email, proxy| {
+            let (run, dns, smtp) = (run.clone(), dns.clone(), smtp.clone());
+            Box::pin(async move { validate(&email, proxy, &run, &dns, &smtp).await })
+        }
+    }
+
+    fn proxy() -> ProxyConfig {
+        ProxyConfig::new("10.0.0.1".to_string(), 1080)
+    }
+
+    // Test 1 (I5): 100 emails over 3 domains, 16 at a time → exactly one
+    // lookup per domain, even though many tasks hit each cold domain at once.
+    #[tokio::test]
+    async fn test_mx_cache_resolves_each_domain_once() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(16, &token);
+        let dns = FakeDns::new(three_mx);
+        let smtp = FakeSmtp::new(Duration::ZERO, |_| deliverable());
+        let domains = ["alpha.test", "beta.test", "gamma.test"];
+        let inputs: Vec<String> =
+            (0..100).map(|i| format!("user{}@{}", i, domains[i % 3])).collect();
+
+        let outcome = validate_emails_bulk_core(
+            inputs.clone(),
+            16,
+            token,
+            ProxyPolicy::direct(),
+            validator(&run, &dns, &smtp),
+            |_| {},
+        )
+        .await;
+
+        assert_eq!(outcome.stop_reason, None);
+        assert_eq!(outcome.results.len(), 100);
+        assert_eq!(dns.count(), 3, "resolver calls: {:?}", dns.calls.lock().unwrap());
+        assert_eq!(smtp.attempts().len(), 100);
+        for r in &outcome.results {
+            assert_eq!(r.result, "Safe", "{}: {}", r.email, r.reason);
+            assert_eq!(r.mx_record_count, 3);
+            assert!(r.error_type.is_none());
+        }
+        // Every SMTP session went to the primary (lowest-preference) MX.
+        assert!(smtp.attempts().iter().all(|h| h.starts_with("mx1.")), "{:?}", smtp.attempts());
+    }
+
+    // Test 2 (I5): a domain cached as no-MX gives later emails the upstream
+    // no-MX result with no resolver or SMTP call. Same shape as before:
+    // Invalid, "No MX records found", 0 records, no error_type, Neutral.
+    #[tokio::test]
+    async fn test_mx_cache_no_mx_short_circuits() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(3, &token);
+        let dns = FakeDns::new(|_| MxResolution::NoRecords);
+        let smtp = FakeSmtp::new(Duration::ZERO, |_| deliverable());
+
+        let first = validate("a@nomx.test", Some(proxy()), &run, &dns, &smtp).await;
+        assert_eq!(dns.count(), 1);
+        dns.calls.lock().unwrap().clear();
+
+        for i in 0..10 {
+            let r = validate(&format!("u{}@NoMX.test", i), Some(proxy()), &run, &dns, &smtp).await;
+            assert_eq!(r.result, "Invalid");
+            assert_eq!(r.reason, "No MX records found");
+            assert_eq!(r.mx_record_count, 0);
+            assert_eq!(r.error_type, None);
+            assert_eq!(r.risk_score, 100);
+            assert!(r.is_valid_syntax);
+            assert_eq!(r.proxy_outcome, ProxyOutcome::Neutral, "proxy not exercised");
+        }
+        assert_eq!(first.reason, "No MX records found");
+        assert_eq!(dns.count(), 0, "no lookups after the first");
+        assert!(smtp.attempts().is_empty(), "no SMTP for a no-MX domain");
+    }
+
+    // A failed lookup keeps its existing shape: Unknown, MxLookupError,
+    // "MX lookup failed: …", 0 records — and no SMTP.
+    #[tokio::test]
+    async fn test_mx_lookup_failure_result_shape() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(3, &token);
+        let dns = FakeDns::new(|_| MxResolution::Failed("Resolve error: request timed out".into()));
+        let smtp = FakeSmtp::new(Duration::ZERO, |_| deliverable());
+        for _ in 0..3 {
+            let r = validate("a@dnsdown.test", Some(proxy()), &run, &dns, &smtp).await;
+            assert_eq!(r.result, "Unknown");
+            assert_eq!(r.error_type.as_deref(), Some("MxLookupError"));
+            assert_eq!(r.reason, "MX lookup failed: Resolve error: request timed out");
+            assert_eq!(r.mx_record_count, 0);
+            assert_eq!(r.risk_score, 50);
+            assert_eq!(r.proxy_outcome, ProxyOutcome::Neutral);
+        }
+        assert_eq!(dns.count(), 1, "failure reused within its TTL");
+        assert!(smtp.attempts().is_empty());
+    }
+
+    // Invalid syntax never reaches DNS.
+    #[tokio::test]
+    async fn test_invalid_syntax_skips_mx() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(3, &token);
+        let dns = FakeDns::new(three_mx);
+        let smtp = FakeSmtp::new(Duration::ZERO, |_| deliverable());
+        let r = validate("not-an-email", Some(proxy()), &run, &dns, &smtp).await;
+        assert_eq!((r.result.as_str(), r.reason.as_str()), ("Invalid", "Invalid syntax"));
+        assert_eq!(r.risk_score, 100);
+        assert_eq!(r.proxy_outcome, ProxyOutcome::Neutral);
+        assert_eq!(dns.count(), 0);
+        assert!(smtp.attempts().is_empty());
+    }
+
+    // Test 3 (I5): cap 2, 10 emails for one domain with slow SMTP, run
+    // concurrency 10 → never more than 2 sessions on that MX at once.
+    #[tokio::test(start_paused = true)]
+    async fn test_mx_semaphore_caps_sessions_per_host() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(2, &token);
+        let dns = FakeDns::new(three_mx);
+        let smtp = FakeSmtp::new(Duration::from_millis(200), |_| deliverable());
+        let inputs: Vec<String> = (0..10).map(|i| format!("u{}@busy.test", i)).collect();
+
+        let outcome = validate_emails_bulk_core(
+            inputs,
+            10,
+            token,
+            ProxyPolicy::direct(),
+            validator(&run, &dns, &smtp),
+            |_| {},
+        )
+        .await;
+
+        assert_eq!(outcome.results.len(), 10);
+        assert_eq!(smtp.peak(), 2, "peak concurrent sessions on mx1.busy.test");
+        assert_eq!(smtp.attempts().len(), 10);
+    }
+
+    // The cap is per MX host: two domains on different MXs, cap 1 each →
+    // both run at once (peak 2), neither exceeds 1 on its own host.
+    #[tokio::test(start_paused = true)]
+    async fn test_mx_semaphore_is_per_host() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(1, &token);
+        let dns = FakeDns::new(three_mx);
+        let smtp = FakeSmtp::new(Duration::from_millis(200), |_| deliverable());
+        let inputs: Vec<String> =
+            (0..8).map(|i| format!("u{}@{}", i, if i % 2 == 0 { "a.test" } else { "b.test" })).collect();
+
+        let outcome = validate_emails_bulk_core(
+            inputs,
+            8,
+            token,
+            ProxyPolicy::direct(),
+            validator(&run, &dns, &smtp),
+            |_| {},
+        )
+        .await;
+
+        assert_eq!(outcome.results.len(), 8);
+        assert_eq!(smtp.peak(), 2);
+    }
+
+    // Test 7 (I5): Stop while emails are parked on a full MX slot → the run
+    // returns promptly with the cancelled stop reason.
+    #[tokio::test(start_paused = true)]
+    async fn test_cancel_while_waiting_on_mx_semaphore() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(1, &token);
+        let dns = FakeDns::new(three_mx);
+        // One session holds the only slot for an hour; the rest queue on it.
+        let smtp = FakeSmtp::new(Duration::from_secs(3600), |_| deliverable());
+        let inputs: Vec<String> = (0..6).map(|i| format!("u{}@slow.test", i)).collect();
+
+        let canceller = token.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(50)).await;
+            canceller.cancel();
+        });
+        let started = tokio::time::Instant::now();
+        let outcome = validate_emails_bulk_core(
+            inputs,
+            6,
+            token,
+            ProxyPolicy::direct(),
+            validator(&run, &dns, &smtp),
+            |_| {},
+        )
+        .await;
+
+        assert!(started.elapsed() < Duration::from_secs(1), "took {:?}", started.elapsed());
+        assert_eq!(outcome.stop_reason.as_deref(), Some(STOP_CANCELLED));
+        assert!(outcome.results.is_empty());
+        assert_eq!(smtp.attempts().len(), 1, "only the slot holder started a session");
+    }
+
+    // Test 7, pipeline level: a validation parked on the MX slot returns the
+    // cancelled stand-in as soon as the token fires, without waiting for the
+    // slot (the run loop never reports it).
+    #[tokio::test(start_paused = true)]
+    async fn test_pipeline_cancel_releases_mx_wait() {
+        let token = CancellationToken::new();
+        let run = run_with_cap(1, &token);
+        let dns = FakeDns::new(three_mx);
+        let smtp = FakeSmtp::new(Duration::from_secs(3600), |_| deliverable());
+
+        let holder = {
+            let (run, dns, smtp) = (run.clone(), dns.clone(), smtp.clone());
+            tokio::spawn(async move { validate("a@slow.test", None, &run, &dns, &smtp).await })
+        };
+        tokio::task::yield_now().await;
+        let waiter = {
+            let (run, dns, smtp) = (run.clone(), dns.clone(), smtp.clone());
+            tokio::spawn(async move { validate("b@slow.test", None, &run, &dns, &smtp).await })
+        };
+        sleep(Duration::from_millis(10)).await;
+        let started = tokio::time::Instant::now();
+        token.cancel();
+        let waited = waiter.await.unwrap();
+        let held = holder.await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(waited.error_type.as_deref(), Some("Cancelled"));
+        assert_eq!(held.error_type.as_deref(), Some("Cancelled"), "in-flight session abandoned too");
+        assert_eq!(waited.proxy_outcome, ProxyOutcome::Neutral);
+        assert_eq!(smtp.attempts().len(), 1);
     }
 }

@@ -1,4 +1,5 @@
 mod atomic_write;
+mod mx;
 mod validation;
 mod settings;
 mod session;
@@ -132,6 +133,16 @@ fn run_rate_limit(config: &validation::ValidationConfig, mode: &str) -> Option<v
     })
 }
 
+/// The run's shared MX state (I5): one resolver, a per-domain MX cache and
+/// the per-MX session cap, all dropped when the run ends. Bound to the run's
+/// token so a wait on an MX slot ends on Stop/Pause.
+fn run_mx(
+    config: &validation::ValidationConfig,
+    token: &tokio_util::sync::CancellationToken,
+) -> Arc<mx::MxRun> {
+    Arc::new(mx::MxRun::new(config.mx_concurrency, token.clone()))
+}
+
 /// Forward a run's events to the window, stamped with its run id.
 fn run_event_sink(window: tauri::Window, run_id: u64) -> impl Fn(validation::RunEvent) + Send + Sync {
     move |event| match event {
@@ -229,13 +240,16 @@ async fn validate_emails_bulk(
     let used_pool = policy.state.is_some();
     let config = validation_config_snapshot(&settings_state).await;
     let rate = run_rate_limit(&config, &mode);
+    let mx = run_mx(&config, &token);
 
     let outcome = validation::validate_emails_bulk_with_rate_limit(
         emails,
         concurrency,
         token,
         policy,
-        move |email, proxy| validation::validate_email(email, mode.clone(), proxy, config.clone()),
+        move |email, proxy| {
+            validation::validate_email_in_run(email, mode.clone(), proxy, config.clone(), mx.clone())
+        },
         run_event_sink(window.clone(), run_id),
         rate,
     )
@@ -264,13 +278,16 @@ async fn revalidate_emails_bulk(
     let used_pool = policy.state.is_some();
     let config = validation_config_snapshot(&settings_state).await;
     let rate = run_rate_limit(&config, &mode);
+    let mx = run_mx(&config, &token);
 
     let outcome = validation::revalidate_emails_bulk_core(
         items,
         concurrency,
         token,
         policy,
-        move |email, proxy| validation::validate_email(email, mode.clone(), proxy, config.clone()),
+        move |email, proxy| {
+            validation::validate_email_in_run(email, mode.clone(), proxy, config.clone(), mx.clone())
+        },
         run_event_sink(window.clone(), run_id),
         rate,
     )

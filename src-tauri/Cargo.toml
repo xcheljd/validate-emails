@@ -38,6 +38,9 @@ thiserror = "1.0"
 # Already pulled in by check-if-email-exists v0.11.6 (same version); named
 # directly so the error classifier can tell 4xx from 5xx replies.
 async-smtp = "0.9"
+# Already pulled in by check-if-email-exists v0.11.6 (same version); named
+# directly so a run can build ONE resolver and cache MX lookups (I5).
+hickory-resolver = "0.24"
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }

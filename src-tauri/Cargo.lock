@@ -4725,6 +4725,7 @@ dependencies = [
  "chrono",
  "fast-socks5",
  "futures",
+ "hickory-resolver",
  "mockall",
  "reqwest",
  "serde",
