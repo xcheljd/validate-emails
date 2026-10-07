@@ -9,7 +9,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Play, X, AlertTriangle } from 'lucide-react';
-import { listSessions, type ValidationSession } from '@/lib/session-manager';
+import { listSessions, type SessionSummary } from '@/lib/session-manager';
 
 interface CrashRecoveryDialogProps {
   onResume: (sessionId: string) => void;
@@ -21,7 +21,7 @@ export function CrashRecoveryDialog({
   onDismiss,
 }: CrashRecoveryDialogProps) {
   const [incompleteSessions, setIncompleteSessions] = useState<
-    ValidationSession[]
+    SessionSummary[]
   >([]);
   const [loading, setLoading] = useState(true);
 

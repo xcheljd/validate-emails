@@ -1,5 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
-import { validateSession, validateResultsBatch } from './data-validation';
+import {
+  validateSession,
+  validateSessionSummary,
+  validateResultsBatch,
+} from './data-validation';
 import { showError } from './toast';
 import { ValidationResult } from './types';
 
@@ -20,6 +24,9 @@ export interface SessionSettings {
   validationMode: 'quick' | 'standard' | 'thorough';
 }
 
+/** A session list row: metadata only, no emails or results (I10). */
+export type SessionSummary = Omit<ValidationSession, 'emails' | 'results'>;
+
 export async function createSession(
   emails: string[],
   settings: SessionSettings
@@ -30,11 +37,17 @@ export async function createSession(
 /** Why a run halted; recorded on the session. Other statuses are derived by the backend. */
 export type SessionHaltStatus = 'paused' | 'stopped';
 
+/**
+ * Saves progress. `results` is appended to the session's results file: pass
+ * only new or changed results (see planSessionSave). With `replace`, it is
+ * the full set and the file is rewritten instead.
+ */
 export async function updateSessionProgress(
   sessionId: string,
   results: ValidationResult[],
   currentIndex: number,
-  status?: SessionHaltStatus
+  status?: SessionHaltStatus,
+  replace = false
 ): Promise<void> {
   // Validate results before updating
   const validation = validateResultsBatch(results);
@@ -50,7 +63,42 @@ export async function updateSessionProgress(
     currentIndex,
     backup: true,
     ...(status ? { status } : {}),
+    ...(replace ? { replace: true } : {}),
   });
+}
+
+/** Results last confirmed saved, by email. */
+export type PersistedResults = Map<string, ValidationResult>;
+
+export interface SessionSavePlan {
+  results: ValidationResult[];
+  replace: boolean;
+}
+
+/**
+ * What a save must send, given what was last saved. Results are replaced
+ * by email when retried, so this sends every result that is new or a
+ * different object than the saved one. Unknown saved state (`null`) or a
+ * deleted result needs a full rewrite: an append can't remove anything.
+ */
+export function planSessionSave(
+  results: ValidationResult[],
+  persisted: PersistedResults | null
+): SessionSavePlan {
+  if (!persisted) return { results, replace: true };
+  const changed: ValidationResult[] = [];
+  const stillPresent = new Set<string>();
+  for (const result of results) {
+    const saved = persisted.get(result.email);
+    if (saved !== undefined) stillPresent.add(result.email);
+    if (saved !== result) changed.push(result);
+  }
+  if (stillPresent.size < persisted.size) return { results, replace: true };
+  return { results: changed, replace: false };
+}
+
+export function indexResultsByEmail(results: ValidationResult[]): PersistedResults {
+  return new Map(results.map((r) => [r.email, r]));
 }
 
 export async function loadSession(
@@ -71,14 +119,13 @@ export async function loadSession(
   return session;
 }
 
-export async function listSessions(): Promise<ValidationSession[]> {
-  const sessions = await invoke<ValidationSession[]>(
-    'list_validation_sessions'
-  );
+/** Lists sessions as metadata only; load one with loadSession for its results. */
+export async function listSessions(): Promise<SessionSummary[]> {
+  const sessions = await invoke<SessionSummary[]>('list_validation_sessions');
 
   // Filter out invalid sessions from the list to prevent UI crashes
   return sessions.filter((session) => {
-    const validation = validateSession(session);
+    const validation = validateSessionSummary(session);
     if (!validation.valid) {
       console.warn(
         `Skipping invalid session ${session.id}:`,

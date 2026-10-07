@@ -1,16 +1,36 @@
+//! Validation session storage.
+//!
+//! Each session is two files in the sessions dir (I10):
+//! - `<id>.json`: metadata — everything except the results. Small, rewritten
+//!   atomically on every save, and all that `list_sessions` reads.
+//! - `<id>.results.jsonl`: the results, one JSON object per line. Progress
+//!   saves append only what changed, so a long run's save I/O stays linear
+//!   instead of rewriting every result on every save.
+//!
+//! The results file is a log: a later line for an email replaces the earlier
+//! one (a retry updates its result in place). A line that doesn't parse — a
+//! torn append after a crash — is skipped on load, never fatal.
+//!
+//! Backups (`backups/<id>-<ts>.json` + `.results.jsonl`) are copies of both.
+//! Pre-I10 sessions were a single `<id>.json` with the results inline; they
+//! still load, and move their results to the results file on the next save.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::fs;
+use std::sync::Mutex;
 use chrono::{DateTime, NaiveDateTime, Utc, Duration};
 use crate::validation::ValidationResult;
-use crate::atomic_write::atomic_write;
+use crate::atomic_write::{atomic_copy, atomic_write, sync_parent_dir};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSettings {
     pub validation_mode: String,
 }
 
+/// A session as the frontend loads it: metadata plus every result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationSession {
     pub id: String,
@@ -23,6 +43,66 @@ pub struct ValidationSession {
     pub created_at: String,
     pub completed_at: Option<String>,
     pub settings: SessionSettings,
+    /// Unparseable lines skipped in the results file (a torn append from a
+    /// crash). Omitted when there were none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub skipped_result_lines: usize,
+}
+
+/// One row of the session list, read from the metadata file alone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub current_index: usize,
+    pub total: usize,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+    pub settings: SessionSettings,
+}
+
+/// `<id>.json`: everything about a session except its results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionMeta {
+    id: String,
+    name: String,
+    emails: Vec<String>,
+    status: String,
+    current_index: usize,
+    total: usize,
+    created_at: String,
+    completed_at: Option<String>,
+    settings: SessionSettings,
+    /// When a progress save last backed this session up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_backup_at: Option<String>,
+    /// Pre-I10 sessions kept their results here. Read so they still load;
+    /// never written back (they move to the results file).
+    #[serde(default, skip_serializing)]
+    results: Option<Vec<ValidationResult>>,
+}
+
+impl SessionMeta {
+    fn into_session(self, results: Vec<ValidationResult>, skipped_result_lines: usize) -> ValidationSession {
+        ValidationSession {
+            id: self.id,
+            name: self.name,
+            emails: self.emails,
+            results,
+            status: self.status,
+            current_index: self.current_index,
+            total: self.total,
+            created_at: self.created_at,
+            completed_at: self.completed_at,
+            settings: self.settings,
+            skipped_result_lines,
+        }
+    }
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 pub struct SessionManager {
@@ -34,6 +114,12 @@ const MAX_BACKUPS_PER_SESSION: usize = 5;
 /// Timestamp part of a backup filename: `<id>-<YYYYmmdd-HHMMSS>.json`.
 const BACKUP_TS_FORMAT: &str = "%Y%m%d-%H%M%S";
 const BACKUP_TS_LEN: usize = 15;
+/// Suffix of a results file (live or backup), after the id / backup stem.
+const RESULTS_SUFFIX: &str = ".results.jsonl";
+/// Progress saves back a session up at most this often. A backup copies the
+/// whole results file, so backing up on every auto-save would make save I/O
+/// quadratic again. An explicit `backup_session` always backs up.
+const BACKUP_MIN_INTERVAL_SECS: i64 = 300;
 /// Statuses the frontend may set explicitly; the rest are derived from
 /// progress.
 const CALLER_STATUSES: &[&str] = &["paused", "stopped"];
@@ -47,20 +133,7 @@ struct SweepReport {
 }
 
 impl SessionManager {
-    pub fn new() -> Result<Self, String> {
-        let mut sessions_dir = std::env::var("HOME")
-            .map(|home| std::path::PathBuf::from(home))
-            .unwrap_or_else(|_| std::path::PathBuf::from("."));
-        
-        sessions_dir.push(".local");
-        sessions_dir.push("share");
-        sessions_dir.push("com.yourcompany.emailvalidator");
-        sessions_dir.push("sessions");
-
-        Self::with_dir(sessions_dir)
-    }
-
-    /// Creates a manager rooted at an explicit sessions directory (used by tests).
+    /// Creates a manager rooted at a sessions directory, creating it if needed.
     pub fn with_dir(sessions_dir: PathBuf) -> Result<Self, String> {
         if !sessions_dir.exists() {
             fs::create_dir_all(&sessions_dir)
@@ -72,26 +145,32 @@ impl SessionManager {
 
     pub fn create_session(&self, name: String, emails: Vec<String>, settings: SessionSettings) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().to_string();
-        let session = ValidationSession {
+        let meta = SessionMeta {
             id: id.clone(),
             name,
-            emails: emails.clone(),
-            results: Vec::new(),
+            total: emails.len(),
+            emails,
             status: "pending".to_string(),
             current_index: 0,
-            total: emails.len(),
             created_at: Utc::now().to_rfc3339(),
             completed_at: None,
             settings,
+            last_backup_at: None,
+            results: None,
         };
 
-        self.save_session(&id, &session)?;
+        // No results file yet: the first append creates it.
+        self.write_meta(&id, &meta)?;
         Ok(id)
     }
 
-    /// Saves progress. `status` may be "paused" or "stopped" to record why
-    /// the run halted; a finished session is "completed" regardless, and
-    /// without a status any progress means "in-progress".
+    /// Saves progress. By default `results` is a batch of new or changed
+    /// results, appended to the results file; with `replace` it is the full
+    /// set and the file is rewritten (the caller's way to record deletions).
+    ///
+    /// `status` may be "paused" or "stopped" to record why the run halted; a
+    /// finished session is "completed" regardless, and without a status any
+    /// progress means "in-progress".
     pub fn update_session_progress(
         &self,
         id: &str,
@@ -99,51 +178,91 @@ impl SessionManager {
         current_index: usize,
         backup: bool,
         status: Option<&str>,
+        replace: bool,
     ) -> Result<(), String> {
         if let Some(status) = status {
             if !CALLER_STATUSES.contains(&status) {
                 return Err(format!("Invalid session status: {:?}", status));
             }
         }
-        let mut session = self.load_session(id)?;
-        
-        if backup {
+        let mut meta = self.read_meta(id)?;
+        let results_path = self.validated_results_path(id)?;
+
+        // A rewrite is destructive, so it is always backed up first.
+        let now = Utc::now();
+        if backup && (replace || Self::backup_due(&meta, now)) {
             self.backup_session(id)?;
+            meta.last_backup_at = Some(now.to_rfc3339());
         }
 
-        session.results = results;
-        session.current_index = current_index;
-        
-        if current_index >= session.total {
-            session.status = "completed".to_string();
-            session.completed_at = Some(Utc::now().to_rfc3339());
-        } else if let Some(status) = status {
-            session.status = status.to_string();
-        } else if current_index > 0 {
-            session.status = "in-progress".to_string();
+        // Results first, then metadata: a crash in between leaves metadata
+        // that merely lags the results, which the next save corrects.
+        if replace {
+            write_results(&results_path, &results)?;
+        } else {
+            self.upgrade_legacy(&results_path, &mut meta)?;
+            append_results(&results_path, &results)?;
         }
-        
-        self.save_session(&id, &session)
+
+        meta.current_index = current_index;
+        if current_index >= meta.total {
+            meta.status = "completed".to_string();
+            meta.completed_at = Some(now.to_rfc3339());
+        } else if let Some(status) = status {
+            meta.status = status.to_string();
+        } else if current_index > 0 {
+            meta.status = "in-progress".to_string();
+        }
+
+        self.write_meta(id, &meta)
     }
 
+    /// Moves a pre-I10 session's inline results into its results file, so
+    /// appends land after them. No-op for current sessions.
+    fn upgrade_legacy(&self, results_path: &Path, meta: &mut SessionMeta) -> Result<(), String> {
+        if let Some(legacy) = meta.results.take() {
+            if !results_path.exists() {
+                write_results(results_path, &legacy)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn backup_due(meta: &SessionMeta, now: DateTime<Utc>) -> bool {
+        let last = meta
+            .last_backup_at
+            .as_deref()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok());
+        match last {
+            // A clock that went backwards counts as due, not as "recent".
+            Some(last) => !(Duration::zero()..Duration::seconds(BACKUP_MIN_INTERVAL_SECS))
+                .contains(&now.signed_duration_since(last)),
+            None => true,
+        }
+    }
+
+    /// Snapshots the metadata and results files into `backups/`.
     pub fn backup_session(&self, id: &str) -> Result<(), String> {
-        // Validate before touching the filesystem (load_session validates too,
-        // but the backup filename is derived from the id as well).
-        Self::validate_session_id(id)?;
-        let session = self.load_session(id)?;
-        
+        let meta_path = self.validated_session_path(id)?;
+        let results_path = self.validated_results_path(id)?;
+        if !meta_path.exists() {
+            return Err(Self::not_found(id));
+        }
+
         let backup_dir = self.sessions_dir.join("backups");
         if !backup_dir.exists() {
             fs::create_dir_all(&backup_dir)
                 .map_err(|e| format!("Failed to create backup directory: {}", e))?;
         }
-        
-        let backup_filename = format!("{}-{}.json", id, Utc::now().format("%Y%m%d-%H%M%S"));
-        let backup_path = Self::contained_path(&backup_dir, &backup_filename)?;
-        let json = serde_json::to_string(&session)
-            .map_err(|e| format!("Failed to serialize session for backup: {}", e))?;
-        
-        atomic_write(&backup_path, json.as_bytes())
+
+        let stem = format!("{}-{}", id, Utc::now().format(BACKUP_TS_FORMAT));
+        if results_path.exists() {
+            let backup_results = Self::contained_path(&backup_dir, &format!("{}{}", stem, RESULTS_SUFFIX))?;
+            atomic_copy(&results_path, &backup_results)
+                .map_err(|e| format!("Failed to write backup: {}", e))?;
+        }
+        let backup_meta = Self::contained_path(&backup_dir, &format!("{}.json", stem))?;
+        atomic_copy(&meta_path, &backup_meta)
             .map_err(|e| format!("Failed to write backup: {}", e))?;
 
         // Cap this session's backups now so a long run can't grow them
@@ -155,48 +274,39 @@ impl SessionManager {
     }
 
     pub fn load_session(&self, id: &str) -> Result<ValidationSession, String> {
-        let session_path = self.validated_session_path(id)?;
-        
-        let content = fs::read_to_string(&session_path)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    format!("Session not found: {}. The session may have been deleted or moved.", id)
-                } else {
-                    format!("Failed to read session file: {}", e)
-                }
-            })?;
+        let mut meta = self.read_meta(id)?;
+        let results_path = self.validated_results_path(id)?;
 
-        let session: ValidationSession = serde_json::from_str(&content)
-            .map_err(|e| {
-                if e.is_data() {
-                    format!("Corrupted session data: {}. The session file contains invalid data. You may need to restore from a backup if available.", e)
-                } else if e.is_syntax() {
-                    format!("Invalid session file format: {}. The session file appears to be corrupted or was modified externally.", e)
-                } else {
-                    format!("Failed to parse session file: {}", e)
-                }
-            })?;
+        let (results, skipped) = match read_results(&results_path) {
+            Ok(read) => read,
+            // No results file: nothing saved yet, or a pre-I10 session.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (meta.results.take().unwrap_or_default(), 0),
+            Err(e) => return Err(format!("Failed to read session results: {}", e)),
+        };
+        if skipped > 0 {
+            eprintln!(
+                "[sessions] {}: skipped {} unreadable result line(s) (torn write?)",
+                id, skipped
+            );
+        }
 
-        Ok(session)
+        Ok(meta.into_session(results, skipped))
     }
 
-    pub fn list_sessions(&self) -> Result<Vec<ValidationSession>, String> {
-        let sessions_dir = &self.sessions_dir;
+    /// Lists sessions newest first. Reads only metadata files, never results;
+    /// files that aren't sessions are skipped.
+    pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, String> {
         let mut sessions = Vec::new();
 
-        if let Ok(entries) = fs::read_dir(sessions_dir) {
+        if let Ok(entries) = fs::read_dir(&self.sessions_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-
-                if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                    if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-                        if filename != "sessions.json" {
-                            if let Ok(content) = fs::read_to_string(&path) {
-                                if let Ok(session) = serde_json::from_str::<ValidationSession>(&content) {
-                                    sessions.push(session);
-                                }
-                            }
-                        }
+                if !Self::is_meta_file(&path) {
+                    continue;
+                }
+                if let Ok(content) = fs::read_to_string(&path) {
+                    if let Ok(session) = serde_json::from_str::<SessionSummary>(&content) {
+                        sessions.push(session);
                     }
                 }
             }
@@ -208,8 +318,17 @@ impl SessionManager {
 
     pub fn delete_session(&self, id: &str) -> Result<(), String> {
         let session_path = self.validated_session_path(id)?;
+        let results_path = self.validated_results_path(id)?;
+        // Metadata first: once it is gone the session is gone, and a leftover
+        // results file is an orphan the cleanup sweep removes.
         fs::remove_file(&session_path)
-            .map_err(|e| format!("Failed to delete session file: {}", e))
+            .map_err(|e| format!("Failed to delete session file: {}", e))?;
+        match fs::remove_file(&results_path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(format!("Failed to delete session results file: {}", e))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Deletes sessions created more than `days` ago and prunes backups
@@ -246,14 +365,22 @@ impl SessionManager {
                             continue;
                         }
                     };
-                    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    if path.extension().and_then(|s| s.to_str()) != Some("json")
-                        || filename == "sessions.json"
-                    {
+                    if let Some(meta_path) = Self::meta_path_for_results(&path) {
+                        // Results whose session is gone (a delete interrupted
+                        // between its two removals).
+                        if !meta_path.exists() {
+                            Self::remove(&path, &mut report);
+                        }
+                        continue;
+                    }
+                    if !Self::is_meta_file(&path) {
                         continue;
                     }
                     match Self::session_created_at(&path) {
-                        Ok(created_at) if created_at < cutoff => Self::remove(&path, &mut report),
+                        Ok(created_at) if created_at < cutoff => {
+                            Self::remove(&path, &mut report);
+                            Self::remove(&Self::results_path_for_meta(&path), &mut report);
+                        }
                         Ok(_) => {}
                         Err(e) => {
                             eprintln!("[sessions] cleanup: skipping {}: {}", path.display(), e);
@@ -274,17 +401,39 @@ impl SessionManager {
 
     fn session_created_at(path: &Path) -> Result<DateTime<Utc>, String> {
         let content = fs::read_to_string(path).map_err(|e| format!("read failed: {}", e))?;
-        let session: ValidationSession =
+        let session: SessionSummary =
             serde_json::from_str(&content).map_err(|e| format!("not a session: {}", e))?;
         DateTime::parse_from_rfc3339(&session.created_at)
             .map(|t| t.with_timezone(&Utc))
             .map_err(|e| format!("bad created_at: {}", e))
     }
 
-    /// Splits a backup filename `<id>-<YYYYmmdd-HHMMSS>.json` into its id and
-    /// timestamp. Anything else (temp files, foreign files) is None.
+    /// A session metadata file: `*.json`, except the legacy `sessions.json`.
+    fn is_meta_file(path: &Path) -> bool {
+        path.extension().and_then(|s| s.to_str()) == Some("json")
+            && path.file_name().and_then(|n| n.to_str()) != Some("sessions.json")
+    }
+
+    /// `<dir>/<id>.json` → `<dir>/<id>.results.jsonl`.
+    fn results_path_for_meta(meta_path: &Path) -> PathBuf {
+        let stem = meta_path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        meta_path.with_file_name(format!("{}{}", stem, RESULTS_SUFFIX))
+    }
+
+    /// `<dir>/<id>.results.jsonl` → `<dir>/<id>.json`; None for other files.
+    fn meta_path_for_results(path: &Path) -> Option<PathBuf> {
+        let name = path.file_name()?.to_str()?;
+        let stem = name.strip_suffix(RESULTS_SUFFIX).filter(|s| !s.is_empty())?;
+        Some(path.with_file_name(format!("{}.json", stem)))
+    }
+
+    /// Splits a backup filename `<id>-<YYYYmmdd-HHMMSS>.json` (metadata) or
+    /// `<id>-<YYYYmmdd-HHMMSS>.results.jsonl` into its id and timestamp.
+    /// Anything else (temp files, foreign files) is None.
     fn parse_backup_name(name: &str) -> Option<(&str, DateTime<Utc>)> {
-        let stem = name.strip_suffix(".json")?;
+        let stem = name
+            .strip_suffix(RESULTS_SUFFIX)
+            .or_else(|| name.strip_suffix(".json"))?;
         if !stem.is_ascii() || stem.len() <= BACKUP_TS_LEN + 1 {
             return None;
         }
@@ -296,7 +445,8 @@ impl SessionManager {
     }
 
     /// Deletes backups older than `cutoff` (if given) and all but the newest
-    /// MAX_BACKUPS_PER_SESSION per id. `only_id` restricts this to one
+    /// MAX_BACKUPS_PER_SESSION per id. A backup is every file sharing an id
+    /// and timestamp (metadata + results). `only_id` restricts this to one
     /// session's backups.
     fn prune_backups(
         backup_dir: &Path,
@@ -334,11 +484,14 @@ impl SessionManager {
             by_id.entry(id.to_string()).or_default().push((ts, entry.path()));
         }
 
-        for backups in by_id.values_mut() {
-            backups.sort_by(|a, b| b.0.cmp(&a.0));
-            for (i, (ts, path)) in backups.iter().enumerate() {
+        for files in by_id.values() {
+            let mut stamps: Vec<DateTime<Utc>> = files.iter().map(|(ts, _)| *ts).collect();
+            stamps.sort_by(|a, b| b.cmp(a));
+            stamps.dedup();
+            let kept = &stamps[..stamps.len().min(MAX_BACKUPS_PER_SESSION)];
+            for (ts, path) in files {
                 let expired = cutoff.is_some_and(|cutoff| *ts < cutoff);
-                if i >= MAX_BACKUPS_PER_SESSION || expired {
+                if expired || !kept.contains(ts) {
                     Self::remove(path, report);
                 }
             }
@@ -357,13 +510,61 @@ impl SessionManager {
         }
     }
 
+    /// Writes a whole session: results file (rewritten) and metadata.
+    #[cfg(test)]
     fn save_session(&self, id: &str, session: &ValidationSession) -> Result<(), String> {
+        write_results(&self.validated_results_path(id)?, &session.results)?;
+        let meta = SessionMeta {
+            id: session.id.clone(),
+            name: session.name.clone(),
+            emails: session.emails.clone(),
+            status: session.status.clone(),
+            current_index: session.current_index,
+            total: session.total,
+            created_at: session.created_at.clone(),
+            completed_at: session.completed_at.clone(),
+            settings: session.settings.clone(),
+            last_backup_at: None,
+            results: None,
+        };
+        self.write_meta(id, &meta)
+    }
+
+    fn read_meta(&self, id: &str) -> Result<SessionMeta, String> {
         let session_path = self.validated_session_path(id)?;
-        let json = serde_json::to_string(session)
+
+        let content = fs::read_to_string(&session_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Self::not_found(id)
+                } else {
+                    format!("Failed to read session file: {}", e)
+                }
+            })?;
+
+        serde_json::from_str(&content)
+            .map_err(|e| {
+                if e.is_data() {
+                    format!("Corrupted session data: {}. The session file contains invalid data. You may need to restore from a backup if available.", e)
+                } else if e.is_syntax() {
+                    format!("Invalid session file format: {}. The session file appears to be corrupted or was modified externally.", e)
+                } else {
+                    format!("Failed to parse session file: {}", e)
+                }
+            })
+    }
+
+    fn write_meta(&self, id: &str, meta: &SessionMeta) -> Result<(), String> {
+        let session_path = self.validated_session_path(id)?;
+        let json = serde_json::to_string(meta)
             .map_err(|e| format!("Failed to serialize session: {}", e))?;
 
         atomic_write(&session_path, json.as_bytes())
             .map_err(|e| format!("Failed to write session file: {}", e))
+    }
+
+    fn not_found(id: &str) -> String {
+        format!("Session not found: {}. The session may have been deleted or moved.", id)
     }
 
     /// Session ids are `Uuid::new_v4()` strings (hex digits and '-'). Ids arrive
@@ -394,65 +595,215 @@ impl SessionManager {
         Self::contained_path(&self.sessions_dir, &format!("{}.json", id))
     }
 
+    fn validated_results_path(&self, id: &str) -> Result<PathBuf, String> {
+        Self::validate_session_id(id)?;
+        Self::contained_path(&self.sessions_dir, &format!("{}{}", id, RESULTS_SUFFIX))
+    }
+
     fn generate_session_name(&self) -> String {
         let now = Utc::now();
         now.format("%b %d, %Y %-I:%M %p").to_string()
     }
 }
 
+/// Results as JSON lines, each newline-terminated.
+fn encode_results(results: &[ValidationResult]) -> Result<Vec<u8>, String> {
+    let mut buf = Vec::new();
+    for result in results {
+        serde_json::to_writer(&mut buf, result)
+            .map_err(|e| format!("Failed to serialize result: {}", e))?;
+        buf.push(b'\n');
+    }
+    Ok(buf)
+}
+
+/// Replaces a results file with exactly `results`, atomically.
+fn write_results(path: &Path, results: &[ValidationResult]) -> Result<(), String> {
+    atomic_write(path, &encode_results(results)?)
+        .map_err(|e| format!("Failed to write session results: {}", e))
+}
+
+/// Appends `results` to a results file (creating it) and fsyncs. Returns the
+/// bytes written. If the file doesn't end in a newline — an earlier append
+/// was torn by a crash — one is written first, so the torn fragment stays a
+/// line of its own (skipped on load) instead of swallowing this batch's first
+/// record.
+fn append_results(path: &Path, results: &[ValidationResult]) -> Result<usize, String> {
+    if results.is_empty() {
+        return Ok(0);
+    }
+    let io_err = |e: std::io::Error| format!("Failed to append session results: {}", e);
+    let mut file = OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(path)
+        .map_err(io_err)?;
+    let len = file.metadata().map_err(io_err)?.len();
+
+    let mut buf = Vec::new();
+    if len > 0 {
+        let mut last = [0u8; 1];
+        file.seek(SeekFrom::Start(len - 1)).map_err(io_err)?;
+        file.read_exact(&mut last).map_err(io_err)?;
+        if last[0] != b'\n' {
+            buf.push(b'\n');
+        }
+    }
+    buf.extend(encode_results(results)?);
+
+    // Append mode: the write goes to the end whatever the read position.
+    file.write_all(&buf).map_err(io_err)?;
+    file.sync_all().map_err(io_err)?;
+    if len == 0 {
+        // The file may be new: persist its directory entry too.
+        sync_parent_dir(path);
+    }
+    Ok(buf.len())
+}
+
+/// Reads a results file. A later line for an email replaces the earlier one
+/// in place; new emails keep first-seen order. Lines that don't parse are
+/// skipped and counted (second value), never fatal.
+fn read_results(path: &Path) -> std::io::Result<(Vec<ValidationResult>, usize)> {
+    let content = fs::read(path)?;
+    let mut results: Vec<ValidationResult> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut skipped = 0;
+
+    for line in content.split(|&b| b == b'\n') {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        match serde_json::from_slice::<ValidationResult>(line) {
+            Ok(result) => match index.get(&result.email) {
+                Some(&i) => results[i] = result,
+                None => {
+                    index.insert(result.email.clone(), results.len());
+                    results.push(result);
+                }
+            },
+            Err(_) => skipped += 1,
+        }
+    }
+    Ok((results, skipped))
+}
+
+/// Where sessions live. Resolved once at startup (see `app_paths`) and
+/// managed as Tauri state.
+pub struct SessionStore {
+    sessions_dir: PathBuf,
+}
+
+impl SessionStore {
+    pub fn new(sessions_dir: PathBuf) -> Self {
+        Self { sessions_dir }
+    }
+
+    /// The pre-I10 hard-coded location.
+    pub fn legacy() -> Self {
+        let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."));
+        Self::new(home.join(".local/share/com.yourcompany.emailvalidator/sessions"))
+    }
+}
+
+/// Serializes session writes across commands: a progress save is a
+/// read-modify-write of the metadata plus an append, and two interleaved
+/// saves could otherwise lose one's metadata.
+static SESSION_WRITES: Mutex<()> = Mutex::new(());
+
 /// Runs blocking session I/O off the async runtime's worker threads.
-async fn run_blocking<T, F>(f: F) -> Result<T, String>
+async fn run_blocking<T, F>(store: &SessionStore, f: F) -> Result<T, String>
 where
     T: Send + 'static,
-    F: FnOnce() -> Result<T, String> + Send + 'static,
+    F: FnOnce(&SessionManager) -> Result<T, String> + Send + 'static,
 {
-    tokio::task::spawn_blocking(f)
+    let dir = store.sessions_dir.clone();
+    tokio::task::spawn_blocking(move || f(&SessionManager::with_dir(dir)?))
         .await
         .map_err(|e| format!("Session task failed: {}", e))?
 }
 
+/// `run_blocking` for operations that write, holding SESSION_WRITES.
+async fn run_write<T, F>(store: &SessionStore, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&SessionManager) -> Result<T, String> + Send + 'static,
+{
+    run_blocking(store, move |manager| {
+        let _guard = SESSION_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        f(manager)
+    })
+    .await
+}
+
 #[tauri::command]
-pub async fn create_validation_session(emails: Vec<String>, settings: SessionSettings) -> Result<String, String> {
-    run_blocking(move || {
-        let manager = SessionManager::new()?;
+pub async fn create_validation_session(
+    store: tauri::State<'_, SessionStore>,
+    emails: Vec<String>,
+    settings: SessionSettings,
+) -> Result<String, String> {
+    run_write(&store, move |manager| {
         let name = manager.generate_session_name();
         manager.create_session(name, emails, settings)
     })
     .await
 }
 
+/// `results` is a batch of new/changed results to append, or with
+/// `replace: true` the full set (see `update_session_progress`).
 #[tauri::command]
 pub async fn update_validation_session(
+    store: tauri::State<'_, SessionStore>,
     id: String,
     results: Vec<ValidationResult>,
     current_index: usize,
     backup: bool,
     status: Option<String>,
+    replace: Option<bool>,
 ) -> Result<(), String> {
-    run_blocking(move || {
-        SessionManager::new()?.update_session_progress(&id, results, current_index, backup, status.as_deref())
+    run_write(&store, move |manager| {
+        manager.update_session_progress(
+            &id,
+            results,
+            current_index,
+            backup,
+            status.as_deref(),
+            replace.unwrap_or(false),
+        )
     })
     .await
 }
 
 #[tauri::command]
-pub async fn load_validation_session(id: String) -> Result<ValidationSession, String> {
-    run_blocking(move || SessionManager::new()?.load_session(&id)).await
+pub async fn load_validation_session(
+    store: tauri::State<'_, SessionStore>,
+    id: String,
+) -> Result<ValidationSession, String> {
+    run_blocking(&store, move |manager| manager.load_session(&id)).await
 }
 
 #[tauri::command]
-pub async fn list_validation_sessions() -> Result<Vec<ValidationSession>, String> {
-    run_blocking(|| SessionManager::new()?.list_sessions()).await
+pub async fn list_validation_sessions(
+    store: tauri::State<'_, SessionStore>,
+) -> Result<Vec<SessionSummary>, String> {
+    run_blocking(&store, |manager| manager.list_sessions()).await
 }
 
 #[tauri::command]
-pub async fn delete_validation_session(id: String) -> Result<(), String> {
-    run_blocking(move || SessionManager::new()?.delete_session(&id)).await
+pub async fn delete_validation_session(
+    store: tauri::State<'_, SessionStore>,
+    id: String,
+) -> Result<(), String> {
+    run_write(&store, move |manager| manager.delete_session(&id)).await
 }
 
 #[tauri::command]
-pub async fn cleanup_old_sessions(days: u32) -> Result<usize, String> {
-    run_blocking(move || SessionManager::new()?.cleanup_old_sessions(days)).await
+pub async fn cleanup_old_sessions(
+    store: tauri::State<'_, SessionStore>,
+    days: u32,
+) -> Result<usize, String> {
+    run_write(&store, move |manager| manager.cleanup_old_sessions(days)).await
 }
 
 #[cfg(test)]
@@ -548,7 +899,7 @@ mod tests {
         for id in MALICIOUS_IDS {
             let err = fx
                 .manager
-                .update_session_progress(id, Vec::new(), 0, true, None)
+                .update_session_progress(id, Vec::new(), 0, true, None, false)
                 .expect_err(&format!("{:?} must be rejected", id));
             assert!(err.contains("Invalid session id"), "unexpected error for {:?}: {}", id, err);
         }
@@ -585,7 +936,7 @@ mod tests {
         assert_eq!(loaded.emails, emails);
         assert_eq!(loaded.total, 2);
 
-        fx.manager.update_session_progress(&id, Vec::new(), 1, true, None).unwrap();
+        fx.manager.update_session_progress(&id, Vec::new(), 1, true, None, false).unwrap();
         assert_eq!(fx.manager.load_session(&id).unwrap().status, "in-progress");
         let backups = fx.dir_entries(&fx.manager.sessions_dir.join("backups"));
         assert_eq!(backups.len(), 1);
@@ -625,7 +976,16 @@ mod tests {
         assert!(temp_residue(&fx.manager.sessions_dir).is_empty());
         let backup_dir = fx.manager.sessions_dir.join("backups");
         assert!(temp_residue(&backup_dir).is_empty());
-        assert_eq!(fx.dir_entries(&backup_dir).len(), 1);
+        // One backup: a metadata copy plus a results copy, same stem.
+        let names: Vec<String> = fx
+            .dir_entries(&backup_dir)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names.len(), 2, "{:?}", names);
+        let meta_name = names.iter().find(|n| n.ends_with(".json")).expect("metadata backup");
+        let stem = meta_name.strip_suffix(".json").unwrap();
+        assert!(names.contains(&format!("{}{}", stem, RESULTS_SUFFIX)), "{:?}", names);
     }
 
     #[test]
@@ -666,6 +1026,7 @@ mod tests {
             created_at: (Utc::now() - age).to_rfc3339(),
             completed_at: None,
             settings: settings(),
+            skipped_result_lines: 0,
         };
         let path = fx.manager.sessions_dir.join(format!("{}.json", id));
         fs::write(&path, serde_json::to_string(&session).unwrap()).unwrap();
@@ -821,18 +1182,435 @@ mod tests {
         let id = fx.manager.create_session("status".to_string(), emails, settings()).unwrap();
         let status = |fx: &Fixture| fx.manager.load_session(&id).unwrap().status;
 
-        fx.manager.update_session_progress(&id, Vec::new(), 1, false, Some("paused")).unwrap();
+        fx.manager.update_session_progress(&id, Vec::new(), 1, false, Some("paused"), false).unwrap();
         assert_eq!(status(&fx), "paused");
-        fx.manager.update_session_progress(&id, Vec::new(), 1, false, None).unwrap();
+        fx.manager.update_session_progress(&id, Vec::new(), 1, false, None, false).unwrap();
         assert_eq!(status(&fx), "in-progress");
-        fx.manager.update_session_progress(&id, Vec::new(), 0, false, Some("stopped")).unwrap();
+        fx.manager.update_session_progress(&id, Vec::new(), 0, false, Some("stopped"), false).unwrap();
         assert_eq!(status(&fx), "stopped");
 
-        let err = fx.manager.update_session_progress(&id, Vec::new(), 1, false, Some("completed")).unwrap_err();
+        let err = fx.manager.update_session_progress(&id, Vec::new(), 1, false, Some("completed"), false).unwrap_err();
         assert!(err.contains("Invalid session status"), "{}", err);
         assert_eq!(status(&fx), "stopped", "rejected update must not write");
 
-        fx.manager.update_session_progress(&id, Vec::new(), 2, false, Some("stopped")).unwrap();
+        fx.manager.update_session_progress(&id, Vec::new(), 2, false, Some("stopped"), false).unwrap();
         assert_eq!(status(&fx), "completed");
+    }
+    // ---- I10: metadata + append-only results ----
+
+    fn result(email: &str, verdict: &str) -> ValidationResult {
+        serde_json::from_value(serde_json::json!({
+            "email": email,
+            "result": verdict,
+            "reason": format!("{} reason", verdict),
+            "logs": [],
+            "domain": "example.com",
+            "validationDuration": 1,
+            "mxRecordCount": 1,
+            "isDisposable": false,
+            "isRoleAccount": false,
+            "isCatchAll": false,
+            "isDeliverable": verdict == "Safe",
+            "isDisabled": false,
+            "hasFullInbox": false,
+            "canConnectSmtp": true,
+            "isValidSyntax": true,
+            "isB2c": false,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "validationMode": "standard",
+            "riskScore": 0
+        }))
+        .expect("valid result json")
+    }
+
+    fn summary(results: &[ValidationResult]) -> Vec<(String, String)> {
+        results.iter().map(|r| (r.email.clone(), r.result.clone())).collect()
+    }
+
+    fn emails(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("user{}@example.com", i)).collect()
+    }
+
+    fn results_path(fx: &Fixture, id: &str) -> PathBuf {
+        fx.manager.sessions_dir.join(format!("{}{}", id, RESULTS_SUFFIX))
+    }
+
+    fn meta_path(fx: &Fixture, id: &str) -> PathBuf {
+        fx.manager.sessions_dir.join(format!("{}.json", id))
+    }
+
+    fn meta_json(fx: &Fixture, id: &str) -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(meta_path(fx, id)).unwrap()).unwrap()
+    }
+
+    // Ten incremental saves append exactly their batch each time: the bytes
+    // already on disk are never rewritten, and load returns every result in
+    // order.
+    #[test]
+    fn progress_saves_append_only_their_batch() {
+        let fx = Fixture::new();
+        let all = emails(30);
+        let id = fx.manager.create_session("append".to_string(), all.clone(), settings()).unwrap();
+        let path = results_path(&fx, &id);
+        assert!(!path.exists(), "no results file until the first save");
+
+        let mut before: Vec<u8> = Vec::new();
+        for (i, chunk) in all.chunks(3).enumerate() {
+            let batch: Vec<ValidationResult> = chunk.iter().map(|e| result(e, "Safe")).collect();
+            let expected_growth = encode_results(&batch).unwrap();
+            let done = (i + 1) * 3;
+            fx.manager.update_session_progress(&id, batch, done, true, None, false).unwrap();
+
+            let after = fs::read(&path).unwrap();
+            assert_eq!(after.len(), before.len() + expected_growth.len(), "save {} grew by its batch only", i);
+            assert_eq!(&after[..before.len()], &before[..], "save {} rewrote earlier bytes", i);
+            assert_eq!(&after[before.len()..], &expected_growth[..]);
+            before = after;
+        }
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content.lines().count(), 30);
+        let loaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(loaded.results.iter().map(|r| r.email.clone()).collect::<Vec<_>>(), all);
+        assert_eq!(loaded.status, "completed");
+        assert_eq!(loaded.current_index, 30);
+        assert_eq!(loaded.skipped_result_lines, 0);
+        // Metadata never carries the results.
+        assert!(meta_json(&fx, &id).get("results").is_none());
+        // Ten saves within the backup interval: one backup, not ten.
+        let backups = fx.dir_entries(&fx.manager.sessions_dir.join("backups"));
+        assert_eq!(backups.iter().filter(|p| p.extension().unwrap() == "json").count(), 1);
+    }
+
+    #[test]
+    fn append_results_returns_bytes_written_and_skips_empty_batches() {
+        let fx = Fixture::new();
+        let path = fx.manager.sessions_dir.join("x.results.jsonl");
+        assert_eq!(append_results(&path, &[]).unwrap(), 0);
+        assert!(!path.exists(), "an empty batch doesn't create the file");
+        let batch = vec![result("a@example.com", "Safe")];
+        let n = append_results(&path, &batch).unwrap();
+        assert_eq!(n, encode_results(&batch).unwrap().len());
+        assert_eq!(fs::metadata(&path).unwrap().len() as usize, n);
+    }
+
+    // A retry appends the email again; the later line wins, in place.
+    #[test]
+    fn later_line_for_an_email_replaces_it_in_place() {
+        let fx = Fixture::new();
+        let id = fx.manager.create_session("retry".to_string(), emails(3), settings()).unwrap();
+        let first = vec![
+            result("user0@example.com", "Safe"),
+            result("user1@example.com", "Unknown"),
+            result("user2@example.com", "Safe"),
+        ];
+        fx.manager.update_session_progress(&id, first, 3, false, None, false).unwrap();
+        fx.manager
+            .update_session_progress(&id, vec![result("user1@example.com", "Invalid")], 3, false, None, false)
+            .unwrap();
+
+        assert_eq!(fs::read_to_string(results_path(&fx, &id)).unwrap().lines().count(), 4);
+        let loaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(
+            summary(&loaded.results),
+            vec![
+                ("user0@example.com".to_string(), "Safe".to_string()),
+                ("user1@example.com".to_string(), "Invalid".to_string()),
+                ("user2@example.com".to_string(), "Safe".to_string()),
+            ]
+        );
+    }
+
+    // `replace` rewrites the file (how deletions are saved) and is always
+    // backed up first, even inside the backup interval.
+    #[test]
+    fn replace_rewrites_results_and_backs_up_first() {
+        let fx = Fixture::new();
+        let id = fx.manager.create_session("replace".to_string(), emails(3), settings()).unwrap();
+        let three: Vec<ValidationResult> = emails(3).iter().map(|e| result(e, "Safe")).collect();
+        fx.manager.update_session_progress(&id, three, 3, true, None, false).unwrap();
+        let backup_dir = fx.manager.sessions_dir.join("backups");
+        let backup_metas = |fx: &Fixture| {
+            fx.dir_entries(&backup_dir).iter().filter(|p| p.extension().unwrap() == "json").count()
+        };
+        assert_eq!(backup_metas(&fx), 1);
+
+        // Sleep past the one-second backup timestamp so the forced backup is
+        // a distinct snapshot.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let kept = vec![result("user0@example.com", "Safe"), result("user2@example.com", "Safe")];
+        fx.manager.update_session_progress(&id, kept, 2, true, Some("stopped"), true).unwrap();
+
+        let loaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(
+            loaded.results.iter().map(|r| r.email.as_str()).collect::<Vec<_>>(),
+            vec!["user0@example.com", "user2@example.com"]
+        );
+        assert_eq!(fs::read_to_string(results_path(&fx, &id)).unwrap().lines().count(), 2);
+        assert_eq!(loaded.status, "stopped");
+        assert_eq!(backup_metas(&fx), 2, "replace forces a backup");
+        // The newest backup holds the pre-replace results.
+        let newest_results = fx
+            .dir_entries(&backup_dir)
+            .into_iter()
+            .filter(|p| p.to_str().unwrap().ends_with(RESULTS_SUFFIX))
+            .max()
+            .unwrap();
+        assert_eq!(read_results(&newest_results).unwrap().0.len(), 3);
+        assert!(temp_residue(&fx.manager.sessions_dir).is_empty());
+    }
+
+    // After a crash mid-append: the torn last line is skipped and counted,
+    // the valid prefix loads, and the next append isn't glued onto it.
+    #[test]
+    fn load_skips_torn_last_line_and_next_append_recovers() {
+        let fx = Fixture::new();
+        let id = fx.manager.create_session("torn".to_string(), emails(5), settings()).unwrap();
+        let three: Vec<ValidationResult> = emails(3).iter().map(|e| result(e, "Safe")).collect();
+        fx.manager.update_session_progress(&id, three, 3, false, None, false).unwrap();
+
+        // Half of a fourth record, no newline (and a non-UTF-8 byte for good
+        // measure: a torn write can split a multi-byte character).
+        let path = results_path(&fx, &id);
+        let line = String::from_utf8(encode_results(&[result("user3@example.com", "Safe")]).unwrap()).unwrap();
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(&line.as_bytes()[..line.len() / 2]).unwrap();
+        file.write_all(&[0xE2, 0x82]).unwrap();
+        drop(file);
+
+        let loaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(loaded.results.len(), 3);
+        assert_eq!(loaded.skipped_result_lines, 1);
+        let wire = serde_json::to_value(&loaded).unwrap();
+        assert_eq!(wire["skipped_result_lines"], 1);
+
+        // The next save starts on a fresh line, so its record survives.
+        fx.manager
+            .update_session_progress(&id, vec![result("user4@example.com", "Risky")], 4, false, None, false)
+            .unwrap();
+        let loaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(
+            loaded.results.iter().map(|r| r.email.as_str()).collect::<Vec<_>>(),
+            vec!["user0@example.com", "user1@example.com", "user2@example.com", "user4@example.com"]
+        );
+        assert_eq!(loaded.skipped_result_lines, 1);
+
+        // A clean session doesn't put the field on the wire at all.
+        let clean = fx.manager.create_session("clean".to_string(), emails(1), settings()).unwrap();
+        let wire = serde_json::to_value(fx.manager.load_session(&clean).unwrap()).unwrap();
+        assert!(wire.get("skipped_result_lines").is_none());
+    }
+
+    // Listing reads metadata only: every results file is garbage (and one is
+    // large), yet all five sessions list, newest first, without results.
+    #[test]
+    fn list_sessions_reads_only_metadata() {
+        let fx = Fixture::new();
+        let mut ids = Vec::new();
+        for i in 0..5 {
+            let id = fx.manager.create_session(format!("s{}", i), emails(2), settings()).unwrap();
+            fx.manager
+                .update_session_progress(&id, vec![result("user0@example.com", "Safe")], 1, false, Some("paused"), false)
+                .unwrap();
+            ids.push(id);
+        }
+        // Distinct created_at so the order is deterministic.
+        for (i, id) in ids.iter().enumerate() {
+            let mut meta = fx.manager.read_meta(id).unwrap();
+            meta.created_at = format!("2026-01-0{}T00:00:00+00:00", i + 1);
+            fx.manager.write_meta(id, &meta).unwrap();
+        }
+        let big: Vec<ValidationResult> = (0..5_000).map(|i| result(&format!("big{}@example.com", i), "Safe")).collect();
+        fx.manager.update_session_progress(&ids[2], big, 1, false, None, false).unwrap();
+        assert!(fs::metadata(results_path(&fx, &ids[2])).unwrap().len() > 1_000_000);
+        for id in &ids {
+            fs::write(results_path(&fx, id), b"\x00\xFFgarbage{").unwrap();
+        }
+
+        let listed = fx.manager.list_sessions().unwrap();
+        assert_eq!(listed.iter().map(|s| s.id.clone()).collect::<Vec<_>>(), ids.iter().rev().cloned().collect::<Vec<_>>());
+        assert!(listed.iter().all(|s| s.status == "paused" || s.status == "in-progress"));
+        assert_eq!(listed[0].total, 2);
+        let wire = serde_json::to_value(&listed[0]).unwrap();
+        assert!(wire.get("results").is_none() && wire.get("emails").is_none(), "{}", wire);
+        // Results files are not mistaken for sessions.
+        assert_eq!(listed.len(), 5);
+    }
+
+    // Pre-I10 single-file sessions load, list, and move their results into
+    // the results file on the next save without losing any.
+    #[test]
+    fn legacy_single_file_session_loads_and_upgrades_on_save() {
+        let fx = Fixture::new();
+        let id = uuid::Uuid::new_v4().to_string();
+        let legacy = ValidationSession {
+            id: id.clone(),
+            name: "legacy".to_string(),
+            emails: emails(3),
+            results: vec![result("user0@example.com", "Safe"), result("user1@example.com", "Unknown")],
+            status: "paused".to_string(),
+            current_index: 2,
+            total: 3,
+            created_at: Utc::now().to_rfc3339(),
+            completed_at: None,
+            settings: settings(),
+            skipped_result_lines: 0,
+        };
+        fs::write(meta_path(&fx, &id), serde_json::to_string(&legacy).unwrap()).unwrap();
+
+        let loaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(summary(&loaded.results), summary(&legacy.results));
+        assert_eq!(fx.manager.list_sessions().unwrap()[0].status, "paused");
+
+        fx.manager
+            .update_session_progress(&id, vec![result("user2@example.com", "Safe")], 3, false, None, false)
+            .unwrap();
+        assert!(meta_json(&fx, &id).get("results").is_none(), "results moved out of metadata");
+        assert_eq!(fs::read_to_string(results_path(&fx, &id)).unwrap().lines().count(), 3);
+        let loaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(
+            loaded.results.iter().map(|r| r.email.as_str()).collect::<Vec<_>>(),
+            vec!["user0@example.com", "user1@example.com", "user2@example.com"]
+        );
+        assert_eq!(loaded.status, "completed");
+    }
+
+    #[test]
+    fn delete_removes_metadata_and_results() {
+        let fx = Fixture::new();
+        let id = fx.manager.create_session("del".to_string(), emails(2), settings()).unwrap();
+        fx.manager
+            .update_session_progress(&id, vec![result("user0@example.com", "Safe")], 1, false, None, false)
+            .unwrap();
+        assert!(results_path(&fx, &id).exists());
+        fx.manager.delete_session(&id).unwrap();
+        assert!(!meta_path(&fx, &id).exists());
+        assert!(!results_path(&fx, &id).exists());
+        // A session that never saved results deletes cleanly too.
+        let empty = fx.manager.create_session("empty".to_string(), emails(1), settings()).unwrap();
+        fx.manager.delete_session(&empty).unwrap();
+    }
+
+    /// Writes a metadata + results backup pair for `id` stamped `age` ago.
+    fn fake_backup_pair(fx: &Fixture, id: &str, age: Duration) -> [PathBuf; 2] {
+        let meta = fake_backup(fx, id, age);
+        let results = meta.with_file_name(format!(
+            "{}{}",
+            meta.file_stem().unwrap().to_str().unwrap(),
+            RESULTS_SUFFIX
+        ));
+        fs::write(&results, "").unwrap();
+        [meta, results]
+    }
+
+    // Backups are metadata + results pairs; the cap counts snapshots, and a
+    // pruned snapshot loses both files.
+    #[test]
+    fn backup_pairs_prune_at_five_per_session() {
+        let fx = Fixture::new();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mine: Vec<[PathBuf; 2]> = (1..=8).map(|h| fake_backup_pair(&fx, &id, Duration::hours(h))).collect();
+        // A metadata-only backup (pre-I10, or a session with no results yet).
+        let lone = fake_backup(&fx, &id, Duration::hours(9));
+
+        assert_eq!(fx.manager.cleanup_old_sessions(30).unwrap(), 3 * 2 + 1);
+        assert!(mine[..MAX_BACKUPS_PER_SESSION].iter().flatten().all(|p| p.exists()));
+        assert!(mine[MAX_BACKUPS_PER_SESSION..].iter().flatten().all(|p| !p.exists()));
+        assert!(!lone.exists());
+    }
+
+    // The sweep deletes an old session's results with it, removes orphaned
+    // results files, keeps live ones, and still skips entries it can't read.
+    #[test]
+    fn sweep_handles_results_files_and_skips_bad_entries() {
+        let fx = Fixture::new();
+        let dir = &fx.manager.sessions_dir;
+        let old = fake_session(&fx, Duration::days(100));
+        let old_results = SessionManager::results_path_for_meta(&old);
+        fs::write(&old_results, "{}\n").unwrap();
+        let live = fx.manager.create_session("live".to_string(), emails(1), settings()).unwrap();
+        fx.manager
+            .update_session_progress(&live, vec![result("user0@example.com", "Safe")], 0, false, None, false)
+            .unwrap();
+        let orphan = dir.join(format!("{}{}", uuid::Uuid::new_v4(), RESULTS_SUFFIX));
+        fs::write(&orphan, "{}\n").unwrap();
+        let garbage = dir.join("garbage.json");
+        fs::write(&garbage, "{not json").unwrap();
+        let odd = dir.join(RESULTS_SUFFIX.trim_start_matches('.'));
+        fs::write(&odd, "").unwrap();
+
+        let report = fx.manager.sweep(Utc::now() - Duration::days(90));
+        assert_eq!(report, SweepReport { deleted: 3, skipped: 1 });
+        assert!(!old.exists() && !old_results.exists() && !orphan.exists());
+        assert!(results_path(&fx, &live).exists() && meta_path(&fx, &live).exists());
+        assert!(garbage.exists() && odd.exists());
+    }
+
+    #[test]
+    fn backup_due_respects_interval_and_backwards_clocks() {
+        let now = Utc::now();
+        let mut meta = SessionMeta {
+            id: "x".to_string(),
+            name: "x".to_string(),
+            emails: vec![],
+            status: "pending".to_string(),
+            current_index: 0,
+            total: 0,
+            created_at: now.to_rfc3339(),
+            completed_at: None,
+            settings: settings(),
+            last_backup_at: None,
+            results: None,
+        };
+        assert!(SessionManager::backup_due(&meta, now));
+        meta.last_backup_at = Some((now - Duration::seconds(10)).to_rfc3339());
+        assert!(!SessionManager::backup_due(&meta, now));
+        meta.last_backup_at = Some((now - Duration::seconds(BACKUP_MIN_INTERVAL_SECS)).to_rfc3339());
+        assert!(SessionManager::backup_due(&meta, now));
+        meta.last_backup_at = Some((now + Duration::hours(1)).to_rfc3339());
+        assert!(SessionManager::backup_due(&meta, now), "clock went backwards");
+        meta.last_backup_at = Some("garbage".to_string());
+        assert!(SessionManager::backup_due(&meta, now));
+    }
+
+    // paused/stopped survive alongside appended results, in both load and list.
+    #[test]
+    fn halt_status_round_trips_with_results() {
+        let fx = Fixture::new();
+        let id = fx.manager.create_session("halt".to_string(), emails(3), settings()).unwrap();
+        fx.manager
+            .update_session_progress(&id, vec![result("user0@example.com", "Safe")], 1, true, Some("paused"), false)
+            .unwrap();
+        assert_eq!(fx.manager.load_session(&id).unwrap().status, "paused");
+        assert_eq!(fx.manager.list_sessions().unwrap()[0].status, "paused");
+
+        fx.manager
+            .update_session_progress(&id, vec![result("user1@example.com", "Safe")], 2, true, Some("stopped"), false)
+            .unwrap();
+        let loaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(loaded.status, "stopped");
+        assert_eq!(loaded.results.len(), 2);
+        assert_eq!(fx.manager.list_sessions().unwrap()[0].status, "stopped");
+
+        let err = fx
+            .manager
+            .update_session_progress(&id, vec![result("user2@example.com", "Safe")], 3, false, Some("in-progress"), false)
+            .unwrap_err();
+        assert!(err.contains("Invalid session status"), "{}", err);
+        assert_eq!(fx.manager.load_session(&id).unwrap().results.len(), 2, "rejected update appends nothing");
+    }
+
+    #[test]
+    fn results_paths_reject_traversal() {
+        let fx = Fixture::new();
+        for id in MALICIOUS_IDS {
+            assert!(fx.manager.validated_results_path(id).is_err(), "{:?}", id);
+        }
+        assert_eq!(
+            SessionManager::meta_path_for_results(Path::new("/d/abc.results.jsonl")),
+            Some(PathBuf::from("/d/abc.json"))
+        );
+        assert_eq!(SessionManager::meta_path_for_results(Path::new("/d/.results.jsonl")), None);
+        assert_eq!(SessionManager::meta_path_for_results(Path::new("/d/abc.json")), None);
     }
 }

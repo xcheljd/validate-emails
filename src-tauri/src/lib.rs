@@ -323,7 +323,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .manage(validation::ValidationState::default())
-        .manage(settings_state);
+        .manage(settings_state)
+        .manage(session::SessionStore::legacy());
 
     #[cfg(feature = "e2e-testing")]
     let builder = builder.plugin(tauri_plugin_playwright::init());

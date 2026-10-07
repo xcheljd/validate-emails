@@ -57,6 +57,34 @@ pub fn atomic_write(target: &Path, contents: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Atomically replace `target` with a copy of `source`, with the same
+/// crash-safety as `atomic_write` but streamed rather than read into memory.
+pub fn atomic_copy(source: &Path, target: &Path) -> Result<(), String> {
+    let mut src = File::open(source)
+        .map_err(|e| format!("Failed to open {}: {}", source.display(), e))?;
+    let temp = temp_path_for(target)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|e| format!("Failed to create temp file {}: {}", temp.display(), e))?;
+
+    let result = match std::io::copy(&mut src, &mut file) {
+        Ok(_) => write_and_rename(file, &temp, target, &[]),
+        Err(e) => {
+            drop(file);
+            Err(format!("Failed to copy {} to {}: {}", source.display(), temp.display(), e))
+        }
+    };
+    if let Err(e) = result {
+        let _ = fs::remove_file(&temp);
+        return Err(e);
+    }
+
+    sync_parent_dir(target);
+    Ok(())
+}
+
 fn write_and_rename(mut file: File, temp: &Path, target: &Path, contents: &[u8]) -> Result<(), String> {
     file.write_all(contents)
         .map_err(|e| format!("Failed to write temp file {}: {}", temp.display(), e))?;
@@ -71,7 +99,7 @@ fn write_and_rename(mut file: File, temp: &Path, target: &Path, contents: &[u8])
 /// already durable and the rename already visible, so a failure here is not
 /// worth surfacing.
 #[cfg(unix)]
-fn sync_parent_dir(target: &Path) {
+pub(crate) fn sync_parent_dir(target: &Path) {
     if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
         if let Ok(dir) = File::open(parent) {
             let _ = dir.sync_all();
@@ -80,7 +108,7 @@ fn sync_parent_dir(target: &Path) {
 }
 
 #[cfg(not(unix))]
-fn sync_parent_dir(_target: &Path) {}
+pub(crate) fn sync_parent_dir(_target: &Path) {}
 
 #[cfg(test)]
 mod tests {

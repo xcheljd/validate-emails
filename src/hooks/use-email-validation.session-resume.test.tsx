@@ -155,4 +155,109 @@ describe('useEmailValidation session resume', () => {
     expect(save).toBeDefined();
     expect(save![1]).toEqual(expect.objectContaining({ id: 's3', currentIndex: 1, status: 'stopped' }));
   });
+  it('sends only new or changed results after the first save, and rewrites on deletion', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'create_validation_session') return Promise.resolve('s4');
+      if (cmd === 'validate_emails_bulk') return new Promise(() => {});
+      return Promise.resolve(undefined);
+    });
+    const saves = () =>
+      mockInvoke.mock.calls
+        .filter((c: unknown[]) => c[0] === 'update_validation_session')
+        .map((c: unknown[]) => c[1] as { results: ValidationResult[]; replace?: boolean; currentIndex: number });
+
+    const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+    await act(async () => {
+      result.current.startValidation(['a@test.com', 'b@test.com', 'c@test.com']);
+    });
+    const a = makeResult('a@test.com', 'Unknown');
+    act(() => {
+      result.current.setResults([a]);
+    });
+    mockInvoke.mockClear();
+    await act(async () => {
+      await result.current.pauseValidation();
+    });
+    // First save of a session in this hook: full rewrite.
+    expect(saves()).toEqual([expect.objectContaining({ results: [a], replace: true, currentIndex: 1 })]);
+
+    // A retry replaced a, and b is new: only those two are sent, appended.
+    const aRetried = makeResult('a@test.com', 'Safe');
+    const b = makeResult('b@test.com', 'Safe');
+    act(() => {
+      result.current.setResults([aRetried, b]);
+    });
+    mockInvoke.mockClear();
+    await act(async () => {
+      await result.current.stopValidation();
+    });
+    expect(saves()).toHaveLength(1);
+    expect(saves()[0].results).toEqual([aRetried, b]);
+    expect(saves()[0]).not.toHaveProperty('replace');
+    expect(saves()[0].currentIndex).toBe(2);
+
+    // Nothing changed: an empty append.
+    mockInvoke.mockClear();
+    await act(async () => {
+      await result.current.stopValidation();
+    });
+    expect(saves()).toEqual([expect.objectContaining({ results: [], currentIndex: 2 })]);
+    expect(saves()[0]).not.toHaveProperty('replace');
+
+    // A deleted result can't be appended away: full rewrite.
+    act(() => {
+      result.current.setResults([b]);
+    });
+    mockInvoke.mockClear();
+    await act(async () => {
+      await result.current.stopValidation();
+    });
+    expect(saves()).toEqual([expect.objectContaining({ results: [b], replace: true, currentIndex: 1 })]);
+  });
+
+  it('rewrites in full after a failed save', async () => {
+    let failNext = false;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'create_validation_session') return Promise.resolve('s5');
+      if (cmd === 'validate_emails_bulk') return new Promise(() => {});
+      if (cmd === 'update_validation_session' && failNext) {
+        failNext = false;
+        return Promise.reject(new Error('disk full'));
+      }
+      return Promise.resolve(undefined);
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const saves = () =>
+      mockInvoke.mock.calls
+        .filter((c: unknown[]) => c[0] === 'update_validation_session')
+        .map((c: unknown[]) => c[1] as { results: ValidationResult[]; replace?: boolean });
+
+    const { result } = renderHook(() => useEmailValidation(), { wrapper: createWrapper() });
+    await act(async () => {
+      result.current.startValidation(['a@test.com', 'b@test.com']);
+    });
+    const a = makeResult('a@test.com', 'Safe');
+    act(() => {
+      result.current.setResults([a]);
+    });
+    await act(async () => {
+      await result.current.stopValidation();
+    });
+
+    const b = makeResult('b@test.com', 'Safe');
+    act(() => {
+      result.current.setResults([a, b]);
+    });
+    failNext = true;
+    await act(async () => {
+      await result.current.stopValidation();
+    });
+    mockInvoke.mockClear();
+    await act(async () => {
+      await result.current.stopValidation();
+    });
+    expect(saves()).toEqual([expect.objectContaining({ results: [a, b], replace: true })]);
+    expect(warn).toHaveBeenCalledWith('Failed to auto-save session:', expect.any(Error));
+    warn.mockRestore();
+  });
 });

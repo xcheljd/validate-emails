@@ -24,6 +24,7 @@ import {
   deleteSession,
   loadSession,
   ValidationSession,
+  SessionSummary,
   cleanupOldSessions,
 } from '@/lib/session-manager';
 
@@ -40,7 +41,7 @@ export function SessionHistory({
   onSessionSelected,
   onCompareSessions,
 }: SessionHistoryProps) {
-  const [sessions, setSessions] = useState<ValidationSession[]>([]);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
 

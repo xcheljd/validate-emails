@@ -7,6 +7,9 @@ import {
   loadSession,
   createSession,
   updateSessionProgress,
+  planSessionSave,
+  indexResultsByEmail,
+  type PersistedResults,
   ValidationSession,
   SessionHaltStatus,
 } from '@/lib/session-manager';
@@ -77,6 +80,12 @@ export function useEmailValidation(
   const cooldownEndTimeRef = useRef<number>(0);
   const sessionIdRef = useRef<string | null>(null);
   const resultsRef = useRef<ValidationResult[]>([]);
+  // What the backend holds for which session, so a save sends only new or
+  // changed results (I10). null: unknown, the next save rewrites in full.
+  const persistedRef = useRef<{ sessionId: string; byEmail: PersistedResults } | null>(null);
+  // Saves run one at a time, in order, each diffed against the last that
+  // succeeded.
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const totalRef = useRef(0);
   // Highest backend run id seen. Events stamped with an older run id come
   // from a superseded run and are ignored.
@@ -167,10 +176,20 @@ export function useEmailValidation(
       const sid = sessionIdRef.current;
       if (!sid) return;
       const resultsToSave = resultsRef.current;
-      // Saved progress is a count (for display), not a resume position:
-      // results complete out of order, so they are not a prefix of emails.
-      updateSessionProgress(sid, resultsToSave, resultsToSave.length, status).catch((err) => {
-        console.warn('Failed to auto-save session:', err);
+      saveQueueRef.current = saveQueueRef.current.then(async () => {
+        const persisted =
+          persistedRef.current?.sessionId === sid ? persistedRef.current.byEmail : null;
+        const plan = planSessionSave(resultsToSave, persisted);
+        try {
+          // Saved progress is a count (for display), not a resume position:
+          // results complete out of order, so they are not a prefix of emails.
+          await updateSessionProgress(sid, plan.results, resultsToSave.length, status, plan.replace);
+          persistedRef.current = { sessionId: sid, byEmail: indexResultsByEmail(resultsToSave) };
+        } catch (err) {
+          // Part of it may have landed; rewrite in full next time.
+          persistedRef.current = null;
+          console.warn('Failed to auto-save session:', err);
+        }
       });
     },
     []

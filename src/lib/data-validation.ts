@@ -17,6 +17,20 @@ interface SessionData {
  * Validates a ValidationSession object structure and content.
  */
 export function validateSession(data: SessionData): ValidationReport {
+  return validateSessionFields(data, true);
+}
+
+/**
+ * Validates a session list row: a session without emails or results.
+ */
+export function validateSessionSummary(data: SessionData): ValidationReport {
+  return validateSessionFields(data, false);
+}
+
+function validateSessionFields(
+  data: SessionData,
+  withContents: boolean
+): ValidationReport {
   const errors: string[] = [];
 
   if (!data.id || typeof data.id !== 'string') {
@@ -27,11 +41,11 @@ export function validateSession(data: SessionData): ValidationReport {
     errors.push('Invalid or missing session name');
   }
 
-  if (!data.emails || !Array.isArray(data.emails)) {
+  if (withContents && (!data.emails || !Array.isArray(data.emails))) {
     errors.push('Invalid or missing emails array');
   }
 
-  if (!data.results || !Array.isArray(data.results)) {
+  if (withContents && (!data.results || !Array.isArray(data.results))) {
     errors.push('Invalid or missing results array');
   }
 

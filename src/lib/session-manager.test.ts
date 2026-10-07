@@ -7,7 +7,10 @@ import {
   listSessions,
   deleteSession,
   cleanupOldSessions,
+  planSessionSave,
+  indexResultsByEmail,
 } from './session-manager';
+import type { ValidationResult } from './types';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -145,5 +148,77 @@ describe('session-manager', () => {
 
     expect(invoke).toHaveBeenCalledWith('cleanup_old_sessions', { days: 90 });
     expect(result).toBe(3);
+  });
+  it('updateSessionProgress sends replace only for a full rewrite', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+
+    await updateSessionProgress('test-session-id', [], 0, undefined, true);
+
+    expect(invoke).toHaveBeenCalledWith('update_validation_session', {
+      id: 'test-session-id',
+      results: [],
+      currentIndex: 0,
+      backup: true,
+      replace: true,
+    });
+  });
+
+  it('listSessions keeps metadata-only rows and drops malformed ones', async () => {
+    const summary = {
+      id: 's1',
+      name: 'Jan 4, 2025 2:30 PM',
+      status: 'paused',
+      currentIndex: 1,
+      total: 2,
+      createdAt: '2025-01-04T14:30:00Z',
+      settings: mockSettings,
+    };
+    vi.mocked(invoke).mockResolvedValue([summary, { ...summary, id: 's2', status: 'bogus' }]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(listSessions()).resolves.toEqual([summary]);
+    warn.mockRestore();
+  });
+
+  describe('planSessionSave', () => {
+    const make = (email: string, result: ValidationResult['result'] = 'Safe') =>
+      ({ email, result }) as ValidationResult;
+
+    it('rewrites in full when nothing is known to be saved', () => {
+      const results = [make('a'), make('b')];
+      expect(planSessionSave(results, null)).toEqual({ results, replace: true });
+    });
+
+    it('appends only new and replaced results', () => {
+      const a = make('a');
+      const b = make('b');
+      const persisted = indexResultsByEmail([a, b]);
+      const bRetried = make('b', 'Invalid');
+      const c = make('c');
+
+      const plan = planSessionSave([a, bRetried, c], persisted);
+
+      expect(plan.replace).toBe(false);
+      expect(plan.results).toEqual([bRetried, c]);
+      expect(plan.results[0]).toBe(bRetried);
+    });
+
+    it('sends nothing when nothing changed', () => {
+      const results = [make('a'), make('b')];
+      expect(planSessionSave(results, indexResultsByEmail(results))).toEqual({
+        results: [],
+        replace: false,
+      });
+    });
+
+    it('rewrites in full when a saved result was deleted', () => {
+      const a = make('a');
+      const b = make('b');
+      const c = make('c');
+      const persisted = indexResultsByEmail([a, b]);
+
+      expect(planSessionSave([a, c], persisted)).toEqual({ results: [a, c], replace: true });
+      expect(planSessionSave([], persisted)).toEqual({ results: [], replace: true });
+    });
   });
 });
