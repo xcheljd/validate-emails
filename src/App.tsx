@@ -13,8 +13,7 @@ import { useSettings, SettingsProvider } from '@/hooks/use-settings';
 import { showWarning } from '@/lib/toast';
 import { SettingsContent } from '@/components/settings/settings-content';
 import { CorruptSettingsBanner } from '@/components/settings/corrupt-settings-banner';
-import { StatisticsDashboard } from '@/components/analytics/statistics-dashboard';
-import { DomainAnalysis } from '@/components/analytics/domain-analysis';
+import { AnalyticsView } from '@/components/analytics/analytics-view';
 import { SessionHistory } from '@/components/history/session-history';
 import { SessionDetails } from '@/components/history/session-details';
 import { SessionDiffView } from '@/components/history/session-diff';
@@ -642,10 +641,7 @@ function AppContent() {
 
           {currentView === 'analytics' && (
             <ErrorBoundary inline>
-              <div className="max-w-6xl mx-auto space-y-8">
-                <StatisticsDashboard results={results} />
-                <DomainAnalysis results={results} />
-              </div>
+              <AnalyticsView liveResults={results} status={status} />
             </ErrorBoundary>
           )}
 
