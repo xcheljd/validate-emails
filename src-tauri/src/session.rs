@@ -14,6 +14,11 @@
 //! Backups (`backups/<id>-<ts>.json` + `.results.jsonl`) are copies of both.
 //! Pre-I10 sessions were a single `<id>.json` with the results inline; they
 //! still load, and move their results to the results file on the next save.
+//!
+//! Field names are camelCase, on the wire and on disk, matching the frontend.
+//! Files written before that were snake_case: each multi-word field keeps
+//! its snake_case name as a serde alias so they still load, and are
+//! rewritten in camelCase by their next save.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -26,56 +31,70 @@ use crate::validation::ValidationResult;
 use crate::atomic_write::{atomic_copy, atomic_write, sync_parent_dir};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionSettings {
+    #[serde(alias = "validation_mode")]
     pub validation_mode: String,
 }
 
 /// A session as the frontend loads it: metadata plus every result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidationSession {
     pub id: String,
     pub name: String,
     pub emails: Vec<String>,
     pub results: Vec<ValidationResult>,
     pub status: String,
+    #[serde(alias = "current_index")]
     pub current_index: usize,
     pub total: usize,
+    #[serde(alias = "created_at")]
     pub created_at: String,
+    #[serde(alias = "completed_at")]
     pub completed_at: Option<String>,
     pub settings: SessionSettings,
     /// Unparseable lines skipped in the results file (a torn append from a
     /// crash). Omitted when there were none.
-    #[serde(default, skip_serializing_if = "is_zero")]
+    #[serde(default, skip_serializing_if = "is_zero", alias = "skipped_result_lines")]
     pub skipped_result_lines: usize,
 }
 
 /// One row of the session list, read from the metadata file alone.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
     pub id: String,
     pub name: String,
     pub status: String,
+    #[serde(alias = "current_index")]
     pub current_index: usize,
     pub total: usize,
+    #[serde(alias = "created_at")]
     pub created_at: String,
+    #[serde(alias = "completed_at")]
     pub completed_at: Option<String>,
     pub settings: SessionSettings,
 }
 
 /// `<id>.json`: everything about a session except its results.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionMeta {
     id: String,
     name: String,
     emails: Vec<String>,
     status: String,
+    #[serde(alias = "current_index")]
     current_index: usize,
     total: usize,
+    #[serde(alias = "created_at")]
     created_at: String,
+    #[serde(alias = "completed_at")]
     completed_at: Option<String>,
     settings: SessionSettings,
     /// When a progress save last backed this session up.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "last_backup_at")]
     last_backup_at: Option<String>,
     /// Pre-I10 sessions kept their results here. Read so they still load;
     /// never written back (they move to the results file).
@@ -1376,7 +1395,7 @@ mod tests {
         assert_eq!(loaded.results.len(), 3);
         assert_eq!(loaded.skipped_result_lines, 1);
         let wire = serde_json::to_value(&loaded).unwrap();
-        assert_eq!(wire["skipped_result_lines"], 1);
+        assert_eq!(wire["skippedResultLines"], 1);
 
         // The next save starts on a fresh line, so its record survives.
         fx.manager
@@ -1392,7 +1411,7 @@ mod tests {
         // A clean session doesn't put the field on the wire at all.
         let clean = fx.manager.create_session("clean".to_string(), emails(1), settings()).unwrap();
         let wire = serde_json::to_value(fx.manager.load_session(&clean).unwrap()).unwrap();
-        assert!(wire.get("skipped_result_lines").is_none());
+        assert!(wire.get("skippedResultLines").is_none());
     }
 
     // Listing reads metadata only: every results file is garbage (and one is
@@ -1606,5 +1625,301 @@ mod tests {
         );
         assert_eq!(SessionManager::meta_path_for_results(Path::new("/d/.results.jsonl")), None);
         assert_eq!(SessionManager::meta_path_for_results(Path::new("/d/abc.json")), None);
+    }
+
+    // ---- Wire format: camelCase out, snake_case (pre-fix files) still in ----
+
+    /// Every object key anywhere in `v` that contains an underscore.
+    fn snake_keys(v: &serde_json::Value) -> Vec<String> {
+        let mut found = Vec::new();
+        match v {
+            serde_json::Value::Object(map) => {
+                for (k, child) in map {
+                    if k.contains('_') {
+                        found.push(k.clone());
+                    }
+                    found.extend(snake_keys(child));
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|i| found.extend(snake_keys(i))),
+            _ => {}
+        }
+        found
+    }
+
+    fn keys(v: &serde_json::Value) -> Vec<String> {
+        let mut keys: Vec<String> = v.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    /// A result line exactly as the I10 code wrote it. Hand-written rather
+    /// than serialized, so it pins the on-disk shape independently of the
+    /// struct.
+    fn i10_result_line(email: &str, verdict: &str, proxy_id: Option<&str>, error_type: Option<&str>) -> String {
+        serde_json::json!({
+            "email": email, "result": verdict, "reason": "r", "logs": ["l"],
+            "domain": "example.com", "validationDuration": 12, "mxRecordCount": 2,
+            "isDisposable": false, "isRoleAccount": false, "isCatchAll": false,
+            "isDeliverable": verdict == "Safe", "isDisabled": false, "hasFullInbox": false,
+            "canConnectSmtp": true, "isValidSyntax": true, "isB2c": false,
+            "suggestion": null, "gravatarUrl": null, "haveibeenpwned": null,
+            "errorType": error_type, "timestamp": "2026-10-01T12:00:01Z",
+            "validationMode": "thorough", "riskScore": 5, "proxyId": proxy_id
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn wire_format_is_camel_case_and_accepts_snake_case() {
+        // What the frontend's createSession sends as `settings`.
+        let from_frontend: SessionSettings =
+            serde_json::from_value(serde_json::json!({"validationMode": "quick"})).expect("camelCase settings");
+        assert_eq!(from_frontend.validation_mode, "quick");
+        let from_legacy: SessionSettings =
+            serde_json::from_value(serde_json::json!({"validation_mode": "standard"})).expect("snake_case settings");
+        assert_eq!(from_legacy.validation_mode, "standard");
+        assert_eq!(serde_json::to_value(&from_frontend).unwrap(), serde_json::json!({"validationMode": "quick"}));
+
+        let session = ValidationSession {
+            id: "abc".to_string(),
+            name: "n".to_string(),
+            emails: vec!["a@example.com".to_string()],
+            results: vec![result("a@example.com", "Safe")],
+            status: "completed".to_string(),
+            current_index: 1,
+            total: 1,
+            created_at: "2026-10-01T12:00:00+00:00".to_string(),
+            completed_at: Some("2026-10-01T12:05:00+00:00".to_string()),
+            settings: settings(),
+            skipped_result_lines: 2,
+        };
+        let wire = serde_json::to_value(&session).unwrap();
+        assert_eq!(
+            keys(&wire),
+            ["completedAt", "createdAt", "currentIndex", "emails", "id", "name", "results", "settings", "skippedResultLines", "status", "total"]
+        );
+        assert!(snake_keys(&wire).is_empty(), "{:?}", snake_keys(&wire));
+        let camel: ValidationSession = serde_json::from_value(wire.clone()).expect("camelCase session");
+        assert_eq!(serde_json::to_value(&camel).unwrap(), wire);
+
+        let snake_json = serde_json::json!({
+            "id": "abc", "name": "n", "emails": ["a@example.com"],
+            "results": [serde_json::from_str::<serde_json::Value>(&i10_result_line("a@example.com", "Safe", None, None)).unwrap()],
+            "status": "completed", "current_index": 1, "total": 1,
+            "created_at": "2026-10-01T12:00:00+00:00", "completed_at": "2026-10-01T12:05:00+00:00",
+            "settings": {"validation_mode": "standard"}, "skipped_result_lines": 2
+        });
+        let snake: ValidationSession = serde_json::from_value(snake_json).expect("snake_case session");
+        assert_eq!(snake.current_index, 1);
+        assert_eq!(snake.created_at, "2026-10-01T12:00:00+00:00");
+        assert_eq!(snake.completed_at.as_deref(), Some("2026-10-01T12:05:00+00:00"));
+        assert_eq!(snake.settings.validation_mode, "standard");
+        assert_eq!(snake.skipped_result_lines, 2);
+        assert!(snake_keys(&serde_json::to_value(&snake).unwrap()).is_empty());
+
+        let summary_snake: SessionSummary = serde_json::from_value(serde_json::json!({
+            "id": "abc", "name": "n", "status": "paused", "current_index": 3, "total": 9,
+            "created_at": "2026-10-01T12:00:00+00:00", "completed_at": null,
+            "settings": {"validation_mode": "quick"}
+        }))
+        .expect("snake_case summary");
+        assert_eq!((summary_snake.current_index, summary_snake.total), (3, 9));
+        let summary_wire = serde_json::to_value(&summary_snake).unwrap();
+        assert_eq!(
+            keys(&summary_wire),
+            ["completedAt", "createdAt", "currentIndex", "id", "name", "settings", "status", "total"]
+        );
+        let summary_camel: SessionSummary = serde_json::from_value(summary_wire.clone()).expect("camelCase summary");
+        assert_eq!(serde_json::to_value(&summary_camel).unwrap(), summary_wire);
+
+        let meta_snake: SessionMeta = serde_json::from_value(serde_json::json!({
+            "id": "abc", "name": "n", "emails": [], "status": "paused", "current_index": 3, "total": 9,
+            "created_at": "2026-10-01T12:00:00+00:00", "completed_at": null,
+            "settings": {"validation_mode": "quick"}, "last_backup_at": "2026-10-01T12:01:00+00:00"
+        }))
+        .expect("snake_case metadata");
+        assert_eq!(meta_snake.last_backup_at.as_deref(), Some("2026-10-01T12:01:00+00:00"));
+        let meta_wire = serde_json::to_value(&meta_snake).unwrap();
+        assert_eq!(
+            keys(&meta_wire),
+            ["completedAt", "createdAt", "currentIndex", "emails", "id", "lastBackupAt", "name", "settings", "status", "total"]
+        );
+        let meta_camel: SessionMeta = serde_json::from_value(meta_wire.clone()).expect("camelCase metadata");
+        assert_eq!(serde_json::to_value(&meta_camel).unwrap(), meta_wire);
+    }
+
+    // The path the running app takes: settings as the frontend sends them,
+    // results as the frontend sends them, and the load/list payloads as the
+    // frontend receives them — every key it reads present, in camelCase.
+    #[test]
+    fn created_session_reaches_frontend_in_camel_case() {
+        let fx = Fixture::new();
+        let settings: SessionSettings =
+            serde_json::from_value(serde_json::json!({"validationMode": "thorough"})).expect("frontend settings");
+        let id = fx.manager.create_session("e2e".to_string(), emails(3), settings).unwrap();
+
+        let mut proxied = result("user0@example.com", "Safe");
+        proxied.proxy_id = Some("proxy-1".to_string());
+        let mut errored = result("user1@example.com", "Unknown");
+        errored.error_type = Some("timeout".to_string());
+        fx.manager.update_session_progress(&id, vec![proxied, errored], 2, true, None, false).unwrap();
+
+        let on_disk = meta_json(&fx, &id);
+        assert!(snake_keys(&on_disk).is_empty(), "metadata written in camelCase: {:?}", snake_keys(&on_disk));
+        assert!(on_disk.get("lastBackupAt").is_some());
+        for line in fs::read_to_string(results_path(&fx, &id)).unwrap().lines() {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert!(snake_keys(&v).is_empty(), "{}", line);
+        }
+
+        // load_validation_session's payload: what validateSession checks and
+        // what the resume / history / diff views read.
+        let wire = serde_json::to_value(fx.manager.load_session(&id).unwrap()).unwrap();
+        assert!(snake_keys(&wire).is_empty(), "{:?}", snake_keys(&wire));
+        assert_eq!(wire["id"], id.as_str());
+        assert_eq!(wire["name"], "e2e");
+        assert_eq!(wire["emails"].as_array().unwrap().len(), 3);
+        assert_eq!(wire["status"], "in-progress");
+        assert_eq!(wire["currentIndex"], 2);
+        assert_eq!(wire["total"], 3);
+        assert!(DateTime::parse_from_rfc3339(wire["createdAt"].as_str().unwrap()).is_ok());
+        assert!(wire["completedAt"].is_null());
+        assert_eq!(wire["settings"]["validationMode"], "thorough");
+        let results = wire["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["proxyId"], "proxy-1");
+        assert_eq!(results[0]["mxRecordCount"], 1);
+        assert_eq!(results[0]["riskScore"], 0);
+        assert_eq!(results[1]["errorType"], "timeout");
+
+        // list_validation_sessions' payload: what the history list and the
+        // crash-recovery dialog read.
+        let listed = serde_json::to_value(fx.manager.list_sessions().unwrap()).unwrap();
+        assert!(snake_keys(&listed).is_empty(), "{:?}", snake_keys(&listed));
+        assert_eq!(listed[0]["currentIndex"], 2);
+        assert_eq!(listed[0]["createdAt"], wire["createdAt"]);
+        assert_eq!(listed[0]["settings"]["validationMode"], "thorough");
+        assert_eq!(listed[0]["status"], "in-progress");
+
+        fx.manager.update_session_progress(&id, vec![result("user2@example.com", "Safe")], 3, false, None, false).unwrap();
+        let wire = serde_json::to_value(fx.manager.load_session(&id).unwrap()).unwrap();
+        assert_eq!(wire["status"], "completed");
+        assert!(DateTime::parse_from_rfc3339(wire["completedAt"].as_str().unwrap()).is_ok());
+    }
+
+    // An I10 session on disk (snake_case metadata + results file) loads and
+    // lists; the next save rewrites the metadata in camelCase without losing
+    // anything (lastBackupAt included), appends after the I10 lines without
+    // touching them, and the old and new lines still merge by email.
+    #[test]
+    fn i10_snake_case_session_loads_and_resaves_as_camel_case() {
+        let fx = Fixture::new();
+        let id = uuid::Uuid::new_v4().to_string();
+        let last_backup = Utc::now().to_rfc3339();
+        let meta = serde_json::json!({
+            "id": id, "name": "i10", "emails": emails(3), "status": "paused",
+            "current_index": 2, "total": 3, "created_at": "2026-10-01T12:00:00+00:00",
+            "completed_at": null, "settings": {"validation_mode": "thorough"},
+            "last_backup_at": last_backup
+        });
+        fs::write(meta_path(&fx, &id), meta.to_string()).unwrap();
+        let i10_lines = format!(
+            "{}\n{}\n",
+            i10_result_line("user0@example.com", "Safe", Some("proxy-1"), None),
+            i10_result_line("user1@example.com", "Unknown", None, Some("timeout"))
+        );
+        fs::write(results_path(&fx, &id), &i10_lines).unwrap();
+
+        let loaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(loaded.name, "i10");
+        assert_eq!(loaded.status, "paused");
+        assert_eq!(loaded.current_index, 2);
+        assert_eq!(loaded.created_at, "2026-10-01T12:00:00+00:00");
+        assert_eq!(loaded.settings.validation_mode, "thorough");
+        assert_eq!(loaded.skipped_result_lines, 0);
+        assert_eq!(loaded.results[0].proxy_id.as_deref(), Some("proxy-1"));
+        assert_eq!(loaded.results[1].error_type.as_deref(), Some("timeout"));
+        let listed = fx.manager.list_sessions().unwrap();
+        assert_eq!((listed.len(), listed[0].current_index), (1, 2));
+
+        // A retry of user1 plus a new user2. lastBackupAt is recent, so a
+        // backup-requesting save must not back up — only true if it was read.
+        fx.manager
+            .update_session_progress(
+                &id,
+                vec![result("user1@example.com", "Invalid"), result("user2@example.com", "Safe")],
+                3,
+                true,
+                None,
+                false,
+            )
+            .unwrap();
+        assert!(fx.dir_entries(&fx.manager.sessions_dir.join("backups")).is_empty(), "last_backup_at was lost");
+
+        let on_disk = meta_json(&fx, &id);
+        assert!(snake_keys(&on_disk).is_empty(), "{:?}", snake_keys(&on_disk));
+        assert_eq!(on_disk["lastBackupAt"], last_backup.as_str());
+        assert_eq!(on_disk["createdAt"], "2026-10-01T12:00:00+00:00");
+        assert_eq!(on_disk["settings"]["validationMode"], "thorough");
+        assert_eq!(on_disk["emails"], serde_json::json!(emails(3)));
+        assert_eq!(on_disk["currentIndex"], 3);
+        let content = fs::read_to_string(results_path(&fx, &id)).unwrap();
+        assert!(content.starts_with(&i10_lines), "I10 lines rewritten");
+        assert_eq!(content.lines().count(), 4);
+
+        let reloaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(
+            summary(&reloaded.results),
+            vec![
+                ("user0@example.com".to_string(), "Safe".to_string()),
+                ("user1@example.com".to_string(), "Invalid".to_string()),
+                ("user2@example.com".to_string(), "Safe".to_string()),
+            ]
+        );
+        assert_eq!(reloaded.results[0].proxy_id.as_deref(), Some("proxy-1"));
+        assert_eq!(reloaded.status, "completed");
+        assert_eq!(reloaded.created_at, "2026-10-01T12:00:00+00:00");
+        assert_eq!(reloaded.settings.validation_mode, "thorough");
+    }
+
+    // A pre-I10 single-file session in snake_case (results inline) loads,
+    // lists, and survives its upgrading save with every result.
+    #[test]
+    fn legacy_snake_case_single_file_session_loads_and_upgrades() {
+        let fx = Fixture::new();
+        let id = uuid::Uuid::new_v4().to_string();
+        let inline: Vec<serde_json::Value> = ["user0@example.com", "user1@example.com"]
+            .iter()
+            .map(|e| serde_json::from_str(&i10_result_line(e, "Safe", None, None)).unwrap())
+            .collect();
+        let legacy = serde_json::json!({
+            "id": id, "name": "legacy", "emails": emails(3), "results": inline,
+            "status": "paused", "current_index": 2, "total": 3,
+            "created_at": "2026-01-10T09:00:00+00:00", "completed_at": null,
+            "settings": {"validation_mode": "quick"}
+        });
+        fs::write(meta_path(&fx, &id), legacy.to_string()).unwrap();
+
+        let loaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(loaded.results.len(), 2);
+        assert_eq!((loaded.current_index, loaded.settings.validation_mode.as_str()), (2, "quick"));
+        assert_eq!(fx.manager.list_sessions().unwrap()[0].created_at, "2026-01-10T09:00:00+00:00");
+
+        fx.manager
+            .update_session_progress(&id, vec![result("user2@example.com", "Risky")], 3, false, None, false)
+            .unwrap();
+        let on_disk = meta_json(&fx, &id);
+        assert!(snake_keys(&on_disk).is_empty(), "{:?}", snake_keys(&on_disk));
+        assert!(on_disk.get("results").is_none());
+        let reloaded = fx.manager.load_session(&id).unwrap();
+        assert_eq!(
+            reloaded.results.iter().map(|r| r.email.as_str()).collect::<Vec<_>>(),
+            vec!["user0@example.com", "user1@example.com", "user2@example.com"]
+        );
+        assert_eq!(reloaded.name, "legacy");
+        assert_eq!(reloaded.created_at, "2026-01-10T09:00:00+00:00");
+        assert_eq!(reloaded.settings.validation_mode, "quick");
+        assert_eq!(reloaded.status, "completed");
     }
 }
