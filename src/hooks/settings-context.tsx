@@ -56,6 +56,11 @@ interface BackendProxyPool {
   autoDisableThreshold?: AutoDisableThreshold;
 }
 
+/** Full settings as returned by `reset_settings` (general fields + pool). */
+interface BackendFullSettings extends BackendSettings {
+  proxy_pool: BackendProxyPool;
+}
+
 function backendToFrontend(backend: BackendSettings): Partial<AppSettings> {
   return {
     validationMode: backend.validation_mode as AppSettings['validationMode'],
@@ -187,6 +192,7 @@ async function invokeAndPersistProxy(
 export interface SettingsContextValue {
   settings: AppSettings;
   updateSettings: (newSettings: Partial<AppSettings>) => Promise<void>;
+  resetToDefaults: () => Promise<void>;
   addProxy: (proxy: ProxyConfig) => Promise<void>;
   updateProxy: (oldId: string, proxy: ProxyConfig) => Promise<void>;
   deleteProxy: (id: string) => Promise<boolean>;
@@ -287,6 +293,25 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     },
     []
   );
+
+  /**
+   * Reset ALL settings (including the proxy pool) to backend defaults, then
+   * replace local state with the returned settings. Rejects if the backend
+   * reset fails; local state is left untouched in that case.
+   */
+  const resetToDefaults = useCallback(async (): Promise<void> => {
+    const backend = await invoke<BackendFullSettings>('reset_settings');
+    setSettings((prev) => {
+      const next: AppSettings = {
+        ...defaultSettings,
+        ...backendToFrontend(backend),
+        sidebarCollapsed: prev.sidebarCollapsed,
+        proxy: backendProxyPoolToFrontend(backend.proxy_pool),
+      };
+      localStorage.setItem('app-settings', JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   // --- Proxy management ---------------------------------------------------
 
@@ -599,6 +624,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const value: SettingsContextValue = {
     settings,
     updateSettings,
+    resetToDefaults,
     addProxy,
     updateProxy,
     deleteProxy,

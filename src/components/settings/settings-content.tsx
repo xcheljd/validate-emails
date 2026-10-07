@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { ProxyList } from './proxy-list';
 import { PerDomainAssignment } from './per-domain-assignment';
 import { ProxyHealthDashboard } from './proxy-health-dashboard';
+import { ResetSettingsSection, ClearProxiesButton } from './danger-zone';
 
 /**
  * Mirrors the backend's validate_smtp_identity: both fields may be blank
@@ -619,6 +620,8 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                 </div>
               </div>
             </div>
+
+            <ResetSettingsSection />
           </div>
         )}
 
@@ -724,6 +727,9 @@ export function SettingsContent({ onClose }: SettingsContentProps) {
                 onBypassCooldown={handleBypassCooldown}
                 disabled={!localSettings.proxy.enabled}
               />
+              <div className="flex justify-end pt-2">
+                <ClearProxiesButton />
+              </div>
             </div>
 
             {/* Cooldown duration setting */}
