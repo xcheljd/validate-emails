@@ -1,10 +1,11 @@
+mod app_paths;
 mod atomic_write;
 mod mx;
 mod validation;
 mod settings;
 mod session;
 
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use std::sync::Arc;
 
 /// Event payload for all-proxies-failed event
@@ -317,14 +318,18 @@ fn stop_validation(state: tauri::State<'_, validation::ValidationState>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let settings_state = settings::SettingsState::default();
-
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .manage(validation::ValidationState::default())
-        .manage(settings_state)
-        .manage(session::SessionStore::legacy());
+        .setup(|app| {
+            // Data lives under the platform app data dir; legacy data is
+            // copied over on first launch (I10).
+            let paths = app_paths::resolve(app.handle());
+            app.manage(settings::SettingsState::from_path(paths.settings_file));
+            app.manage(session::SessionStore::new(paths.sessions_dir));
+            Ok(())
+        });
 
     #[cfg(feature = "e2e-testing")]
     let builder = builder.plugin(tauri_plugin_playwright::init());

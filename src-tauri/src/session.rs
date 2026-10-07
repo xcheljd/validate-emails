@@ -699,12 +699,6 @@ impl SessionStore {
     pub fn new(sessions_dir: PathBuf) -> Self {
         Self { sessions_dir }
     }
-
-    /// The pre-I10 hard-coded location.
-    pub fn legacy() -> Self {
-        let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."));
-        Self::new(home.join(".local/share/com.yourcompany.emailvalidator/sessions"))
-    }
 }
 
 /// Serializes session writes across commands: a progress save is a

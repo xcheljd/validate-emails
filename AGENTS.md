@@ -33,6 +33,9 @@ When implementing sequential operations that must await each result before proce
 ### Rate Limiting (I1)
 Rate limiting is opt-in (`rate_limiter.enabled`, off by default) and gates only the moment of dispatch, so `buffer_unordered` concurrency is unchanged. Each egress (proxy id, or the direct connection) gets a sliding-window limiter enforcing both `max_per_second` and `max_per_minute`; quick mode uses one global limiter. The wait races the run's cancellation token. See `RunLimiter`/`EgressLimiter` in `src-tauri/src/validation.rs`.
 
+### Session Storage (I10)
+Sessions live in `<app_data_dir>/sessions/` as `<id>.json` (metadata, no results) plus `<id>.results.jsonl` (append-only, one result per line; a later line for an email replaces the earlier one; unparseable/torn lines are skipped). The frontend sends only new/changed results per save (`planSessionSave`) and `replace: true` for a full rewrite (first save, deletions, after a failed save). `list_validation_sessions` returns metadata-only `SessionSummary` rows. Legacy `~/.local/share/com.yourcompany.emailvalidator` data (sessions + settings) is copied on first launch; see `src-tauri/src/app_paths.rs`.
+
 ### Screenshot Strategy for Documentation
 When documenting features that require Tauri backend (session persistence, validation execution), use real screenshots for UI-only components and descriptive SVG placeholders for backend-dependent features. Browser-only mode (Vite dev server) cannot execute Tauri commands. See `docs/screenshots/` for Mission 2 examples.
 
