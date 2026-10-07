@@ -66,6 +66,11 @@ const defaultBackendSettings = {
   proxy_pool: emptyPool,
 };
 
+/** reset_settings never touches the pool: defaults plus the current pool. */
+function resetResponse(pool: Record<string, unknown>) {
+  return { ...defaultBackendSettings, proxy_pool: pool };
+}
+
 // Node's own (flag-gated) global localStorage shadows jsdom's, so provide
 // an in-memory one for the SettingsProvider.
 function memoryStorage(): Storage {
@@ -101,7 +106,7 @@ async function renderSettings(
     if (command === 'load_settings') return Promise.resolve(customSettings);
     if (command === 'get_proxy_pool') return Promise.resolve(pool);
     if (command === 'reset_settings') {
-      return Promise.resolve(defaultBackendSettings);
+      return Promise.resolve(resetResponse(pool));
     }
     return Promise.resolve();
   });
@@ -136,7 +141,11 @@ describe('Reset to defaults', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveTextContent(/resets ALL settings to their defaults/);
-    expect(dialog).toHaveTextContent(/entire proxy pool/);
+    expect(dialog).toHaveTextContent(
+      /proxies, health stats, and domain assignments are KEPT/
+    );
+    expect(dialog).toHaveTextContent(/Clear all proxies.+on the Proxy page/);
+    expect(dialog).not.toHaveTextContent(/entire proxy pool/);
     expect(dialog).toHaveTextContent(/cannot be undone/);
     expect(
       screen.getByRole('button', { name: 'Reset everything' })
@@ -153,7 +162,7 @@ describe('Reset to defaults', () => {
     expect(screen.getByLabelText(/concurrency \(parallel/i)).toHaveValue(12);
   });
 
-  it('Confirm calls reset_settings and the UI shows the returned defaults', async () => {
+  it('Confirm calls reset_settings, shows the returned defaults, and keeps the proxy pool', async () => {
     await renderSettings(populatedPool);
     expect(screen.getByLabelText(/concurrency \(parallel/i)).toHaveValue(12);
     expect(screen.getByLabelText('HELO name')).toHaveValue('mail.acme.io');
@@ -171,12 +180,13 @@ describe('Reset to defaults', () => {
     );
     expect(mockToastSuccess).toHaveBeenCalled();
 
-    // Proxy pool is empty after the reset
+    // Proxy pool is preserved by the reset
     await openProxyTab();
-    expect(screen.queryByText(/10\.0\.0\.1/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/10\.0\.0\.1/).length).toBeGreaterThan(0);
     expect(
       screen.getByRole('button', { name: /clear all proxies/i })
-    ).toBeDisabled();
+    ).toBeEnabled();
+    expect(invokedCommands()).not.toContain('clear_proxies');
   });
 
   it('shows an error toast and keeps settings when reset_settings fails', async () => {

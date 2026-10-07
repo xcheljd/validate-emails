@@ -1085,6 +1085,90 @@
         assert_eq!(current.proxy_pool.proxies.len(), 1);
     }
 
+    /// A customized Settings with a populated pool: two proxies, stats,
+    /// a domain assignment, and non-default pool options.
+    fn customized_settings_with_pool() -> Settings {
+        let mut s = Settings::default();
+        s.validation_mode = "thorough".to_string();
+        s.timeout_ms = 5000;
+        s.concurrency = 12;
+        s.max_retries = 4;
+        s.auto_save_interval = 3;
+        s.history_retention_days = 7;
+        s.rate_limiter = RateLimiterConfig { enabled: true, max_per_second: 9, max_per_minute: 400 };
+        s.max_emails_per_session = 500;
+        s.from_email = "probe@mail.acme.io".to_string();
+        s.hello_name = "mail.acme.io".to_string();
+        s.check_gravatar = true;
+        s.mx_concurrency = 8;
+
+        s.proxy_pool.add_proxy(ProxyConfig::new("10.0.0.1".to_string(), 1080)).unwrap();
+        s.proxy_pool.add_proxy(ProxyConfig::new("10.0.0.2".to_string(), 1080)).unwrap();
+        s.proxy_pool.enabled = true;
+        s.proxy_pool.rotation_mode = RotationMode::PerDomain;
+        s.proxy_pool.cooldown_duration_secs = 120;
+        s.proxy_pool.assign_domain("gmail.com".to_string(), "10.0.0.1:1080".to_string()).unwrap();
+        s.proxy_pool.record_success_with_duration("10.0.0.1:1080", 42.0);
+        s.proxy_pool.record_failure("10.0.0.2:1080");
+        s
+    }
+
+    #[test]
+    fn test_reset_to_defaults_preserves_proxy_pool() {
+        let mut current = customized_settings_with_pool();
+        let pool_before = serde_json::to_value(&current.proxy_pool).unwrap();
+
+        reset_to_defaults(&mut current);
+
+        // Invariant: reset never touches the pool — byte-for-byte identical.
+        assert_eq!(serde_json::to_value(&current.proxy_pool).unwrap(), pool_before);
+        let pool = &current.proxy_pool;
+        assert_eq!(pool.proxies.len(), 2);
+        assert!(pool.enabled);
+        assert_eq!(pool.rotation_mode, RotationMode::PerDomain);
+        assert_eq!(pool.cooldown_duration_secs, 120);
+        assert_eq!(pool.get_domain_proxy("gmail.com").unwrap().host, "10.0.0.1");
+        assert_eq!(pool.proxy_stats["10.0.0.1:1080"].attempts, 1);
+        assert_eq!(pool.proxy_stats["10.0.0.2:1080"].attempts, 1);
+    }
+
+    #[test]
+    fn test_reset_to_defaults_resets_every_other_field() {
+        let mut current = customized_settings_with_pool();
+        reset_to_defaults(&mut current);
+
+        let d = Settings::default();
+        assert_eq!(current.validation_mode, d.validation_mode);
+        assert_eq!(current.timeout_ms, d.timeout_ms);
+        assert_eq!(current.concurrency, d.concurrency);
+        assert_eq!(current.max_retries, d.max_retries);
+        assert_eq!(current.auto_save_interval, d.auto_save_interval);
+        assert_eq!(current.history_retention_days, d.history_retention_days);
+        assert_eq!(current.rate_limiter, d.rate_limiter);
+        assert_eq!(current.max_emails_per_session, d.max_emails_per_session);
+        assert_eq!(current.from_email, d.from_email);
+        assert_eq!(current.hello_name, d.hello_name);
+        assert_eq!(current.check_gravatar, d.check_gravatar);
+        assert_eq!(current.mx_concurrency, d.mx_concurrency);
+        // And the full non-pool shape matches defaults exactly.
+        let mut a = serde_json::to_value(&current).unwrap();
+        let mut b = serde_json::to_value(&d).unwrap();
+        a.as_object_mut().unwrap().remove("proxy_pool");
+        b.as_object_mut().unwrap().remove("proxy_pool");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_reset_to_defaults_with_empty_pool_equals_default() {
+        let mut current = Settings::default();
+        current.timeout_ms = 1234;
+        reset_to_defaults(&mut current);
+        assert_eq!(
+            serde_json::to_value(&current).unwrap(),
+            serde_json::to_value(Settings::default()).unwrap()
+        );
+    }
+
     #[test]
     fn test_apply_general_settings_rejects_invalid_identity_without_changes() {
         let mut current = Settings::default();

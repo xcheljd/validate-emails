@@ -96,13 +96,25 @@ pub async fn persist_settings_to(
         .map_err(|e| format!("Failed to write settings: {}", e))
 }
 
+/// Restore every preference-style field of `current` to its default.
+///
+/// Invariant: reset never touches the proxy pool. Proxies (with their health
+/// stats, cooldowns, domain assignments and enabled flag) are user assets
+/// managed on the Proxy page; the only way to clear them is `clear_proxies`.
+pub fn reset_to_defaults(current: &mut Settings) {
+    let proxy_pool = std::mem::take(&mut current.proxy_pool);
+    *current = Settings { proxy_pool, ..Settings::default() };
+}
+
+/// Reset settings to defaults and persist. Never touches the proxy pool —
+/// see `reset_to_defaults`. Returns the new settings (pool included).
 #[tauri::command]
 pub async fn reset_settings(
     state: tauri::State<'_, SettingsState>,
 ) -> Result<Settings, String> {
     let settings = {
         let mut settings = state.settings.write().await;
-        *settings = Settings::default();
+        reset_to_defaults(&mut settings);
         settings.clone()
     };
     persist_settings(state).await?;

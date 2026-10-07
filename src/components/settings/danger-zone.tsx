@@ -88,8 +88,7 @@ export function ResetSettingsSection() {
         <div className="space-y-0.5">
           <p className="text-sm font-medium">Reset to defaults</p>
           <p className="text-[10px] text-muted-foreground">
-            Restores every setting to its default and removes your entire
-            proxy pool.
+            Restores every setting to its default. Your proxies are kept.
           </p>
         </div>
         <Button
@@ -109,9 +108,10 @@ export function ResetSettingsSection() {
         description={
           <>
             This resets ALL settings to their defaults, including validation
-            options, rate limits, timeouts, AND your entire proxy pool (all
-            proxies, domain assignments, and health stats). This cannot be
-            undone.
+            options, timeouts, rate limits, HELO name / from email, and
+            Gravatar lookup. Your proxies, health stats, and domain
+            assignments are KEPT. To clear proxies, use &lsquo;Clear all
+            proxies&rsquo; on the Proxy page. This cannot be undone.
           </>
         }
         confirmLabel="Reset everything"
